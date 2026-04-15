@@ -12,11 +12,11 @@
 
 | 資料表 | 用途 |
 |---|---|
-| `ZZ_NF_GAS_QC_LOT_PORT_AVG` | PORT 最新兩筆 raw 的 Area 平均；此表只保留最新一筆 |
+| `ZZ_NF_GAS_QC_LOT_PORT_AVG` | PORT 連續群組最後兩筆 raw 的 Area 平均；此表只保留最新一筆 |
 | `ZZ_NF_GAS_QC_LOT_PORT_PPB` | PORT AVG 依 RF 與 PORT 時間點有效 STD AVG 換算後的 PPB |
-| `ZZ_NF_GAS_QC_LOT_PORT_RPD` | PORT 最新兩筆 raw 的 RPD |
-| `ZZ_NF_GAS_QC_LOT_STD_AVG` | STD 最新兩筆 raw 的 Area 平均；此表只保留最新一筆 |
-| `ZZ_NF_GAS_QC_LOT_STD_RPD` | STD 最新兩筆 raw 的 RPD |
+| `ZZ_NF_GAS_QC_LOT_PORT_RPD` | PORT 連續群組最後兩筆 raw 的 RPD |
+| `ZZ_NF_GAS_QC_LOT_STD_AVG` | STD 連續群組最後兩筆 raw 的 Area 平均；此表只保留最新一筆 |
+| `ZZ_NF_GAS_QC_LOT_STD_RPD` | STD 連續群組最後兩筆 raw 的 RPD |
 
 ## 2. 資料來源總覽
 
@@ -25,7 +25,7 @@
 | PORT `.D\Quant.txt` | 取得 `Acq On`、`Misc`、compound 的 `Response` 與 `R.T.` |
 | `.D` 資料夾名稱 | 取得 `SampleNo`，例如 `_023.D` 代表 `SampleNo = 23` |
 | 上層資料夾名稱 | 取得 `Port`，例如 `PORT 2`；若資料夾誤寫成 `PROT 11`，程式會視為 `PORT 11` |
-| `ZZ_NF_GAS_MFG_LOT` | 以 `LotNo` 查詢 `si0_id`、`SampleName`、`SampleType`、`Container` |
+| `ZZ_NF_GAS_MFG_LOT` | 人工維護 LOT 主檔；以 `LotNo` 查詢 `si0_id`、`SampleName`、`SampleType`、`Container`、`EMVolts`、`RelativeEM` |
 | `ZZ_NF_GAS_QC_RF` | 取得 RF 的 `Area_*`，用於計算 PORT raw 的 `ppb_*` |
 | `ZZ_NF_GAS_QC_LOT_STD` | 依 PORT 的 `AnlzTime` 找 `AnlzTime <= PORT時間` 的最近兩筆 STD raw，即時計算 `ACTIVE_STD_AVG` 作為 `ppb_*` 分母 |
 | `appsettings.json` | 取得 `InstrumentName`、`SampleType` fallback、`CreateUser` 等設定 |
@@ -35,7 +35,7 @@
 
 1. 程式只處理 `STD`、`PORT X`、`PROT X` 資料夾底下的 `Quant.txt`。
 2. LOT 來自 Quant.txt 的 `Misc` 欄位最後 `#` 後方文字。
-3. LOT 必須存在於 `ZZ_NF_GAS_MFG_LOT.LotNo`，否則該檔案不寫入 DB，也不搬到 Done。
+3. LOT 必須存在於 `ZZ_NF_GAS_MFG_LOT.LotNo`。同一輪整批匯入時，只要任一 LOT 查不到，整批停止，不寫入 DB，也不搬到 Done。
 4. PORT raw 的 `ppb_*` 不使用 Quant.txt 內的 `Conc ppb`。
 5. PORT raw 的 `ppb_*` 使用公式：
 
@@ -243,6 +243,7 @@ ppb_* = RF.Area_* * PORT_RAW.Area_* / ACTIVE_STD_AVG.Area_*
 2. `ppb_*` 是程式依 RF 與 STD AVG 換算，不是 Quant.txt 的 `Conc ppb`。
 3. 若同一檔案重跑，程式以 `LotNo + Port + SampleNo + DataFilename` 判斷 raw 是否已存在，避免重複寫入。
 4. 成功寫入後，程式會嘗試把 `.D` 資料夾搬到日期資料夾底下的 `Done`；若檔案被外部程式鎖住，DB 不會 rollback，只會記錄 warning。
+5. `ZZ_NF_GAS_MFG_LOT` 是人工維護主檔，程式只查詢，不更新。
 
 ## 10. 計算表共同規則
 
@@ -250,13 +251,21 @@ ppb_* = RF.Area_* * PORT_RAW.Area_* / ACTIVE_STD_AVG.Area_*
 
 | 資料表 | 計算來源 |
 |---|---|
-| `ZZ_NF_GAS_QC_LOT_STD_AVG` | `ZZ_NF_GAS_QC_LOT_STD` 最新兩筆 raw；寫入時清空舊資料，只保留最新一筆 |
-| `ZZ_NF_GAS_QC_LOT_STD_RPD` | `ZZ_NF_GAS_QC_LOT_STD` 最新兩筆 raw |
-| `ZZ_NF_GAS_QC_LOT_PORT_AVG` | `ZZ_NF_GAS_QC_LOT_PORT` 最新兩筆 raw；寫入時清空舊資料，只保留最新一筆 |
+| `ZZ_NF_GAS_QC_LOT_STD_AVG` | STD 連續群組最後兩筆 raw；寫入時清空舊資料，只保留最新一筆 |
+| `ZZ_NF_GAS_QC_LOT_STD_RPD` | STD 連續群組最後兩筆 raw |
+| `ZZ_NF_GAS_QC_LOT_PORT_AVG` | PORT 連續群組最後兩筆 raw；寫入時清空舊資料，只保留最新一筆 |
 | `ZZ_NF_GAS_QC_LOT_PORT_PPB` | 本次剛算出的 PORT AVG + `ZZ_NF_GAS_QC_RF` + 依 PORT 時間點從 STD raw 即時計算的 `ACTIVE_STD_AVG`；同一 `ID + LotNo + Port` 會替換成最新資料 |
-| `ZZ_NF_GAS_QC_LOT_PORT_RPD` | `ZZ_NF_GAS_QC_LOT_PORT` 最新兩筆 raw |
+| `ZZ_NF_GAS_QC_LOT_PORT_RPD` | PORT 連續群組最後兩筆 raw |
 
-### 10.1 最新兩筆 raw 的挑選規則
+### 10.1 連續群組最後兩筆 raw 的挑選規則
+
+程式會先把同一輪、同一天資料夾內的穩定 Quant 檔案整批解析，並依時間排序後切成連續群組。同一群組需符合：
+
+- 來源類型相同，例如 STD 或 PORT。
+- `Port` 相同。
+- `LotNo` 相同。
+
+AVG、RPD、PORT PPB 都在群組結束時產生，使用該群組最後兩筆 raw。DB 查詢會以群組最後一筆時間為界線，取該時間以前的最近兩筆 raw。
 
 | 類型 | 查詢條件 | 排序方式 |
 |---|---|---|
@@ -300,11 +309,13 @@ ppb_* = RF.Area_* * PORT_RAW.Area_* / ACTIVE_STD_AVG.Area_*
 
 `ZZ_NF_GAS_QC_LOT_STD_AVG` 與 `ZZ_NF_GAS_QC_LOT_PORT_AVG` 是最新狀態表，不保留歷史。每次產生新的 AVG 時，程式會先刪除該 AVG 表所有舊資料，再插入最新一筆 AVG。
 
+計算表的一般查重條件是 `ID + LotNo + Port + DataFilename`。加入 `DataFilename` 是因為 raw `ID` 目前使用 `yyyyMMdd + SampleNo`，同一天同 SampleNo 可能有多筆 raw。
+
 `ZZ_NF_GAS_QC_LOT_PORT_PPB` 使用 `ppb(si0_id)` 作為 `ID`。同一個 `ID + LotNo + Port` 重算時，程式會先刪除舊 PPB，再插入最新 PPB，避免同一 PORT/LOT 因前面兩筆先算過而保留舊值。
 
 ## 11. ZZ_NF_GAS_QC_LOT_STD_AVG 欄位說明
 
-`ZZ_NF_GAS_QC_LOT_STD_AVG` 是 STD 最新兩筆 raw 的 Area 平均結果。
+`ZZ_NF_GAS_QC_LOT_STD_AVG` 是 STD 連續群組最後兩筆 raw 的 Area 平均結果。
 
 此表是 snapshot table，永遠只保留最新一筆 STD AVG。新的 STD AVG 產生時，舊資料會先被刪除。
 
@@ -320,9 +331,11 @@ ppb_* = RF.Area_* * PORT_RAW.Area_* / ACTIVE_STD_AVG.Area_*
 
 若兩筆 raw 任一筆的同一個 `Area_*` 為 `NULL`，該 AVG `Area_*` 寫入 `NULL`。
 
+目前 AVG 表的 `Area_*` 欄位需保留小數，DB schema 已調整為 `decimal(18,6)`，避免 Excel 中 `.5` 的平均值被四捨五入成整數。
+
 ## 12. ZZ_NF_GAS_QC_LOT_STD_RPD 欄位說明
 
-`ZZ_NF_GAS_QC_LOT_STD_RPD` 是 STD 最新兩筆 raw 的 RPD 結果。
+`ZZ_NF_GAS_QC_LOT_STD_RPD` 是 STD 連續群組最後兩筆 raw 的 RPD 結果。
 
 | 欄位或欄位群組 | 來源或公式 |
 |---|---|
@@ -338,7 +351,7 @@ ppb_* = RF.Area_* * PORT_RAW.Area_* / ACTIVE_STD_AVG.Area_*
 
 ## 13. ZZ_NF_GAS_QC_LOT_PORT_AVG 欄位說明
 
-`ZZ_NF_GAS_QC_LOT_PORT_AVG` 是 PORT 最新兩筆 raw 的 Area 平均結果。
+`ZZ_NF_GAS_QC_LOT_PORT_AVG` 是 PORT 連續群組最後兩筆 raw 的 Area 平均結果。
 
 此表是 snapshot table，永遠只保留最新一筆 PORT AVG。新的 PORT AVG 產生時，舊資料會先被刪除。
 
@@ -355,6 +368,8 @@ ppb_* = RF.Area_* * PORT_RAW.Area_* / ACTIVE_STD_AVG.Area_*
 | `EDIT_USER`、`EDIT_TIME` | 沿用第二筆 PORT raw；目前通常為 `NULL` |
 
 若兩筆 raw 任一筆的同一個 `Area_*` 為 `NULL`，該 AVG `Area_*` 寫入 `NULL`。
+
+目前 AVG 表的 `Area_*` 欄位需保留小數，DB schema 已調整為 `decimal(18,6)`，避免 Excel 中 `.5` 的平均值被四捨五入成整數。
 
 ## 14. ZZ_NF_GAS_QC_LOT_PORT_PPB 欄位說明
 
@@ -378,7 +393,7 @@ ppb_* = RF.Area_* * PORT_RAW.Area_* / ACTIVE_STD_AVG.Area_*
 
 ## 15. ZZ_NF_GAS_QC_LOT_PORT_RPD 欄位說明
 
-`ZZ_NF_GAS_QC_LOT_PORT_RPD` 是 PORT 最新兩筆 raw 的 RPD 結果。
+`ZZ_NF_GAS_QC_LOT_PORT_RPD` 是 PORT 連續群組最後兩筆 raw 的 RPD 結果。
 
 | 欄位或欄位群組 | 來源或公式 |
 |---|---|
