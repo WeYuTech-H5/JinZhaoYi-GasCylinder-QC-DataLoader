@@ -1,0 +1,16 @@
+bin/
+obj/
+.vs/
+.vscode/
+.idea/
+TestResults/
+src/**/Logs/*.log
+src/**/Logs/serilog-selflog.txt
+src/**/Logs/seq-buffer*
+*.user
+*.DotSettings.user
+*.suo
+*.nupkg
+*.snupkg
+appsettings.Local.json
+appsettings.Development.json
