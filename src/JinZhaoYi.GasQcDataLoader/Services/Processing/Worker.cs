@@ -14,9 +14,19 @@ public sealed class Worker(
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        // 常駐模式會持續輪詢；RunOnce 模式只跑一輪，方便 dry-run 或排程測試。
         while (!stoppingToken.IsCancellationRequested)
         {
+            if (!_options.RunOnce && _options.UseDailySchedule)
+            {
+                var delay = CalculateDelayUntilNextDailyRun(DateTimeOffset.Now, _options.DailyWakeUpTime);
+                logger.LogInformation(
+                    "Gas QC worker is waiting for daily wake-up time {DailyWakeUpTime}. DelaySeconds={DelaySeconds:N0}.",
+                    _options.DailyWakeUpTime,
+                    delay.TotalSeconds);
+
+                await Task.Delay(delay, stoppingToken);
+            }
+
             try
             {
                 await job.ExecuteAsync(stoppingToken);
@@ -27,18 +37,47 @@ public sealed class Worker(
             }
             catch (Exception ex)
             {
-                logger.LogError(ex, "Gas QC 本輪輪詢發生未處理例外。");
+                logger.LogError(ex, "Gas QC import cycle failed.");
             }
 
             if (_options.RunOnce)
             {
-                // BackgroundService 結束不會自動讓 Host 停止，所以 RunOnce 需主動通知 Host 關閉。
                 applicationLifetime.StopApplication();
                 return;
             }
 
-            // 輪詢間隔最少使用設定的 MinimumIntervalSeconds，避免設定錯誤造成忙迴圈。
-            await Task.Delay(TimeSpan.FromSeconds(Math.Max(_options.MinimumIntervalSeconds, _options.IntervalSeconds)), stoppingToken);
+            if (_options.UseDailySchedule)
+            {
+                continue;
+            }
+
+            await Task.Delay(
+                TimeSpan.FromSeconds(Math.Max(_options.MinimumIntervalSeconds, _options.IntervalSeconds)),
+                stoppingToken);
         }
+    }
+
+    internal static TimeSpan CalculateDelayUntilNextDailyRun(DateTimeOffset now, string dailyWakeUpTime)
+    {
+        var wakeUpTime = ParseDailyWakeUpTime(dailyWakeUpTime);
+        var nextRun = new DateTimeOffset(now.Date.Add(wakeUpTime), now.Offset);
+
+        if (nextRun <= now)
+        {
+            nextRun = nextRun.AddDays(1);
+        }
+
+        return nextRun - now;
+    }
+
+    private static TimeSpan ParseDailyWakeUpTime(string dailyWakeUpTime)
+    {
+        if (TimeSpan.TryParseExact(dailyWakeUpTime, @"hh\:mm", null, out var parsed) ||
+            TimeSpan.TryParseExact(dailyWakeUpTime, @"h\:mm", null, out parsed))
+        {
+            return parsed;
+        }
+
+        throw new InvalidOperationException($"Scheduler:DailyWakeUpTime is invalid: '{dailyWakeUpTime}'. Use HH:mm, for example 02:00.");
     }
 }

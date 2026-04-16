@@ -17,6 +17,7 @@ public sealed class DapperRepository(
         SELECT
             ID AS Id,
             LotNo,
+            si0_id AS Si0Id,
             SamplName AS SampleName,
             SampleNo,
             SampleType,
@@ -72,6 +73,7 @@ public sealed class DapperRepository(
             SID DESC
         """;
 
+    private readonly SchedulerOptions _options = options.Value;
     private readonly SchedulerTableOptions _tables = options.Value.Tables;
 
     public async Task<IReadOnlyDictionary<string, MfgLot>> GetLotsByLotNoAsync(IEnumerable<string> lotNos, CancellationToken cancellationToken)
@@ -166,8 +168,7 @@ public sealed class DapperRepository(
         var stdAverage = calculationService.CreateAverageRow($"AVG({first.Id}:{second.Id})", first, second);
         var stdRpd = calculationService.CreateRpdRow($"RPD({first.Id}:{second.Id})", first, second);
 
-        // AVG 表是最新狀態表，只保留目前最新一筆平均值。
-        await ReplaceSnapshotRowAsync(connection, transaction, _tables.StdAvg, stdAverage, IncludePpb: false, IncludeRt: false, IncludeIdRefs: true, importDate, sidCounters, cancellationToken);
+        await WriteAverageRowAsync(connection, transaction, _tables.StdAvg, stdAverage, IncludePpb: false, IncludeRt: false, IncludeIdRefs: true, importDate, sidCounters, cancellationToken);
         await InsertRowIfMissingAsync(connection, transaction, _tables.StdRpd, stdRpd, IncludePpb: false, IncludeRt: false, IncludeIdRefs: true, importDate, sidCounters, cancellationToken);
     }
 
@@ -205,8 +206,7 @@ public sealed class DapperRepository(
         var portPpb = calculationService.CreatePortPpbRow($"ppb({portAverage.Si0Id})", portAverage, rf, activeStdAverage);
         var portRpd = calculationService.CreateRpdRow($"RPD({first.Id}:{second.Id})", first, second);
 
-        // AVG 表是最新狀態表，只保留目前最新一筆平均值。
-        await ReplaceSnapshotRowAsync(connection, transaction, _tables.PortAvg, portAverage, IncludePpb: true, IncludeRt: true, IncludeIdRefs: true, importDate, sidCounters, cancellationToken);
+        await WriteAverageRowAsync(connection, transaction, _tables.PortAvg, portAverage, IncludePpb: true, IncludeRt: true, IncludeIdRefs: true, importDate, sidCounters, cancellationToken);
         // PPB 的 ID 依 si0_id 命名；同一 Port/Lot 重算時需替換成最新 AVG 對應的 PPB。
         await ReplaceComputedRowAsync(connection, transaction, _tables.PortPpb, portPpb, IncludePpb: false, IncludeRt: false, IncludeIdRefs: true, importDate, sidCounters, cancellationToken);
         await InsertRowIfMissingAsync(connection, transaction, _tables.PortRpd, portRpd, IncludePpb: false, IncludeRt: false, IncludeIdRefs: true, importDate, sidCounters, cancellationToken);
@@ -351,6 +351,27 @@ public sealed class DapperRepository(
         sidCounters[tableName] = sid;
 
         await InsertRowAsync(connection, transaction, tableName, row, IncludePpb, IncludeRt, IncludeIdRefs, cancellationToken);
+    }
+
+    private async Task WriteAverageRowAsync(
+        SqlConnection connection,
+        IDbTransaction transaction,
+        string tableName,
+        QcDataRow row,
+        bool IncludePpb,
+        bool IncludeRt,
+        bool IncludeIdRefs,
+        DateTime importDate,
+        IDictionary<string, decimal> sidCounters,
+        CancellationToken cancellationToken)
+    {
+        if (_options.UseAverageSnapshotTables)
+        {
+            await ReplaceSnapshotRowAsync(connection, transaction, tableName, row, IncludePpb, IncludeRt, IncludeIdRefs, importDate, sidCounters, cancellationToken);
+            return;
+        }
+
+        await InsertRowIfMissingAsync(connection, transaction, tableName, row, IncludePpb, IncludeRt, IncludeIdRefs, importDate, sidCounters, cancellationToken);
     }
 
     private async Task ReplaceComputedRowAsync(

@@ -54,7 +54,7 @@ ppb_* = RF.Area_* * PORT_RAW.Area_* / ACTIVE_STD_AVG.Area_*
 | `AnlzTime` | Quant.txt header `Acq On` | 例如 `19 Nov 2025 11:32` 解析為 `2025-11-19 11:32:00` |
 | `Inst` | `appsettings.json` 的 `Scheduler:InstrumentName` | 目前預設 `QC-01` |
 | `Port` | 上層 PORT 資料夾名稱 | 例如 `PORT 2`；`PROT 11` 會正規化為 `PORT 11` |
-| `si0_id` | `ZZ_NF_GAS_MFG_LOT.ID` | 以 Quant LOT 查 `ZZ_NF_GAS_MFG_LOT.LotNo` 後取得 |
+| `si0_id` | `ZZ_NF_GAS_MFG_LOT.si0_id` | 以 Quant LOT 查 `ZZ_NF_GAS_MFG_LOT.LotNo` 後取得 |
 | `SampleNo` | `.D` 資料夾名稱 | 例如 `PORT 2[20251119 1132]_023.D` 解析為 `23` |
 | `LotNo` | Quant.txt header `Misc` | 取 `#` 後方 LOT，例如 `#20251117006` |
 | `DataFilename` | 相對於 PORT 資料夾的 Quant 路徑 | 例如 `PORT 2[20251119 1132]_023.D\Quant.txt` |

@@ -77,6 +77,51 @@ public sealed class CalculationServiceTests
         port4Raw.Ppbs["IPA"].Should().BeApproximately(111.4047737190m, 0.0000000001m);
     }
 
+    [Fact]
+    public void CreatePortPpbRow_returns_null_when_std_average_is_zero()
+    {
+        var rf = Row("RF,ppb(5841)", "STD", "20251030001", ("IPA", 112.797628775872m));
+        var stdAverage = Row("AVG(90830:90831)", "STD", "20251030001", ("IPA", 0m));
+        var portAverage = Row("AVG(90791:90792)", "PORT 2", "20251117006", ("IPA", 3694264.5m));
+
+        var ppb = _service.CreatePortPpbRow("ppb(5900)", portAverage, rf, stdAverage);
+
+        ppb.Areas["IPA"].Should().BeNull();
+    }
+
+    [Fact]
+    public void CreateAverageRow_returns_null_when_area_is_negative()
+    {
+        var first = Row("90791", "PORT 2", "20251117006", ("IPA", -1m));
+        var second = Row("90792", "PORT 2", "20251117006", ("IPA", 3734347m));
+
+        var average = _service.CreateAverageRow("AVG(90791:90792)", first, second);
+
+        average.Areas["IPA"].Should().BeNull();
+    }
+
+    [Fact]
+    public void CreateRpdRow_returns_null_when_denominator_is_zero()
+    {
+        var first = Row("90791", "PORT 2", "20251117006", ("IPA", 0m));
+        var second = Row("90792", "PORT 2", "20251117006", ("IPA", 0m));
+
+        var rpd = _service.CreateRpdRow("RPD(90791:90792)", first, second);
+
+        rpd.Areas["IPA"].Should().BeNull();
+    }
+
+    [Fact]
+    public void CreateRpdRow_returns_null_when_area_is_negative()
+    {
+        var first = Row("90791", "PORT 2", "20251117006", ("IPA", -10m));
+        var second = Row("90792", "PORT 2", "20251117006", ("IPA", 10m));
+
+        var rpd = _service.CreateRpdRow("RPD(90791:90792)", first, second);
+
+        rpd.Areas["IPA"].Should().BeNull();
+    }
+
     private static QcDataRow Row(string id, string port, string lotNo, params (string Suffix, decimal Value)[] areas)
     {
         var row = new QcDataRow

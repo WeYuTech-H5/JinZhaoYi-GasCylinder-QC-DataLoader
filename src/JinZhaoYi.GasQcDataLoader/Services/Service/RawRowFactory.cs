@@ -18,7 +18,7 @@ public sealed class RawRowFactory(IOptions<SchedulerOptions> options) : IRawRowF
             AnlzTime = parsed.AcquiredAt,
             Inst = _options.InstrumentName,
             Port = parsed.Source.Port,
-            Si0Id = lot?.Id.ToString("0"),
+            Si0Id = lot?.Si0Id,
             SampleNo = parsed.SampleNo,
             LotNo = parsed.LotNo,
             DataFilename = parsed.Source.DataFilename,

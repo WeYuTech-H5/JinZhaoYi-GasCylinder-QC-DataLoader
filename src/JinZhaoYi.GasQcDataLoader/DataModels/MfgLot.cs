@@ -3,6 +3,7 @@
 public sealed record MfgLot(
     decimal Id,
     string LotNo,
+    string? Si0Id,
     string? SampleName,
     string? SampleNo,
     string? SampleType,

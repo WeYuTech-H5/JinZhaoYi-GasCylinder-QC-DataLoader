@@ -28,8 +28,26 @@ public sealed class SchedulerOptions
     // true 時只跑一輪掃描後結束，適合手動測試或排程執行。
     public bool RunOnce { get; init; }
 
+    // true 時常駐服務每天只在 DailyWakeUpTime 醒來執行一次；false 時沿用 IntervalSeconds 輪詢。
+    public bool UseDailySchedule { get; init; }
+
+    // 常駐每日醒來時間，格式 HH:mm，例如 02:00。
+    public string DailyWakeUpTime { get; init; } = "02:00";
+
+    // 正常模式要處理的目標日期位移；-1 代表昨天。
+    public int NormalTargetDayOffset { get; init; } = -1;
+
+    // true 時改跑 BackfillTargetDate 指定日期；false 時跑 Today + NormalTargetDayOffset。
+    public bool BackfillEnabled { get; init; }
+
+    // 補跑日期，格式 yyyyMMdd；BackfillEnabled=true 時必填。
+    public string? BackfillTargetDate { get; init; }
+
     // 成功處理後，將 .D 資料夾搬到日期資料夾底下的 Done 目錄。
     public bool MoveProcessedFilesToDone { get; init; } = true;
+
+    // true 時 STD_AVG / PORT_AVG 維持 snapshot table 行為；false 時保留 AVG 歷史紀錄。
+    public bool UseAverageSnapshotTables { get; init; } = true;
 
     // 已處理檔案的目的地資料夾名稱，例如 yyyyMMdd\Done。
     public string DoneFolderName { get; init; } = "Done";

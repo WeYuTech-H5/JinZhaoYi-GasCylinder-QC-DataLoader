@@ -32,7 +32,13 @@
 | `Scheduler:SampleType` | `ZZ_NF_GAS_MFG_LOT.SampleType` 為空時的 fallback，預設 `TO14C1` |
 | `Scheduler:DryRun` | `true` 時只解析和驗證，不寫 DB、不搬移資料夾 |
 | `Scheduler:RunOnce` | `true` 時跑完一輪即結束，適合手動測試 |
+| `Scheduler:UseDailySchedule` | `true` 時常駐服務每天只在 `DailyWakeUpTime` 醒來執行一次 |
+| `Scheduler:DailyWakeUpTime` | 每日醒來時間，格式 `HH:mm`，例如 `02:00` |
+| `Scheduler:NormalTargetDayOffset` | 正常模式目標日期位移，`-1` 代表跑昨天資料夾 |
+| `Scheduler:BackfillEnabled` | `true` 時改跑 `BackfillTargetDate` 指定日期 |
+| `Scheduler:BackfillTargetDate` | 補跑日期，格式 `yyyyMMdd`，例如 `20251119` |
 | `Scheduler:MoveProcessedFilesToDone` | 成功匯入後是否搬移 `.D` 資料夾到 `Done` |
+| `Scheduler:UseAverageSnapshotTables` | `true` 時 AVG 表維持 snapshot 覆蓋；`false` 時保留 AVG 歷史 |
 | `Scheduler:CreateUser` | 寫入 DB 的 `CREATE_USER` |
 | `Scheduler:Tables` | 所有讀寫資料表名稱 |
 | `AppLogging` | Serilog 最小層級、檔案 sink、Seq sink |
@@ -42,6 +48,68 @@ user-secrets 範例：
 ```powershell
 dotnet user-secrets set "ConnectionStrings:Connection" "<connection-string>" --project .\src\JinZhaoYi.GasQcDataLoader\JinZhaoYi.GasQcDataLoader.csproj
 ```
+
+### 排程參數設定方式
+
+正式常駐服務建議設定如下。此模式會讓程式常駐，等到每天 `DailyWakeUpTime` 才醒來跑一次；例如今天是 `2026/04/16`，`NormalTargetDayOffset=-1` 會處理 `20260415` 資料夾。
+
+```json
+{
+  "Scheduler": {
+    "RunOnce": false,
+    "UseDailySchedule": true,
+    "DailyWakeUpTime": "02:00",
+    "NormalTargetDayOffset": -1,
+    "BackfillEnabled": false,
+    "BackfillTargetDate": "",
+    "DryRun": false
+  }
+}
+```
+
+手動補跑歷史日期時，指定 `BackfillTargetDate`。補跑日期格式固定是 `yyyyMMdd`。
+
+```json
+{
+  "Scheduler": {
+    "RunOnce": true,
+    "BackfillEnabled": true,
+    "BackfillTargetDate": "20251119",
+    "StableFolderMinutes": 0,
+    "DryRun": false
+  }
+}
+```
+
+補跑完成後，如果要回到每日常駐模式，務必改回：
+
+```json
+{
+  "Scheduler": {
+    "RunOnce": false,
+    "BackfillEnabled": false,
+    "BackfillTargetDate": ""
+  }
+}
+```
+
+也可以不改檔案，直接用命令列覆寫參數：
+
+```powershell
+dotnet run --project .\src\JinZhaoYi.GasQcDataLoader\JinZhaoYi.GasQcDataLoader.csproj -- --Scheduler:RunOnce=true --Scheduler:BackfillEnabled=true --Scheduler:BackfillTargetDate=20251119 --Scheduler:StableFolderMinutes=0 --Scheduler:DryRun=false
+```
+
+`RunOnce=true` 代表程式啟動後立刻跑一輪，跑完就結束，不會等待 `DailyWakeUpTime`。正式常駐服務請使用 `RunOnce=false`。
+
+### 公式異常處理
+
+AVG、RPD、PPB 遇到以下狀況會寫入 DB `NULL`，也就是查詢結果留白，不寫 `0`：
+
+- 必要輸入值缺失。
+- 除法分母為 `0` 或小於 `0`。
+- Area 或 RF 輸入值為負數。
+
+不使用 fallback `0` 的原因是 `0` 容易被誤判為有效測值；`NULL` 才表示本次公式無法成立。
 
 ## 資料來源責任
 
@@ -65,7 +133,7 @@ dotnet user-secrets set "ConnectionStrings:Connection" "<connection-string>" --p
 - PORT raw `ppb_*` 使用 `RF.Area * PORT_RAW.Area / ACTIVE_STD_AVG.Area`。
 - `ACTIVE_STD_AVG` 是依 PORT 的 `AnlzTime`，從 `ZZ_NF_GAS_QC_LOT_STD` 找 `AnlzTime <= PORT時間` 的最近兩筆 STD raw 後即時計算，不直接讀 `ZZ_NF_GAS_QC_LOT_STD_AVG` 最後快照。
 - STD/PORT AVG、RPD、PPB 依同一輪同一天資料夾的連續群組處理，取該群組最後兩筆 raw 計算。
-- `ZZ_NF_GAS_QC_LOT_STD_AVG` 與 `ZZ_NF_GAS_QC_LOT_PORT_AVG` 是 snapshot table，寫入新 AVG 前會清空舊資料，因此表內永遠只保留最新一筆。
+- `ZZ_NF_GAS_QC_LOT_STD_AVG` 與 `ZZ_NF_GAS_QC_LOT_PORT_AVG` 由 `Scheduler:UseAverageSnapshotTables` 控制；`true` 時維持 snapshot 覆蓋，`false` 時保留 AVG 歷史紀錄。
 - AVG 表 `Area_*` 欄位需保留小數，現行 DB 已調整為 `decimal(18,6)`。
 - STD/PORT RPD 使用 `(MAX - MIN) / AVERAGE(MAX, MIN)`。
 - PORT PPB 使用 `RF.Area * PORT_AVG.Area / ACTIVE_STD_AVG.Area`，寫入 `ZZ_NF_GAS_QC_LOT_PORT_PPB` 的 `Area_*` 欄位。

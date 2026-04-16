@@ -96,7 +96,12 @@ public sealed class CalculationService : ICalculationService
 
     private static decimal? CalculatePpb(decimal? rfValue, decimal? sampleArea, decimal? stdAverageArea)
     {
-        if (!rfValue.HasValue || !sampleArea.HasValue || !stdAverageArea.HasValue || stdAverageArea.Value == 0)
+        if (!rfValue.HasValue ||
+            !sampleArea.HasValue ||
+            !stdAverageArea.HasValue ||
+            rfValue.Value < 0 ||
+            sampleArea.Value < 0 ||
+            stdAverageArea.Value <= 0)
         {
             return null;
         }
@@ -106,7 +111,7 @@ public sealed class CalculationService : ICalculationService
 
     private static decimal? Average(decimal? first, decimal? second)
     {
-        if (!first.HasValue || !second.HasValue)
+        if (!first.HasValue || !second.HasValue || first.Value < 0 || second.Value < 0)
         {
             return null;
         }
@@ -116,7 +121,7 @@ public sealed class CalculationService : ICalculationService
 
     private static decimal? Rpd(decimal? first, decimal? second)
     {
-        if (!first.HasValue || !second.HasValue)
+        if (!first.HasValue || !second.HasValue || first.Value < 0 || second.Value < 0)
         {
             return null;
         }
@@ -124,17 +129,17 @@ public sealed class CalculationService : ICalculationService
         var max = Math.Max(first.Value, second.Value);
         var min = Math.Min(first.Value, second.Value);
         var denominator = (max + min) / 2m;
-        return denominator == 0 ? null : (max - min) / denominator;
+        return denominator <= 0 ? null : (max - min) / denominator;
     }
 
     private static decimal? DifferenceOverAverage(decimal? current, decimal? previous)
     {
-        if (!current.HasValue || !previous.HasValue)
+        if (!current.HasValue || !previous.HasValue || current.Value < 0 || previous.Value < 0)
         {
             return null;
         }
 
         var denominator = (current.Value + previous.Value) / 2m;
-        return denominator == 0 ? null : (current.Value - previous.Value) / denominator;
+        return denominator <= 0 ? null : (current.Value - previous.Value) / denominator;
     }
 }
