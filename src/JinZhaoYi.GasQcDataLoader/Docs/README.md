@@ -24,7 +24,7 @@
 | 設定 | 說明 |
 | --- | --- |
 | `ConnectionStrings:Connection` | SQL Server 連線字串，repo 內只放範例值 |
-| `Scheduler:WatchRoot` | 每日資料夾根目錄，例如 `GAS` |
+| `Scheduler:WatchRoot` | 掃描根目錄，可用 `GAS\yyyyMMdd` 或直接指定 `QC01` 共享資料夾根目錄 |
 | `Scheduler:IntervalSeconds` | 常駐輪詢秒數 |
 | `Scheduler:MinimumIntervalSeconds` | 最小輪詢秒數保護 |
 | `Scheduler:StableFolderMinutes` | 資料夾最後修改時間需穩定幾分鐘後才處理 |
@@ -66,6 +66,18 @@ dotnet user-secrets set "ConnectionStrings:Connection" "<connection-string>" --p
   }
 }
 ```
+
+若生產環境使用共享資料夾直放 `STD`、`PORT2`、`PORT3` 這類目錄，`WatchRoot` 可直接設成：
+
+```json
+{
+  "Scheduler": {
+    "WatchRoot": "\\\\10.0.55.30\\nf55_分享資料夾\\MES_Demo\\QC01"
+  }
+}
+```
+
+此模式下程式會從 `QC01` 底下的 `STD`、`PORT2`、`PORT3` 等來源資料夾找 `Quant.txt`，並用 `.D` 資料夾名稱中的時間判斷屬於哪一天。
 
 手動補跑歷史日期時，指定 `BackfillTargetDate`。補跑日期格式固定是 `yyyyMMdd`。
 

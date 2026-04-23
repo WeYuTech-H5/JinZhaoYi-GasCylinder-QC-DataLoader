@@ -37,7 +37,7 @@ public sealed class GasQcImportJob(
             var allStableCandidates = scanner.FindStableQuantFiles(_options.WatchRoot, stableAge).ToArray();
             var candidates = allStableCandidates
                 .Where(candidate => string.Equals(
-                    Path.GetFileName(candidate.DayFolderPath),
+                    GasFolderScanner.ResolveCandidateBusinessDate(candidate),
                     targetDayFolderName,
                     StringComparison.OrdinalIgnoreCase))
                 .ToArray();
