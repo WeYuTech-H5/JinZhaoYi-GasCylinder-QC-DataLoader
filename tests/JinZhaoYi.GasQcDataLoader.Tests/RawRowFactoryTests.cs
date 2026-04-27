@@ -19,6 +19,8 @@ public sealed class RawRowFactoryTests
 
         row.EmVolts.Should().Be("1294");
         row.RelativeEm.Should().Be("1.05");
+        row.DataFilename.Should().Be(@"STD[20251119 0947]_903.D\0001.D");
+        row.DataFilepath.Should().Be(@"D:\data\");
     }
 
     [Fact]
@@ -52,6 +54,10 @@ public sealed class RawRowFactoryTests
             Source = new QuantFileCandidate(
                 FullPath: @"C:\GAS\20251119\STD\STD[20251119 0947]_903.D\Quant.txt",
                 DayFolderPath: @"C:\GAS\20251119",
+                SourceRootPath: @"C:\GAS\20251119\STD",
+                OutputRootPath: @"C:\GAS",
+                LogicalBatchDate: "20251119",
+                IsArchivedInput: false,
                 TopFolderName: "STD",
                 SourceKind: QuantSourceKind.Std,
                 Port: "STD",
@@ -59,6 +65,7 @@ public sealed class RawRowFactoryTests
                 DataFilepath: @"C:\GAS\20251119\STD\STD[20251119 0947]_903.D"),
             AcquiredAt = new DateTime(2025, 11, 19, 9, 47, 0),
             DataFile = "0001.D",
+            DataPath = @"D:\data\",
             Sample = "Sample 1",
             Misc = " port 1  903  872>  #20251030001",
             LotNo = "20251030001",

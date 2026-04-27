@@ -43,14 +43,17 @@ public sealed class SchedulerOptions
     // 補跑日期，格式 yyyyMMdd；BackfillEnabled=true 時必填。
     public string? BackfillTargetDate { get; init; }
 
-    // 成功處理後，將 .D 資料夾搬到日期資料夾底下的 Done 目錄。
+    // 成功處理後，將 .D 資料夾搬到各 source folder 底下的 archive 目錄。
     public bool MoveProcessedFilesToDone { get; init; } = true;
 
     // true 時 STD_AVG / PORT_AVG 維持 snapshot table 行為；false 時保留 AVG 歷史紀錄。
     public bool UseAverageSnapshotTables { get; init; } = true;
 
-    // 已處理檔案的目的地資料夾名稱，例如 yyyyMMdd\Done。
-    public string DoneFolderName { get; init; } = "Done";
+    // 已處理檔案的目的地資料夾名稱，例如 PORT 5\archive。
+    public string DoneFolderName { get; init; } = "archive";
+
+    // Query2 Excel 匯出設定。
+    public SchedulerExcelExportOptions ExcelExport { get; init; } = new();
 
     // Windows Service 顯示名稱。
     public string ServiceName { get; init; } = "JinZhaoYi Gas QC DataLoader";
@@ -63,6 +66,15 @@ public sealed class SchedulerOptions
 
     // 所有 DB 表名集中設定，避免散落在 repository 中。
     public SchedulerTableOptions Tables { get; init; } = new();
+}
+
+public sealed class SchedulerExcelExportOptions
+{
+    // true 時輸出 Query2 Excel。
+    public bool Enabled { get; init; }
+
+    // Query2 Excel 模板路徑。
+    public string? TemplatePath { get; init; }
 }
 
 public sealed class SchedulerTableOptions

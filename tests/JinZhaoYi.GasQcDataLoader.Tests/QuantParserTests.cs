@@ -20,6 +20,10 @@ public sealed class QuantParserTests
             var candidate = new QuantFileCandidate(
                 FullPath: quantPath,
                 DayFolderPath: root,
+                SourceRootPath: Path.Combine(root, "STD"),
+                OutputRootPath: root,
+                LogicalBatchDate: "20251119",
+                IsArchivedInput: false,
                 TopFolderName: "STD",
                 SourceKind: QuantSourceKind.Std,
                 Port: "STD",
@@ -31,12 +35,49 @@ public sealed class QuantParserTests
             parsed.LotNo.Should().Be("20251030001");
             parsed.SampleNo.Should().Be(903);
             parsed.AcquiredAt.Should().Be(new DateTime(2025, 11, 19, 9, 47, 0));
+            parsed.DataPath.Should().Be("D:\\data\\");
             parsed.Misc.Should().Be(" port 1  903  872>  #20251030001");
             parsed.Compounds["IPA"].Response.Should().Be(4534252m);
             parsed.Compounds["IPA"].RetentionTime.Should().Be(2.164m);
             parsed.Compounds["IPA"].ConcentrationPpb.Should().Be(143.41m);
             parsed.Compounds["Methlene"].Response.Should().Be(2513092m);
             parsed.Compounds["Chlorobenzene-D5"].ConcentrationPpb.Should().BeNull();
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ParseAsync_supports_port_folder_sample_number_with_v_prefix()
+    {
+        var root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        var dataFolder = Path.Combine(root, "PORT 2", "PORT 2[20260420 1918]_V006.D");
+        Directory.CreateDirectory(dataFolder);
+        var quantPath = Path.Combine(dataFolder, "Quant.txt");
+        await File.WriteAllTextAsync(quantPath, QuantFixtures.Std0947.Replace("#20251030001", "#20260420001"));
+
+        try
+        {
+            var candidate = new QuantFileCandidate(
+                FullPath: quantPath,
+                DayFolderPath: root,
+                SourceRootPath: Path.Combine(root, "PORT 2"),
+                OutputRootPath: root,
+                LogicalBatchDate: "20260420",
+                IsArchivedInput: false,
+                TopFolderName: "PORT 2",
+                SourceKind: QuantSourceKind.Port,
+                Port: "PORT 2",
+                DataFilename: Path.Combine("PORT 2[20260420 1918]_V006.D", "Quant.txt"),
+                DataFilepath: dataFolder);
+
+            var parsed = await new QuantParser().ParseAsync(candidate, CancellationToken.None);
+
+            parsed.SampleNo.Should().Be(6);
+            parsed.LotNo.Should().Be("20260420001");
+            parsed.DataPath.Should().Be("D:\\data\\");
         }
         finally
         {

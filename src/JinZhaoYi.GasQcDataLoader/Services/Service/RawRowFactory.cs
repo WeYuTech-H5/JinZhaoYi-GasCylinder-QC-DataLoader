@@ -11,6 +11,8 @@ public sealed class RawRowFactory(IOptions<SchedulerOptions> options) : IRawRowF
 
     public QcDataRow Create(ParsedQuantFile parsed, MfgLot? lot, string id)
     {
+        var dataFolderName = Path.GetFileName(parsed.Source.DataFilepath);
+
         // raw row 的固定欄位優先取 Quant；SampleName、Container 等製造資訊由 MFG_LOT 補齊。
         var row = new QcDataRow
         {
@@ -21,8 +23,8 @@ public sealed class RawRowFactory(IOptions<SchedulerOptions> options) : IRawRowF
             Si0Id = lot?.Si0Id,
             SampleNo = parsed.SampleNo,
             LotNo = parsed.LotNo,
-            DataFilename = parsed.Source.DataFilename,
-            DataFilepath = parsed.Source.DataFilepath,
+            DataFilename = Path.Combine(dataFolderName, parsed.DataFile),
+            DataFilepath = parsed.DataPath,
             PcName = Environment.MachineName,
             Container = lot?.Container,
             Description = parsed.Misc,

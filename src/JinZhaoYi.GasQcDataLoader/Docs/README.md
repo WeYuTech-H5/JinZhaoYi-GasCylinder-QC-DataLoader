@@ -224,3 +224,41 @@ dotnet run --project .\src\JinZhaoYi.GasQcDataLoader\JinZhaoYi.GasQcDataLoader.c
 
 - RF 每日來源規則目前以程式既有邏輯取可用 RF，若未來規則更明確，需調整 `DapperRepository.GetLatestRfAsync()`。
 - `STD_QC` 公式已保留在程式中，但目前未寫 DB，因尚未確認對應資料表。
+
+## Query2 Excel Export
+
+Set `Scheduler:ExcelExport:Enabled=true` to export `Query2` into an Excel workbook after each import batch. The workbook uses a template file and only rewrites the `Query2` sheet data area. Formulas are not generated; values are written directly while keeping the template headers, widths, styles, and number formats.
+
+Required settings:
+
+| Setting | Description |
+| --- | --- |
+| `Scheduler:ExcelExport:Enabled` | Enable or disable Query2 workbook export. |
+| `Scheduler:ExcelExport:TemplatePath` | Full path to the template workbook, for example `C:\Data\Cylinder_DataBase_20251119.xlsx`. |
+
+Output rules:
+
+- Output file name: `Cylinder_Qc[{batchDate}].xlsx`
+- Output location: the batch folder `QC` subfolder, for example `...\20260420\QC`
+- Export sheet: `Query2` only
+- Data start row: row `4`
+- Row types included: `RF`, `Raw`, `AVG`, `PPB`, `RPD`, `QC`, `Crit`
+
+Example appsettings fragment:
+
+```json
+{
+  "Scheduler": {
+    "ExcelExport": {
+      "Enabled": true,
+      "TemplatePath": "C:\\Users\\Andy\\Downloads\\Cylinder_DataBase_20251119.template.xlsx"
+    }
+  }
+}
+```
+
+Example replay command for the `20251119` sample:
+
+```powershell
+dotnet run --project .\src\JinZhaoYi.GasQcDataLoader\JinZhaoYi.GasQcDataLoader.csproj -- --Scheduler:WatchRoot=C:\Users\Andy\Downloads\GAS_replay_20251119\20251119 --Scheduler:RunOnce=true --Scheduler:DryRun=true --Scheduler:StableFolderMinutes=0 --Scheduler:BackfillEnabled=true --Scheduler:BackfillTargetDate=20251119 --Scheduler:MoveProcessedFilesToDone=false --Scheduler:ExcelExport:Enabled=true --Scheduler:ExcelExport:TemplatePath=C:\Users\Andy\Downloads\Cylinder_DataBase_20251119.template.xlsx
+```

@@ -37,7 +37,7 @@ public sealed class GasQcImportJob(
             var allStableCandidates = scanner.FindStableQuantFiles(_options.WatchRoot, stableAge).ToArray();
             var candidates = allStableCandidates
                 .Where(candidate => string.Equals(
-                    GasFolderScanner.ResolveCandidateBusinessDate(candidate),
+                    candidate.LogicalBatchDate,
                     targetDayFolderName,
                     StringComparison.OrdinalIgnoreCase))
                 .ToArray();
@@ -87,6 +87,14 @@ public sealed class GasQcImportJob(
                 {
                     foreach (var candidate in groupCandidates)
                     {
+                        if (candidate.IsArchivedInput)
+                        {
+                            logger.LogInformation(
+                                "Skipping move for archived input {Path}.",
+                                candidate.DataFilepath);
+                            continue;
+                        }
+
                         if (TryMoveProcessedCandidate(candidate))
                         {
                             movedCount++;
@@ -176,10 +184,9 @@ public sealed class GasQcImportJob(
 
     private void MoveProcessedCandidate(QuantFileCandidate candidate)
     {
-        var destinationRoot = Path.Combine(
-            candidate.DayFolderPath,
-            _options.DoneFolderName,
-            candidate.TopFolderName);
+        var sourceFolder = Directory.GetParent(candidate.DataFilepath)?.FullName
+            ?? throw new InvalidOperationException($"Unable to resolve source folder for '{candidate.DataFilepath}'.");
+        var destinationRoot = Path.Combine(sourceFolder, _options.DoneFolderName);
 
         Directory.CreateDirectory(destinationRoot);
 

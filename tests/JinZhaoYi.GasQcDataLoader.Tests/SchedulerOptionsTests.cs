@@ -17,6 +17,14 @@ public sealed class SchedulerOptionsTests
     }
 
     [Fact]
+    public void DoneFolderName_defaults_to_archive()
+    {
+        var options = new SchedulerOptions();
+
+        options.DoneFolderName.Should().Be("archive");
+    }
+
+    [Fact]
     public void Daily_schedule_options_default_to_yesterday_mode()
     {
         var options = new SchedulerOptions();
@@ -82,6 +90,10 @@ public sealed class SchedulerOptionsTests
         var candidate = new QuantFileCandidate(
             FullPath: @"C:\data\20260422\PORT2\PORT 2[20260422 1010]_001.D\Quant.txt",
             DayFolderPath: @"C:\data\20260422",
+            SourceRootPath: @"C:\data\20260422\PORT2",
+            OutputRootPath: @"C:\data",
+            LogicalBatchDate: "20260422",
+            IsArchivedInput: false,
             TopFolderName: "PORT2",
             SourceKind: QuantSourceKind.Port,
             Port: "PORT 2",
@@ -99,6 +111,10 @@ public sealed class SchedulerOptionsTests
         var candidate = new QuantFileCandidate(
             FullPath: @"C:\data\QC01\PORT2\PORT 2[20260422 1010]_001.D\Quant.txt",
             DayFolderPath: @"C:\data\QC01",
+            SourceRootPath: @"C:\data\QC01\PORT2",
+            OutputRootPath: @"C:\data\QC01",
+            LogicalBatchDate: "20260422",
+            IsArchivedInput: false,
             TopFolderName: "PORT2",
             SourceKind: QuantSourceKind.Port,
             Port: "PORT 2",

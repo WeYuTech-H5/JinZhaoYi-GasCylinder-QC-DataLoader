@@ -86,4 +86,26 @@ public sealed class QcDataRow
             EditTime = EditTime
         };
     }
+
+    public QcDataRow DeepClone()
+    {
+        var clone = CloneMetadata();
+
+        foreach (var (key, value) in Areas)
+        {
+            clone.Areas[key] = value;
+        }
+
+        foreach (var (key, value) in Ppbs)
+        {
+            clone.Ppbs[key] = value;
+        }
+
+        foreach (var (key, value) in RetentionTimes)
+        {
+            clone.RetentionTimes[key] = value;
+        }
+
+        return clone;
+    }
 }

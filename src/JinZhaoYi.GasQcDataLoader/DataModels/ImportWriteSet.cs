@@ -2,6 +2,8 @@
 
 public sealed class ImportWriteSet
 {
+    public List<Query2ExportRow> Query2Rows { get; } = [];
+
     public List<QcDataRow> StdRawRows { get; } = [];
 
     public List<QcDataRow> StdAverageRows { get; } = [];

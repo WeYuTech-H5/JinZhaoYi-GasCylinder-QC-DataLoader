@@ -8,6 +8,8 @@ public sealed class ParsedQuantFile
 
     public required string DataFile { get; init; }
 
+    public required string DataPath { get; init; }
+
     public required string Sample { get; init; }
 
     public required string Misc { get; init; }

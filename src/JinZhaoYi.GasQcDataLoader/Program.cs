@@ -36,6 +36,8 @@ try
     builder.Services.AddSingleton<IRawRowFactory, RawRowFactory>();
     builder.Services.AddSingleton<ICalculationService, CalculationService>();
     builder.Services.AddSingleton<IDapperRepository, DapperRepository>();
+    builder.Services.AddSingleton<IImportWriteSetBuilder, ImportWriteSetBuilder>();
+    builder.Services.AddSingleton<IQuery2WorkbookExporter, Query2WorkbookExporter>();
     builder.Services.AddSingleton<IImportOrchestrator, ImportOrchestrator>();
     builder.Services.AddSingleton<IJob, GasQcImportJob>();
     builder.Services.AddHostedService<Worker>();
