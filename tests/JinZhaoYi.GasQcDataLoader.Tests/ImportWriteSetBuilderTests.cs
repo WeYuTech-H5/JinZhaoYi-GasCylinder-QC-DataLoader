@@ -30,8 +30,8 @@ public sealed class ImportWriteSetBuilderTests
 
         var lots = new Dictionary<string, MfgLot>(StringComparer.OrdinalIgnoreCase)
         {
-            ["20251030001"] = Lot("20251030001", "5841", "RF-903", "1L_Cylinder"),
-            ["20251117006"] = Lot("20251117006", "5900", "TSMC-023", "0.5L_Cylinder")
+            ["20251030001"] = Lot("20251030001", 5841, "RF-903", "1L_Cylinder"),
+            ["20251117006"] = Lot("20251117006", 5900, "TSMC-023", "0.5L_Cylinder")
         };
 
         var writeSet = _builder.BuildWriteSet(parsedFiles, lots, rf);
@@ -70,12 +70,13 @@ public sealed class ImportWriteSetBuilderTests
 
         var lots = new Dictionary<string, MfgLot>(StringComparer.OrdinalIgnoreCase)
         {
-            ["20251030001"] = Lot("20251030001", "5841", "RF-903", "1L_Cylinder"),
-            ["20251117006"] = Lot("20251117006", "5900", "TSMC-023", "0.5L_Cylinder")
+            ["20251030001"] = Lot("20251030001", 5841, "RF-903", "1L_Cylinder"),
+            ["20251117006"] = Lot("20251117006", 5900, "TSMC-023", "0.5L_Cylinder")
         };
 
         var writeSet = _builder.BuildWriteSet(parsedFiles, lots, rf);
         var qcRow = writeSet.Query2Rows.Single(row => row.RowType == Query2ExportRowType.Qc).Row;
+        writeSet.StdQcRows.Should().ContainSingle();
 
         qcRow.Id.Should().StartWith("QC(");
         qcRow.Id1.Should().StartWith("AVG(");
@@ -125,17 +126,19 @@ public sealed class ImportWriteSetBuilderTests
         };
     }
 
-    private static MfgLot Lot(string lotNo, string si0Id, string sampleName, string container) =>
-        new(
-            Id: decimal.Parse(si0Id),
-            LotNo: lotNo,
-            Si0Id: si0Id,
-            SampleName: sampleName,
-            SampleNo: null,
-            SampleType: "TO14C1",
-            Container: container,
-            EMVolts: "1458.82",
-            RelativeEM: "-23.529");
+    private static MfgLot Lot(string lotNo, int? si0Id, string sampleName, string container) =>
+        new()
+        {
+            Id = si0Id ?? 0,
+            LotNo = lotNo,
+            Si0Id = si0Id,
+            SampleName = sampleName,
+            SampleNo = null,
+            SampleType = "TO14C1",
+            Container = container,
+            EMVolts = "1458.82",
+            RelativeEM = "-23.529"
+        };
 
     private static QcDataRow CreateRfRow()
     {
@@ -144,7 +147,7 @@ public sealed class ImportWriteSetBuilderTests
             Id = "RF,ppb(5841)",
             Port = "STD",
             LotNo = "20251030001",
-            Si0Id = "5841"
+            Si0Id = 5841
         };
         row.Areas["Acetone"] = 98.68m;
         row.Areas["IPA"] = 112.79m;

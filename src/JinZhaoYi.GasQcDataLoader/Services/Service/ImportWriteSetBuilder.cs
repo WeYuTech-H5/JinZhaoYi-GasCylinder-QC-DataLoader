@@ -73,6 +73,7 @@ public sealed class ImportWriteSetBuilder(
                 if (activeStdAverage is not null)
                 {
                     var stdQc = calculationService.CreateStdQcRow($"QC({activeStdAverage.Id},{stdAverage.Id})", activeStdAverage, stdAverage);
+                    writeSet.StdQcRows.Add(stdQc);
                     writeSet.Query2Rows.Add(new Query2ExportRow(Query2ExportRowType.Qc, stdQc));
                 }
 

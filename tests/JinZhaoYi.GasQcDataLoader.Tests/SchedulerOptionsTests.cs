@@ -25,6 +25,14 @@ public sealed class SchedulerOptionsTests
     }
 
     [Fact]
+    public void StdQc_table_defaults_to_expected_name()
+    {
+        var options = new SchedulerOptions();
+
+        options.Tables.StdQc.Should().Be("ZZ_NF_GAS_QC_LOT_STD_QC");
+    }
+
+    [Fact]
     public void Daily_schedule_options_default_to_yesterday_mode()
     {
         var options = new SchedulerOptions();

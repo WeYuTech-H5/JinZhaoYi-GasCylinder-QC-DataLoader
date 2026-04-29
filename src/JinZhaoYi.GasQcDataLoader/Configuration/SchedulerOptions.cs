@@ -87,6 +87,8 @@ public sealed class SchedulerTableOptions
 
     public string StdAvg { get; init; } = "ZZ_NF_GAS_QC_LOT_STD_AVG";
 
+    public string StdQc { get; init; } = "ZZ_NF_GAS_QC_LOT_STD_QC";
+
     public string StdRpd { get; init; } = "ZZ_NF_GAS_QC_LOT_STD_RPD";
 
     public string PortRaw { get; init; } = "ZZ_NF_GAS_QC_LOT_PORT";

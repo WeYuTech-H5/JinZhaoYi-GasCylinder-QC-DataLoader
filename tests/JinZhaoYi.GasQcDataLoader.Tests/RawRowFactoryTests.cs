@@ -13,7 +13,7 @@ public sealed class RawRowFactoryTests
     {
         var factory = new RawRowFactory(Options.Create(new SchedulerOptions()));
         var parsed = CreateParsedFile();
-        var lot = CreateLot(si0Id: "5907");
+        var lot = CreateLot(si0Id: 5907);
 
         var row = factory.Create(parsed, lot, "20251119903");
 
@@ -28,12 +28,12 @@ public sealed class RawRowFactoryTests
     {
         var factory = new RawRowFactory(Options.Create(new SchedulerOptions()));
         var parsed = CreateParsedFile();
-        var lot = CreateLot(id: 5841m, si0Id: "5907");
+        var lot = CreateLot(id: 5841m, si0Id: 5907);
 
         var row = factory.Create(parsed, lot, "20251119903");
 
-        row.Si0Id.Should().Be("5907");
-        row.Si0Id.Should().NotBe("5841");
+        row.Si0Id.Should().Be(5907);
+        row.Si0Id.Should().NotBe(5841);
     }
 
     [Fact]
@@ -73,15 +73,17 @@ public sealed class RawRowFactoryTests
             Compounds = new Dictionary<string, QuantCompound>(StringComparer.OrdinalIgnoreCase)
         };
 
-    private static MfgLot CreateLot(decimal id = 5841m, string? si0Id = "5907") =>
-        new(
-            Id: id,
-            LotNo: "20251030001",
-            Si0Id: si0Id,
-            SampleName: "SIM-20251030001",
-            SampleNo: "903",
-            SampleType: "TO14C1",
-            Container: "SIM",
-            EMVolts: "1294",
-            RelativeEM: "1.05");
+    private static MfgLot CreateLot(decimal id = 5841m, int? si0Id = 5907) =>
+        new()
+        {
+            Id = id,
+            LotNo = "20251030001",
+            Si0Id = si0Id,
+            SampleName = "SIM-20251030001",
+            SampleNo = "903",
+            SampleType = "TO14C1",
+            Container = "SIM",
+            EMVolts = "1294",
+            RelativeEM = "1.05"
+        };
 }

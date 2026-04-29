@@ -97,7 +97,7 @@ public static class Query2ColumnLayout
 
     private static object? ResolveDisplaySi0Id(QcDataRow row)
     {
-        if (ParseLong(row.Si0Id) is { } si0Id && si0Id != 0)
+        if (row.Si0Id is { } si0Id && si0Id != 0)
         {
             return si0Id;
         }
@@ -119,7 +119,6 @@ public static class Query2ColumnLayout
         return $"ppb(S{exportRow.Row.SampleNo.Value})";
     }
 
-    private static bool IsMissingDisplaySi0Id(string? si0Id) =>
-        string.IsNullOrWhiteSpace(si0Id) ||
-        string.Equals(si0Id.Trim(), "0", StringComparison.OrdinalIgnoreCase);
+    private static bool IsMissingDisplaySi0Id(decimal? si0Id) =>
+        !si0Id.HasValue || si0Id.Value == 0;
 }

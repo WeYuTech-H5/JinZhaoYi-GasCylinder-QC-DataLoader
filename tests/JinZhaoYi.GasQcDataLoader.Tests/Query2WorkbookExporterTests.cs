@@ -167,8 +167,8 @@ public sealed class Query2WorkbookExporterTests : IDisposable
             NullLogger<Query2WorkbookExporter>.Instance);
 
         var writeSet = new ImportWriteSet();
-        writeSet.Query2Rows.Add(new Query2ExportRow(Query2ExportRowType.Raw, Row("20260420009", "PORT 5", "20260420004", sampleNo: 9, si0Id: "0", acetone: 100m)));
-        writeSet.Query2Rows.Add(new Query2ExportRow(Query2ExportRowType.Ppb, Row("ppb(0)", "PORT 5", "20260420004", sampleNo: 9, si0Id: "0", acetone: 88m)));
+        writeSet.Query2Rows.Add(new Query2ExportRow(Query2ExportRowType.Raw, Row("20260420009", "PORT 5", "20260420004", sampleNo: 9, si0Id: 0, acetone: 100m)));
+        writeSet.Query2Rows.Add(new Query2ExportRow(Query2ExportRowType.Ppb, Row("ppb(0)", "PORT 5", "20260420004", sampleNo: 9, si0Id: 0, acetone: 88m)));
 
         var candidates = new[]
         {
@@ -249,7 +249,7 @@ public sealed class Query2WorkbookExporterTests : IDisposable
         string port,
         string lotNo,
         int sampleNo = 23,
-        string? si0Id = "5900",
+        int? si0Id = 5900,
         decimal? acetone = null,
         decimal? ppbAcetone = null,
         decimal? rtAcetone = null)

@@ -14,7 +14,7 @@ public sealed class QcDataRow
 
     public string? Port { get; set; }
 
-    public string? Si0Id { get; set; }
+    public int? Si0Id { get; set; }
 
     public int? SampleNo { get; set; }
 

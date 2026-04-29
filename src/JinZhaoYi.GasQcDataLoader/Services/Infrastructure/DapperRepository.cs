@@ -86,13 +86,14 @@ public sealed class DapperRepository(
 
         await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
         var sql = string.Format(LotLookupSqlFormat, Quote(_tables.MfgLot));
-        var rows = await connection.QueryAsync<MfgLot>(
+        var rows = await connection.QueryAsync(
             new CommandDefinition(
                 sql,
                 new { LotNos = distinctLotNos },
                 cancellationToken: cancellationToken));
 
         return rows
+            .Select(DynamicToMfgLot)
             .Where(row => !string.IsNullOrWhiteSpace(row.LotNo))
             .GroupBy(row => row.LotNo, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
@@ -133,6 +134,11 @@ public sealed class DapperRepository(
                 }
 
                 await ProcessPortGroupAsync(connection, transaction, group.Rows, rf, importDate, sidCounters, cancellationToken);
+            }
+
+            foreach (var stdQcRow in writeSet.StdQcRows)
+            {
+                await InsertRowIfMissingAsync(connection, transaction, _tables.StdQc, stdQcRow, IncludePpb: false, IncludeRt: false, IncludeIdRefs: true, importDate, sidCounters, cancellationToken);
             }
 
             await transaction.CommitAsync(cancellationToken);
@@ -582,7 +588,7 @@ public sealed class DapperRepository(
             AnlzTime = ReadDateTime(dictionary, "AnlzTime"),
             Inst = ReadString(dictionary, "Inst"),
             Port = ReadString(dictionary, "Port"),
-            Si0Id = ReadString(dictionary, "si0_id"),
+            Si0Id = ReadInt(dictionary, "si0_id"),
             SampleNo = (int?)ReadDecimal(dictionary, "SampleNo"),
             LotNo = ReadString(dictionary, "LotNo"),
             DataFilename = ReadString(dictionary, "DataFilename"),
@@ -612,6 +618,23 @@ public sealed class DapperRepository(
         return result;
     }
 
+    private static MfgLot DynamicToMfgLot(dynamic row)
+    {
+        var dictionary = (IDictionary<string, object?>)row;
+        return new MfgLot
+        {
+            Id = ReadDecimal(dictionary, "Id") ?? 0m,
+            LotNo = ReadString(dictionary, "LotNo") ?? string.Empty,
+            Si0Id = ReadInt(dictionary, "Si0Id"),
+            SampleName = ReadString(dictionary, "SampleName"),
+            SampleNo = ReadString(dictionary, "SampleNo"),
+            SampleType = ReadString(dictionary, "SampleType"),
+            Container = ReadString(dictionary, "Container"),
+            EMVolts = ReadString(dictionary, "EMVolts"),
+            RelativeEM = ReadString(dictionary, "RelativeEM")
+        };
+    }
+
     private static string Quote(string identifier) => $"[{identifier.Replace("]", "]]")}]";
 
     private static string ParameterName(string columnName) =>
@@ -629,6 +652,9 @@ public sealed class DapperRepository(
 
     private static decimal? ReadDecimal(IDictionary<string, object?> row, string key) =>
         row.TryGetValue(key, out var value) && value is not null and not DBNull ? Convert.ToDecimal(value) : null;
+
+    private static int? ReadInt(IDictionary<string, object?> row, string key) =>
+        row.TryGetValue(key, out var value) && value is not null and not DBNull ? Convert.ToInt32(value) : null;
 
     private sealed record RawRowGroup(QuantSourceKind SourceKind, IReadOnlyList<QcDataRow> Rows);
 }
