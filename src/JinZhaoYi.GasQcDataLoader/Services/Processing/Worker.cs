@@ -42,7 +42,11 @@ public sealed class Worker(
 
             if (_options.RunOnce)
             {
-                applicationLifetime.StopApplication();
+                if (!_options.DownloadApi.Enabled)
+                {
+                    applicationLifetime.StopApplication();
+                }
+
                 return;
             }
 

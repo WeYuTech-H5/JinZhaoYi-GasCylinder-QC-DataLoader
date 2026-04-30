@@ -40,10 +40,7 @@ try
     builder.Services.AddSingleton<IImportOrchestrator, ImportOrchestrator>();
     builder.Services.AddSingleton<IJob, GasQcImportJob>();
 
-    if (!schedulerOptions.DownloadApi.Enabled)
-    {
-        builder.Services.AddHostedService<Worker>();
-    }
+    builder.Services.AddHostedService<Worker>();
 
     var app = builder.Build();
 
