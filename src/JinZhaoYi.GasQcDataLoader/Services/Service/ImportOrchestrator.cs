@@ -25,6 +25,7 @@ public sealed class ImportOrchestrator(
     IDapperRepository repository,
     IImportWriteSetBuilder writeSetBuilder,
     IQuery2WorkbookExporter workbookExporter,
+    IPortPpbCsvExporter portPpbCsvExporter,
     IOptions<SchedulerOptions> options,
     ILogger<ImportOrchestrator> logger) : IImportOrchestrator
 {
@@ -98,6 +99,12 @@ public sealed class ImportOrchestrator(
 
         // 正式寫入由 repository 統一負責 transaction 管理
         await repository.ExecuteImportAsync(writeSet, rf, importDate, cancellationToken);
+
+        var csvPaths = await ExportCommittedPortPpbCsvAsync(writeSet, [candidate], cancellationToken);
+        foreach (var csvPath in csvPaths)
+        {
+            messages.Add($"TO14C PPB CSV 已輸出：{csvPath}。");
+        }
 
         messages.Add("資料庫交易已提交。");
         return new ImportResult(candidate.DayFolderPath, 1, writeSet.TotalRows, false, true, messages);
@@ -224,8 +231,31 @@ public sealed class ImportOrchestrator(
         // 正式模式交由 repository 以單一 transaction 完成寫入
         await repository.ExecuteImportAsync(writeSet, rf, importDate, cancellationToken);
 
+        var csvPaths = await ExportCommittedPortPpbCsvAsync(writeSet, orderedCandidates, cancellationToken);
+        foreach (var csvPath in csvPaths)
+        {
+            messages.Add($"TO14C PPB CSV 已輸出：{csvPath}。");
+        }
+
         messages.Add("資料庫交易已提交。");
         return new ImportResult(dayFolderPath, orderedCandidates.Length, writeSet.TotalRows, false, true, messages);
+    }
+
+    private async Task<IReadOnlyList<string>> ExportCommittedPortPpbCsvAsync(
+        ImportWriteSet writeSet,
+        IReadOnlyCollection<QuantFileCandidate> candidates,
+        CancellationToken cancellationToken)
+    {
+        if (!_options.CsvExport.Enabled || writeSet.PortPpbRows.Count == 0)
+        {
+            return [];
+        }
+
+        var selectors = writeSet.PortPpbRows
+            .Select(PpbRowSelector.FromRow)
+            .ToArray();
+        var committedRows = await repository.GetPortPpbRowsAsync(selectors, cancellationToken);
+        return await portPpbCsvExporter.ExportAsync(committedRows, candidates, cancellationToken);
     }
 
     /// <summary>

@@ -8,5 +8,9 @@ public interface IDapperRepository
 
     Task<QcDataRow?> GetLatestRfAsync(DateTime asOf, CancellationToken cancellationToken);
 
+    Task<IReadOnlyList<QcDataRow>> GetPortPpbRowsAsync(
+        IReadOnlyCollection<PpbRowSelector> selectors,
+        CancellationToken cancellationToken);
+
     Task ExecuteImportAsync(ImportWriteSet writeSet, QcDataRow rf, DateTime importDate, CancellationToken cancellationToken);
 }

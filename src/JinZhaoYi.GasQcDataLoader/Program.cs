@@ -4,6 +4,7 @@ using JinZhaoYi.GasQcDataLoader.Services.Infrastructure;
 using JinZhaoYi.GasQcDataLoader.Services.Interface;
 using JinZhaoYi.GasQcDataLoader.Services.Processing;
 using JinZhaoYi.GasQcDataLoader.Services.Service;
+using Microsoft.AspNetCore.StaticFiles;
 using Microsoft.Extensions.Options;
 using Serilog;
 
@@ -11,15 +12,12 @@ Log.Logger = SerilogConfigurator.CreateBootstrapLogger();
 
 try
 {
-    // 建立 .NET Generic Host。此專案可部署成 Windows Service，也保留 RunOnce 測試模式。
-    var builder = Host.CreateApplicationBuilder(args);
+    var builder = WebApplication.CreateBuilder(args);
     var schedulerOptions = builder.Configuration
         .GetSection(SchedulerOptions.SectionName)
         .Get<SchedulerOptions>() ?? new SchedulerOptions();
 
     builder.Services.AddWindowsService(options => options.ServiceName = schedulerOptions.ServiceName);
-
-    // 將 appsettings.json / user-secrets / 環境變數中的設定綁定成強型別 options。
     builder.Services.Configure<SchedulerOptions>(builder.Configuration.GetSection(SchedulerOptions.SectionName));
     builder.Services.Configure<AppLoggingOptions>(builder.Configuration.GetSection(AppLoggingOptions.SectionName));
 
@@ -29,7 +27,6 @@ try
         SerilogConfigurator.Configure(loggerConfiguration, loggingOptions);
     });
 
-    // 註冊主要模組。Worker 只負責排程，實際解析、計算、DB 存取由各 service 處理。
     builder.Services.AddSingleton<ISqlConnectionFactory, SqlConnectionFactory>();
     builder.Services.AddSingleton<IGasFolderScanner, GasFolderScanner>();
     builder.Services.AddSingleton<IQuantParser, QuantParser>();
@@ -38,21 +35,70 @@ try
     builder.Services.AddSingleton<IDapperRepository, DapperRepository>();
     builder.Services.AddSingleton<IImportWriteSetBuilder, ImportWriteSetBuilder>();
     builder.Services.AddSingleton<IQuery2WorkbookExporter, Query2WorkbookExporter>();
+    builder.Services.AddSingleton<IPortPpbCsvExporter, PortPpbCsvExporter>();
+    builder.Services.AddSingleton<IQcDownloadFileResolver, QcDownloadFileResolver>();
     builder.Services.AddSingleton<IImportOrchestrator, ImportOrchestrator>();
     builder.Services.AddSingleton<IJob, GasQcImportJob>();
-    builder.Services.AddHostedService<Worker>();
 
-    var host = builder.Build();
+    if (!schedulerOptions.DownloadApi.Enabled)
+    {
+        builder.Services.AddHostedService<Worker>();
+    }
 
-    // 啟動 Host 後，BackgroundService 會進入 Worker.ExecuteAsync。
-    host.Run();
+    var app = builder.Build();
+
+    if (schedulerOptions.DownloadApi.Enabled)
+    {
+        MapDownloadEndpoints(app);
+    }
+
+    app.Run();
 }
 catch (Exception ex)
 {
-    Log.Fatal(ex, "Gas QC DataLoader 發生未預期錯誤並已停止。");
+    Log.Fatal(ex, "Gas QC DataLoader failed to start.");
     throw;
 }
 finally
 {
     Log.CloseAndFlush();
+}
+
+static void MapDownloadEndpoints(WebApplication app)
+{
+    var contentTypeProvider = new FileExtensionContentTypeProvider();
+
+    app.MapGet("/api/downloads/cylinder-qc/{batchDate}", (
+        string batchDate,
+        IQcDownloadFileResolver resolver) =>
+    {
+        var path = resolver.ResolveCylinderQcWorkbook(batchDate);
+        return path is null
+            ? Results.NotFound(new { message = $"Cylinder_Qc[{batchDate}].xlsx not found." })
+            : DownloadFile(path, contentTypeProvider);
+    });
+
+    app.MapGet("/api/downloads/to14c-csv/{sampleName}", (
+        string sampleName,
+        IQcDownloadFileResolver resolver) =>
+    {
+        var path = resolver.ResolveCsvBySampleName(sampleName);
+        return path is null
+            ? Results.NotFound(new { message = $"CSV for sampleName '{sampleName}' not found." })
+            : DownloadFile(path, contentTypeProvider);
+    });
+}
+
+static IResult DownloadFile(string path, FileExtensionContentTypeProvider contentTypeProvider)
+{
+    var fileName = Path.GetFileName(path);
+    var contentType = contentTypeProvider.TryGetContentType(path, out var resolvedContentType)
+        ? resolvedContentType
+        : "application/octet-stream";
+
+    return Results.File(
+        path,
+        contentType,
+        fileDownloadName: fileName,
+        enableRangeProcessing: true);
 }

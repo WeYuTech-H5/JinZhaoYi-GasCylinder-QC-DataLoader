@@ -55,6 +55,12 @@ public sealed class SchedulerOptions
     // Query2 Excel 匯出設定。
     public SchedulerExcelExportOptions ExcelExport { get; init; } = new();
 
+    // TO14C PPB CSV 匯出設定。
+    public SchedulerCsvExportOptions CsvExport { get; init; } = new();
+
+    // QC 檔案下載 API 設定。
+    public SchedulerDownloadApiOptions DownloadApi { get; init; } = new();
+
     // Windows Service 顯示名稱。
     public string ServiceName { get; init; } = "JinZhaoYi Gas QC DataLoader";
 
@@ -75,6 +81,64 @@ public sealed class SchedulerExcelExportOptions
 
     // Query2 Excel 模板路徑。
     public string? TemplatePath { get; init; }
+}
+
+public sealed class SchedulerCsvExportOptions
+{
+    public bool Enabled { get; init; }
+
+    public string SchemaName { get; init; } = "L002010_TO14C";
+
+    public string MaterialNo { get; init; } = "L002010";
+
+    public string? CoACompletionDate { get; init; }
+
+    public string SupplierID { get; init; } = "84170915";
+
+    public string SupplierName { get; init; } = "金兆益科技股份有限公司";
+
+    public string? TSMCFab { get; init; }
+
+    public string? FabPhase { get; init; }
+
+    public string ShipQty { get; init; } = "1";
+
+    public string Maker { get; init; } = "New-Fast Technology Co., LTD";
+
+    public string? DeliverDate { get; init; }
+
+    public string? PONo { get; init; }
+
+    public string CylinderMaterial { get; init; } = "SUS316";
+
+    public string ValveMaterial { get; init; } = "SUS316";
+
+    public string ValveType { get; init; } = "1/4\" VCR Female";
+
+    public string Content { get; init; } = "950 psi";
+
+    public string CylinderSize { get; init; } = "52 x 6 (cm)";
+
+    public string SpecNo { get; init; } = "M-FMM-L0-03-030";
+
+    public string SpecVersion { get; init; } = "1";
+
+    public int ShelfLifeTime { get; init; } = 12;
+
+    public string RawLotId { get; init; } = "CC-706988";
+
+    public string MaterialName { get; init; } = "TO14C";
+
+    public string WaterValue { get; init; } = "0.02";
+
+    public string OxygenValue { get; init; } = "0.01";
+
+    public string NitrogenValue { get; init; } = "99.9995";
+}
+
+public sealed class SchedulerDownloadApiOptions
+{
+    public bool Enabled { get; init; }
 }
 
 public sealed class SchedulerTableOptions

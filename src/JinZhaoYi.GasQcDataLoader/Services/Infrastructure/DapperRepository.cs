@@ -73,6 +73,14 @@ public sealed class DapperRepository(
             SID DESC
         """;
 
+    private const string PortPpbRowsSqlFormat = """
+        SELECT *
+        FROM dbo.{0}
+        WHERE ID IN @Ids
+          AND LotNo IN @LotNos
+          AND Port IN @Ports
+        """;
+
     private readonly SchedulerOptions _options = options.Value;
     private readonly SchedulerTableOptions _tables = options.Value.Tables;
 
@@ -110,6 +118,44 @@ public sealed class DapperRepository(
                 cancellationToken: cancellationToken));
 
         return row is null ? null : DynamicToQcDataRow(row);
+    }
+
+    public async Task<IReadOnlyList<QcDataRow>> GetPortPpbRowsAsync(
+        IReadOnlyCollection<PpbRowSelector> selectors,
+        CancellationToken cancellationToken)
+    {
+        var normalizedSelectors = selectors
+            .Where(selector =>
+                !string.IsNullOrWhiteSpace(selector.Id) &&
+                !string.IsNullOrWhiteSpace(selector.LotNo) &&
+                !string.IsNullOrWhiteSpace(selector.Port))
+            .Distinct()
+            .ToArray();
+
+        if (normalizedSelectors.Length == 0)
+        {
+            return [];
+        }
+
+        var ids = normalizedSelectors.Select(selector => selector.Id).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var lotNos = normalizedSelectors.Select(selector => selector.LotNo).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var ports = normalizedSelectors.Select(selector => selector.Port).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+
+        await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
+        var sql = string.Format(PortPpbRowsSqlFormat, Quote(_tables.PortPpb));
+        var rows = await connection.QueryAsync(
+            new CommandDefinition(
+                sql,
+                new { Ids = ids, LotNos = lotNos, Ports = ports },
+                cancellationToken: cancellationToken));
+
+        var selectorSet = normalizedSelectors.ToHashSet();
+        return rows
+            .Select(DynamicToQcDataRow)
+            .Where(row => selectorSet.Contains(PpbRowSelector.FromRow(row)))
+            .OrderBy(row => row.AnlzTime)
+            .ThenBy(row => row.SampleName, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
     }
 
     public async Task ExecuteImportAsync(ImportWriteSet writeSet, QcDataRow rf, DateTime importDate, CancellationToken cancellationToken)
