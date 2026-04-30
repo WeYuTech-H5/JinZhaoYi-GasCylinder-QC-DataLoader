@@ -24,6 +24,21 @@ public sealed class QcDownloadFileResolverTests : IDisposable
     }
 
     [Fact]
+    public void ResolveCylinderQcWorkbook_supports_watch_root_already_pointing_to_date_folder()
+    {
+        var dateRoot = Path.Combine(_rootPath, "20260420");
+        var qcDirectory = Path.Combine(dateRoot, "QC");
+        Directory.CreateDirectory(qcDirectory);
+        var expectedPath = Path.Combine(qcDirectory, "Cylinder_Qc[20260420].xlsx");
+        File.WriteAllText(expectedPath, "workbook");
+        var resolver = new QcDownloadFileResolver(Options.Create(new SchedulerOptions { WatchRoot = dateRoot }));
+
+        var path = resolver.ResolveCylinderQcWorkbook("20260420");
+
+        path.Should().Be(Path.GetFullPath(expectedPath));
+    }
+
+    [Fact]
     public void ResolveCylinderQcWorkbook_rejects_invalid_date()
     {
         var resolver = CreateResolver();

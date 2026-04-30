@@ -16,9 +16,16 @@ public sealed class QcDownloadFileResolver(IOptions<SchedulerOptions> options) :
             return null;
         }
 
-        var qcDirectory = Path.Combine(_options.WatchRoot, batchDate, "QC");
-        var path = Path.Combine(qcDirectory, $"Cylinder_Qc[{batchDate}].xlsx");
-        return File.Exists(path) ? Path.GetFullPath(path) : null;
+        foreach (var qcDirectory in ResolveCandidateQcDirectories(batchDate))
+        {
+            var path = Path.Combine(qcDirectory, $"Cylinder_Qc[{batchDate}].xlsx");
+            if (File.Exists(path))
+            {
+                return Path.GetFullPath(path);
+            }
+        }
+
+        return null;
     }
 
     public string? ResolveCsvBySampleName(string sampleName)
@@ -48,6 +55,20 @@ public sealed class QcDownloadFileResolver(IOptions<SchedulerOptions> options) :
         value.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 ||
         value.Contains('*') ||
         value.Contains('?');
+
+    private IReadOnlyList<string> ResolveCandidateQcDirectories(string batchDate)
+    {
+        var root = Path.GetFullPath(_options.WatchRoot);
+        var directories = new List<string>();
+
+        if (string.Equals(Path.GetFileName(root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)), batchDate, StringComparison.OrdinalIgnoreCase))
+        {
+            directories.Add(Path.Combine(root, "QC"));
+        }
+
+        directories.Add(Path.Combine(root, batchDate, "QC"));
+        return directories;
+    }
 
     private static bool IsUnderRoot(string path, string root)
     {
