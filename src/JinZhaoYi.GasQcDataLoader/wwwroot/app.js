@@ -13,6 +13,8 @@ const state = {
   selectedPpbIds: new Set()
 };
 
+const API_BASE_URL = "http://127.0.0.1:5000";
+
 const els = {
   startDate: document.querySelector("#startDate"),
   endDate: document.querySelector("#endDate"),
@@ -374,7 +376,7 @@ function setStatus(message, isError = false, isOk = false) {
 }
 
 async function downloadFromPost(url, body, fallbackName) {
-  const response = await fetch(url, {
+  const response = await fetch(apiUrl(url), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body)
@@ -397,11 +399,15 @@ async function downloadFromPost(url, body, fallbackName) {
 }
 
 async function getJson(url) {
-  const response = await fetch(url);
+  const response = await fetch(apiUrl(url));
   if (!response.ok) {
     throw new Error(await readError(response));
   }
   return response.json();
+}
+
+function apiUrl(path) {
+  return `${API_BASE_URL}${path}`;
 }
 
 async function readError(response) {
