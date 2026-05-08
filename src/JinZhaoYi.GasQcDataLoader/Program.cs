@@ -45,10 +45,23 @@ try
     builder.Services.AddSingleton<IImportOrchestrator, ImportOrchestrator>();
     builder.Services.AddSingleton<IJob, GasQcImportJob>();
 
+    builder.Services.AddCors(options =>
+    {
+        options.AddDefaultPolicy(policy =>
+        {
+            policy
+                .AllowAnyOrigin()
+                .AllowAnyHeader()
+                .AllowAnyMethod()
+                .WithExposedHeaders("Content-Disposition");
+        });
+    });
+
     builder.Services.AddHostedService<Worker>();
 
     var app = builder.Build();
 
+    app.UseCors();
     app.UseDefaultFiles();
     app.UseStaticFiles();
 
