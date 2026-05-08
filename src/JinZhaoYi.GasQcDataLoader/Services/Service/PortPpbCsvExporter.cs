@@ -50,7 +50,8 @@ public sealed class PortPpbCsvExporter(
                 .ThenBy(row => row.SampleName, StringComparer.OrdinalIgnoreCase)
                 .Select(BuildContent));
 
-        return new UTF8Encoding(encoderShouldEmitUTF8Identifier: true).GetBytes(content);
+        var encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: true);
+        return encoding.GetPreamble().Concat(encoding.GetBytes(content)).ToArray();
     }
 
     internal static string BuildFileName(QcDataRow row, string? rawLotId = null)

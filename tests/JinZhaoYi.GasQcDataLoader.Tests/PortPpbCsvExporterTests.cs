@@ -55,6 +55,19 @@ public sealed class PortPpbCsvExporterTests : IDisposable
     }
 
     [Fact]
+    public void ExportToBytes_emits_utf8_bom_for_excel_compatibility()
+    {
+        var exporter = CreateExporter(new SchedulerCsvExportOptions { Enabled = true });
+
+        var bytes = exporter.ExportToBytes([CreatePpbRow()]);
+
+        bytes.Take(3).Should().Equal(0xEF, 0xBB, 0xBF);
+        var content = System.Text.Encoding.UTF8.GetString(bytes);
+        content.Should().Contain("SupplierName,金兆益科技股份有限公司");
+        content.Should().NotContain("\uFFFD");
+    }
+
+    [Fact]
     public async Task ExportAsync_uses_export_root_and_overwrites_in_all_new_mode()
     {
         var exportRoot = Path.Combine(_rootPath, "out");

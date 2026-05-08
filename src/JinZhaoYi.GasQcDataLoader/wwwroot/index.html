@@ -3,15 +3,37 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>MES STD 匯出工具</title>
+  <title>NEWFAST MES-WIP</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
+  <header class="site-header">
+    <div class="brand-row">
+      <button class="menu-button" type="button" aria-label="Menu">
+        <span></span>
+        <span></span>
+        <span></span>
+      </button>
+      <div class="brand-name">NEWFAST</div>
+      <div class="brand-divider"></div>
+      <div class="module-name">MES-WIP</div>
+    </div>
+    <div class="session-row">
+      <span>Token Expiry:</span>
+      <strong id="clockText">--:--:--</strong>
+      <span class="user-icon" aria-hidden="true">●●</span>
+    </div>
+  </header>
+
+  <div class="sub-header">
+    <button class="back-button" type="button" onclick="history.back()">Back</button>
+  </div>
+
   <main class="app-shell">
     <header class="topbar">
       <div>
-        <h1>MES STD 匯出工具</h1>
-        <p id="statusText">選擇匯出類型，載入可匯出的 DB 資料。</p>
+        <h1>MES STD 匯出作業</h1>
+        <p id="statusText">請先載入資料，再依需求匯出 Excel 或 PORT_PPB CSV。</p>
       </div>
       <div class="top-actions">
         <button id="exportExcelButton" class="primary-button" type="button" disabled>匯出 Excel</button>
@@ -19,14 +41,14 @@
       </div>
     </header>
 
-    <nav class="mode-tabs" aria-label="匯出類型">
+    <nav class="mode-tabs" aria-label="匯出模式">
       <button class="tab-button active" type="button" data-mode="excel">Query2 Excel</button>
       <button class="tab-button" type="button" data-mode="csv">PORT_PPB CSV</button>
     </nav>
 
     <section class="controls excel-view" aria-label="Excel 查詢條件">
       <label>
-        開始日期
+        起始日期
         <input id="startDate" type="date">
       </label>
       <label>
@@ -44,7 +66,7 @@
       <button id="loadCsvButton" type="button">載入 PORT_PPB</button>
     </section>
 
-    <section class="summary-grid excel-view" aria-label="Excel 選取摘要">
+    <section class="summary-grid excel-view" aria-label="Excel 匯出摘要">
       <div>
         <span>STD</span>
         <strong id="stdCount">0</strong>
@@ -59,7 +81,7 @@
       </div>
     </section>
 
-    <section class="summary-grid csv-view" aria-label="CSV 選取摘要" hidden>
+    <section class="summary-grid csv-view" aria-label="CSV 匯出摘要" hidden>
       <div>
         <span>PORT_PPB</span>
         <strong id="ppbCount">0</strong>
@@ -78,7 +100,7 @@
       <aside class="panel rf-panel">
         <div class="panel-header">
           <h2>RF</h2>
-          <button id="reloadRfButton" type="button" title="重新載入 RF">更新</button>
+          <button id="reloadRfButton" type="button" title="重新載入 RF">重新載入</button>
         </div>
         <div id="rfList" class="list empty">尚未載入 RF</div>
       </aside>
@@ -120,6 +142,20 @@
     </section>
   </main>
 
+  <footer class="site-footer">
+    <span class="footer-mark">W</span>
+    <span>威友科技 Corp. 2026 WeYu Technology Co., Ltd. All Rights Reserved.</span>
+  </footer>
+
   <script src="/app.js"></script>
+  <script>
+    const clockText = document.querySelector("#clockText");
+    const updateClock = () => {
+      const now = new Date();
+      clockText.textContent = now.toLocaleTimeString("zh-TW", { hour12: false });
+    };
+    updateClock();
+    setInterval(updateClock, 1000);
+  </script>
 </body>
 </html>
