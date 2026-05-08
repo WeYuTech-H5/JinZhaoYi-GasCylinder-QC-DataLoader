@@ -81,6 +81,40 @@ public sealed class DapperRepository(
           AND Port IN @Ports
         """;
 
+    private const string RowsByDateSqlFormat = """
+        SELECT *
+        FROM dbo.{0}
+        WHERE CAST(AnlzTime AS date) = @BatchDate
+        """;
+
+    private const string RowsByDateRangeSqlFormat = """
+        SELECT *
+        FROM dbo.{0}
+        WHERE CAST(AnlzTime AS date) >= @StartDate
+          AND CAST(AnlzTime AS date) <= @EndDate
+        """;
+
+    private const string AllRfRowsSqlFormat = """
+        SELECT *
+        FROM dbo.{0}
+        ORDER BY AnlzTime DESC, CREATE_TIME DESC, SID DESC
+        """;
+
+    private const string RfByIdSqlFormat = """
+        SELECT TOP (1) *
+        FROM dbo.{0}
+        WHERE ID = @RfId
+        ORDER BY AnlzTime DESC, CREATE_TIME DESC, SID DESC
+        """;
+
+    private const string RawRowsByIdentitiesSqlFormat = """
+        SELECT *
+        FROM dbo.{0}
+        WHERE LotNo IN @LotNos
+          AND Port IN @Ports
+          AND SampleNo IN @SampleNos
+        """;
+
     private readonly SchedulerOptions _options = options.Value;
     private readonly SchedulerTableOptions _tables = options.Value.Tables;
 
@@ -158,6 +192,211 @@ public sealed class DapperRepository(
             .ToArray();
     }
 
+    public async Task<IReadOnlySet<string>> GetExistingRawIdentityIdsAsync(
+        IReadOnlyCollection<RawDataIdentity> identities,
+        CancellationToken cancellationToken)
+    {
+        var normalizedIdentities = identities
+            .Where(identity =>
+                !string.IsNullOrWhiteSpace(identity.LotNo) &&
+                !string.IsNullOrWhiteSpace(identity.Port) &&
+                identity.SampleNo > 0 &&
+                identity.AnlzTime > DateTime.MinValue)
+            .Distinct()
+            .ToArray();
+
+        if (normalizedIdentities.Length == 0)
+        {
+            return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        var lotNos = normalizedIdentities.Select(identity => identity.LotNo).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var ports = normalizedIdentities.Select(identity => identity.Port).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var sampleNos = normalizedIdentities.Select(identity => identity.SampleNo).Distinct().ToArray();
+        var expectedIds = normalizedIdentities.Select(identity => identity.ToStableId()).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
+        var rows = new List<QcDataRow>();
+        foreach (var tableName in new[] { _tables.StdRaw, _tables.PortRaw })
+        {
+            var sql = string.Format(RawRowsByIdentitiesSqlFormat, Quote(tableName));
+            var tableRows = await connection.QueryAsync(
+                new CommandDefinition(
+                    sql,
+                    new { LotNos = lotNos, Ports = ports, SampleNos = sampleNos },
+                    cancellationToken: cancellationToken));
+
+            rows.AddRange(tableRows.Select(DynamicToQcDataRow));
+        }
+
+        return rows
+            .Select(RawDataIdentity.FromRow)
+            .Select(identity => identity.ToStableId())
+            .Where(expectedIds.Contains)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
+    public async Task<IReadOnlyList<ExportOption>> GetExportOptionsAsync(
+        DateTime batchDate,
+        CancellationToken cancellationToken)
+    {
+        return await GetExportOptionsAsync(batchDate.Date, batchDate.Date, cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<ExportOption>> GetExportOptionsAsync(
+        DateTime startDate,
+        DateTime endDate,
+        CancellationToken cancellationToken)
+    {
+        var rawRows = await GetRawRowsByDateRangeAsync(startDate.Date, endDate.Date, cancellationToken);
+
+        return rawRows
+            .Where(row => row.AnlzTime.HasValue && row.SampleNo.HasValue)
+            .GroupBy(row => RawDataIdentity.FromRow(row).ToStableId(), StringComparer.OrdinalIgnoreCase)
+            .Select(group => ToExportOption(group.First()))
+            .OrderBy(option => option.AnlzTime)
+            .ThenBy(option => option.SourceKind, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(option => option.Port, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(option => option.SourceFolderName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(option => option.DisplayName, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    public async Task<IReadOnlyList<ExportOption>> GetPortPpbExportOptionsAsync(
+        DateTime batchDate,
+        CancellationToken cancellationToken)
+    {
+        var rows = await GetRowsByDateAsync(_tables.PortPpb, batchDate.Date, cancellationToken);
+        return rows
+            .Where(row => row.AnlzTime.HasValue && row.SampleNo.HasValue)
+            .GroupBy(row => RawDataIdentity.FromRow(row).ToStableId(), StringComparer.OrdinalIgnoreCase)
+            .Select(group => ToExportOption(group.First()))
+            .OrderBy(option => option.AnlzTime)
+            .ThenBy(option => option.Port, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(option => option.SourceFolderName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(option => option.DisplayName, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    public async Task<IReadOnlyList<RfOption>> GetRfOptionsAsync(CancellationToken cancellationToken)
+    {
+        await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
+        var sql = string.Format(AllRfRowsSqlFormat, Quote(_tables.Rf));
+        var rows = await connection.QueryAsync(new CommandDefinition(sql, cancellationToken: cancellationToken));
+        return rows
+            .Select(DynamicToQcDataRow)
+            .Select(row => new RfOption(row.Id, row.AnlzTime, row.Si0Id, row.SampleName, row.SampleNo, row.Description))
+            .ToArray();
+    }
+
+    public async Task<QcDataRow?> GetRfByIdAsync(string rfId, CancellationToken cancellationToken)
+    {
+        await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
+        var sql = string.Format(RfByIdSqlFormat, Quote(_tables.Rf));
+        var row = await connection.QueryFirstOrDefaultAsync(
+            new CommandDefinition(sql, new { RfId = rfId }, cancellationToken: cancellationToken));
+        return row is null ? null : DynamicToQcDataRow(row);
+    }
+
+    public async Task<IReadOnlyList<QcDataRow>> GetRawRowsForExportAsync(
+        DateTime startDate,
+        DateTime endDate,
+        IReadOnlyCollection<string> selectedIds,
+        CancellationToken cancellationToken)
+    {
+        var selectedSet = selectedIds
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (selectedSet.Count == 0)
+        {
+            return [];
+        }
+
+        var rawRows = await GetRawRowsByDateRangeAsync(startDate.Date, endDate.Date, cancellationToken);
+        return FilterRowsByStableIds(rawRows, selectedSet)
+            .OrderBy(row => row.AnlzTime)
+            .ThenBy(row => row.SampleNo)
+            .ThenBy(row => row.SourceFolderName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(row => row.DataFilename, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    public async Task<IReadOnlyList<Query2ExportRow>> GetQuery2ExportRowsAsync(
+        DateTime batchDate,
+        IReadOnlyCollection<string> selectedIds,
+        CancellationToken cancellationToken)
+    {
+        var selectedSet = selectedIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (selectedSet.Count == 0)
+        {
+            return [];
+        }
+
+        var rows = new List<Query2ExportRow>();
+        var rawRows = await GetRawRowsByDateAsync(batchDate.Date, cancellationToken);
+        var selectedRawRows = FilterRowsByStableIds(rawRows, selectedSet).ToArray();
+        if (selectedRawRows.Length == 0)
+        {
+            return [];
+        }
+
+        var rf = await GetLatestRfAsync(selectedRawRows.Min(row => row.AnlzTime) ?? batchDate.Date, cancellationToken);
+        if (rf is not null)
+        {
+            rows.Add(new Query2ExportRow(Query2ExportRowType.Rf, rf));
+        }
+
+        foreach (var rawRow in selectedRawRows)
+        {
+            rows.Add(new Query2ExportRow(Query2ExportRowType.Raw, rawRow));
+        }
+
+        foreach (var rowType in new[]
+                 {
+                     (Table: _tables.StdAvg, RowType: Query2ExportRowType.Avg),
+                     (Table: _tables.PortAvg, RowType: Query2ExportRowType.Avg),
+                     (Table: _tables.PortPpb, RowType: Query2ExportRowType.Ppb),
+                     (Table: _tables.StdRpd, RowType: Query2ExportRowType.Rpd),
+                     (Table: _tables.PortRpd, RowType: Query2ExportRowType.Rpd),
+                     (Table: _tables.StdQc, RowType: Query2ExportRowType.Qc)
+                 })
+        {
+            var computedRows = await GetRowsByDateAsync(rowType.Table, batchDate.Date, cancellationToken);
+            rows.AddRange(FilterRowsByStableIds(computedRows, selectedSet)
+                .Select(row => new Query2ExportRow(rowType.RowType, row)));
+        }
+
+        return rows
+            .OrderBy(row => row.RowType == Query2ExportRowType.Rf ? 0 : 1)
+            .ThenBy(row => row.Row.AnlzTime)
+            .ThenBy(row => row.Row.SampleNo)
+            .ThenBy(row => row.Row.SourceFolderName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(row => row.Row.Port, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(row => RowTypeOrder(row.RowType))
+            .ThenBy(row => row.Row.Id, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    public async Task<IReadOnlyList<QcDataRow>> GetPortPpbRowsForExportAsync(
+        DateTime batchDate,
+        IReadOnlyCollection<string> selectedIds,
+        CancellationToken cancellationToken)
+    {
+        var selectedSet = selectedIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (selectedSet.Count == 0)
+        {
+            return [];
+        }
+
+        var rows = await GetRowsByDateAsync(_tables.PortPpb, batchDate.Date, cancellationToken);
+        return FilterRowsByStableIds(rows, selectedSet)
+            .OrderBy(row => row.AnlzTime)
+            .ThenBy(row => row.SampleNo)
+            .ThenBy(row => row.SourceFolderName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(row => row.SampleName, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
     public async Task ExecuteImportAsync(ImportWriteSet writeSet, QcDataRow rf, DateTime importDate, CancellationToken cancellationToken)
     {
         await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
@@ -195,6 +434,98 @@ public sealed class DapperRepository(
             throw;
         }
     }
+
+    private async Task<IReadOnlyList<QcDataRow>> GetRawRowsByDateAsync(DateTime batchDate, CancellationToken cancellationToken)
+    {
+        var rows = new List<QcDataRow>();
+        rows.AddRange(await GetRowsByDateAsync(_tables.StdRaw, batchDate, cancellationToken));
+        rows.AddRange(await GetRowsByDateAsync(_tables.PortRaw, batchDate, cancellationToken));
+        return rows;
+    }
+
+    private async Task<IReadOnlyList<QcDataRow>> GetRawRowsByDateRangeAsync(
+        DateTime startDate,
+        DateTime endDate,
+        CancellationToken cancellationToken)
+    {
+        var rows = new List<QcDataRow>();
+        rows.AddRange(await GetRowsByDateRangeAsync(_tables.StdRaw, startDate, endDate, cancellationToken));
+        rows.AddRange(await GetRowsByDateRangeAsync(_tables.PortRaw, startDate, endDate, cancellationToken));
+        return rows;
+    }
+
+    private async Task<IReadOnlyList<QcDataRow>> GetRowsByDateAsync(
+        string tableName,
+        DateTime batchDate,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
+        var sql = string.Format(RowsByDateSqlFormat, Quote(tableName));
+        var rows = await connection.QueryAsync(
+            new CommandDefinition(
+                sql,
+                new { BatchDate = batchDate.Date },
+                cancellationToken: cancellationToken));
+
+        return rows.Select(DynamicToQcDataRow).ToArray();
+    }
+
+    private async Task<IReadOnlyList<QcDataRow>> GetRowsByDateRangeAsync(
+        string tableName,
+        DateTime startDate,
+        DateTime endDate,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
+        var sql = string.Format(RowsByDateRangeSqlFormat, Quote(tableName));
+        var rows = await connection.QueryAsync(
+            new CommandDefinition(
+                sql,
+                new { StartDate = startDate.Date, EndDate = endDate.Date },
+                cancellationToken: cancellationToken));
+
+        return rows.Select(DynamicToQcDataRow).ToArray();
+    }
+
+    private static IEnumerable<QcDataRow> FilterRowsByStableIds(
+        IEnumerable<QcDataRow> rows,
+        IReadOnlySet<string> selectedIds) =>
+        rows.Where(row => selectedIds.Contains(RawDataIdentity.FromRow(row).ToStableId()));
+
+    private static ExportOption ToExportOption(QcDataRow row)
+    {
+        var id = RawDataIdentity.FromRow(row).ToStableId();
+        var displayName = !string.IsNullOrWhiteSpace(row.DataFilepath)
+            ? Path.GetFileName(row.DataFilepath)
+            : row.SampleName ?? id;
+
+        return new ExportOption(
+            id,
+            displayName,
+            row.AnlzTime?.ToString("yyyyMMdd") ?? string.Empty,
+            row.SourceKind,
+            row.SourceFolderName,
+            row.Port ?? string.Empty,
+            row.LotNo ?? string.Empty,
+            row.SampleName,
+            row.SampleNo,
+            row.DataFilename,
+            row.DataFilepath,
+            row.AnlzTime);
+    }
+
+    private static int RowTypeOrder(Query2ExportRowType rowType) =>
+        rowType switch
+        {
+            Query2ExportRowType.Rf => 0,
+            Query2ExportRowType.Raw => 1,
+            Query2ExportRowType.Avg => 2,
+            Query2ExportRowType.Ppb => 3,
+            Query2ExportRowType.Rpd => 4,
+            Query2ExportRowType.Qc => 5,
+            Query2ExportRowType.Crit => 6,
+            _ => 99
+        };
 
     private async Task ProcessStdGroupAsync(
         SqlConnection connection,
@@ -465,6 +796,8 @@ public sealed class DapperRepository(
         var rows = writeSet.StdRawRows
             .Concat(writeSet.PortRawRows)
             .OrderBy(row => row.AnlzTime)
+            .ThenBy(row => row.SampleNo)
+            .ThenBy(row => row.SourceFolderName, StringComparer.OrdinalIgnoreCase)
             .ThenBy(row => row.Port, StringComparer.OrdinalIgnoreCase)
             .ThenBy(row => row.DataFilename, StringComparer.OrdinalIgnoreCase)
             .ToArray();
@@ -576,6 +909,8 @@ public sealed class DapperRepository(
             ["AnlzTime"] = row.AnlzTime,
             ["Inst"] = row.Inst,
             ["Port"] = row.Port,
+            ["SourceKind"] = row.SourceKind,
+            ["SourceFolderName"] = row.SourceFolderName,
             ["si0_id"] = row.Si0Id,
             ["SampleNo"] = row.SampleNo,
             ["LotNo"] = row.LotNo,
@@ -634,6 +969,8 @@ public sealed class DapperRepository(
             AnlzTime = ReadDateTime(dictionary, "AnlzTime"),
             Inst = ReadString(dictionary, "Inst"),
             Port = ReadString(dictionary, "Port"),
+            SourceKind = ReadString(dictionary, "SourceKind"),
+            SourceFolderName = ReadString(dictionary, "SourceFolderName"),
             Si0Id = ReadInt(dictionary, "si0_id"),
             SampleNo = (int?)ReadDecimal(dictionary, "SampleNo"),
             LotNo = ReadString(dictionary, "LotNo"),

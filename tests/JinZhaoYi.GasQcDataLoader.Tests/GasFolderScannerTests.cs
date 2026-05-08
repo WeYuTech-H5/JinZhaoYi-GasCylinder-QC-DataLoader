@@ -75,6 +75,33 @@ public sealed class GasFolderScannerTests : IDisposable
     }
 
     [Fact]
+    public void FindStableQuantFiles_ignores_d_folder_without_underscore_suffix()
+    {
+        var formalDataFolder = Path.Combine(_rootPath, "PORT5", "PORT 5[20260422 1010]_001.D");
+        var testDataFolder = Path.Combine(_rootPath, "PORT5", "PORT 5[20260422 1010].D");
+        Directory.CreateDirectory(formalDataFolder);
+        Directory.CreateDirectory(testDataFolder);
+
+        var formalQuantPath = Path.Combine(formalDataFolder, "Quant.txt");
+        var testQuantPath = Path.Combine(testDataFolder, "Quant.txt");
+        File.WriteAllText(formalQuantPath, "formal");
+        File.WriteAllText(testQuantPath, "test");
+
+        var stableTime = DateTime.Now.AddMinutes(-10);
+        File.SetLastWriteTime(formalQuantPath, stableTime);
+        File.SetLastWriteTime(testQuantPath, stableTime);
+        Directory.SetLastWriteTime(formalDataFolder, stableTime);
+        Directory.SetLastWriteTime(testDataFolder, stableTime);
+
+        var scanner = new GasFolderScanner();
+
+        var candidates = scanner.FindStableQuantFiles(_rootPath, TimeSpan.FromMinutes(1));
+
+        candidates.Should().ContainSingle();
+        candidates[0].DataFilepath.Should().Be(Path.GetFullPath(formalDataFolder));
+    }
+
+    [Fact]
     public void FindStableQuantFiles_supports_dated_folder_done_layout()
     {
         var batchFolder = Path.Combine(_rootPath, "20251119");

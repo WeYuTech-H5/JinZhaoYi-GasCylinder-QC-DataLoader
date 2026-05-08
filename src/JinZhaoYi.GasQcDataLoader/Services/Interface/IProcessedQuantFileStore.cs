@@ -2,15 +2,13 @@ using JinZhaoYi.GasQcDataLoader.DataModels;
 
 namespace JinZhaoYi.GasQcDataLoader.Services.Interface;
 
-public interface IQuery2WorkbookExporter
+public interface IProcessedQuantFileStore
 {
-    Task<string?> ExportAsync(
-        ImportWriteSet writeSet,
+    Task<IReadOnlyList<QuantFileCandidate>> FilterUnprocessedAsync(
         IReadOnlyCollection<QuantFileCandidate> candidates,
         CancellationToken cancellationToken);
 
-    Task<byte[]?> ExportAsync(
-        string batchDate,
-        IReadOnlyList<Query2ExportRow> rows,
+    Task MarkProcessedAsync(
+        IReadOnlyCollection<QuantFileCandidate> candidates,
         CancellationToken cancellationToken);
 }

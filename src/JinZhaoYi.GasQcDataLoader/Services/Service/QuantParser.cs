@@ -259,12 +259,12 @@ public sealed partial class QuantParser : IQuantParser
         var directoryName = Path.GetFileName(Path.GetDirectoryName(candidate.FullPath));
 
         var match = SampleNoRegex().Match(directoryName ?? string.Empty);
-        if (!match.Success)
+        if (match.Success)
         {
-            throw new InvalidDataException($"Quant path '{candidate.FullPath}' does not contain a sample number like '_903.D' or '_V006.D'.");
+            return int.Parse(match.Groups["sampleNo"].Value, CultureInfo.InvariantCulture);
         }
 
-        return int.Parse(match.Groups["sampleNo"].Value, CultureInfo.InvariantCulture);
+        throw new InvalidDataException($"Quant path '{candidate.FullPath}' does not contain a sample number like '_903.D' or '_V006.D'.");
     }
 
     /// <summary>

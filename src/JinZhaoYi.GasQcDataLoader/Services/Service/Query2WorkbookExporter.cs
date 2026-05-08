@@ -39,7 +39,7 @@ public sealed class Query2WorkbookExporter(
 
         var firstCandidate = candidates.First();
         var batchDate = firstCandidate.LogicalBatchDate;
-        var outputDirectory = Path.Combine(firstCandidate.DayFolderPath, "QC");
+        var outputDirectory = ResolveOutputDirectory(firstCandidate);
         var outputPath = Path.GetFullPath(Path.Combine(outputDirectory, $"Cylinder_Qc[{batchDate}].xlsx"));
 
         if (string.Equals(outputPath, templatePath, StringComparison.OrdinalIgnoreCase))
@@ -55,9 +55,59 @@ public sealed class Query2WorkbookExporter(
         return outputPath;
     }
 
+    public async Task<byte[]?> ExportAsync(
+        string batchDate,
+        IReadOnlyList<Query2ExportRow> rows,
+        CancellationToken cancellationToken)
+    {
+        if (!_options.ExcelExport.Enabled || rows.Count == 0)
+        {
+            return null;
+        }
+
+        var templatePath = ResolveTemplatePath();
+        return await Task.Run(() => ExportWorkbookToBytes(templatePath, rows), cancellationToken);
+    }
+
+    private string ResolveOutputDirectory(QuantFileCandidate firstCandidate) =>
+        string.IsNullOrWhiteSpace(_options.ExportRoot)
+            ? Path.Combine(firstCandidate.DayFolderPath, "QC")
+            : Path.Combine(_options.ExportRoot, "QC");
+
+    private string ResolveTemplatePath()
+    {
+        var templatePath = _options.ExcelExport.TemplatePath;
+        if (string.IsNullOrWhiteSpace(templatePath))
+        {
+            throw new InvalidOperationException("Scheduler:ExcelExport:TemplatePath is required when Scheduler:ExcelExport:Enabled is true.");
+        }
+
+        templatePath = Path.GetFullPath(templatePath);
+        if (!File.Exists(templatePath))
+        {
+            throw new FileNotFoundException($"Query2 Excel template not found: {templatePath}", templatePath);
+        }
+
+        return templatePath;
+    }
+
+    private static byte[] ExportWorkbookToBytes(string templatePath, IReadOnlyList<Query2ExportRow> exportRows)
+    {
+        using var workbook = BuildWorkbook(templatePath, exportRows);
+        using var stream = new MemoryStream();
+        workbook.SaveAs(stream);
+        return stream.ToArray();
+    }
+
     private static void ExportWorkbook(string templatePath, string outputPath, IReadOnlyList<Query2ExportRow> exportRows)
     {
-        using var workbook = new XLWorkbook(templatePath);
+        using var workbook = BuildWorkbook(templatePath, exportRows);
+        workbook.SaveAs(outputPath);
+    }
+
+    private static XLWorkbook BuildWorkbook(string templatePath, IReadOnlyList<Query2ExportRow> exportRows)
+    {
+        var workbook = new XLWorkbook(templatePath);
         var worksheet = workbook.Worksheet(Query2SheetName)
             ?? throw new InvalidOperationException($"Template workbook does not contain worksheet '{Query2SheetName}'.");
         var templateWorksheet = worksheet.CopyTo(TemplateSheetName);
@@ -92,7 +142,7 @@ public sealed class Query2WorkbookExporter(
         }
 
         templateWorksheet.Delete();
-        workbook.SaveAs(outputPath);
+        return workbook;
     }
 
     private static void CopyTemplateRow(IXLWorksheet sourceWorksheet, int sourceRowNumber, IXLWorksheet targetWorksheet, int targetRowNumber)

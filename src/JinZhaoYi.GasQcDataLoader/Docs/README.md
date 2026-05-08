@@ -1,264 +1,131 @@
 # JinZhaoYi Gas QC DataLoader
 
-`.NET 8 Worker Service` for importing Gas QC `Quant.txt` files into SQL Server. The application is built as `WinExe`, so it can stay resident in the background when deployed as a Windows Service. `RunOnce=true` is available for local verification.
+這個專案是 `.NET 8 Worker Service`，負責：
+
+- 掃描 GAS 資料夾中的 `Quant.txt`
+- 解析並匯入 SQL Server Gas QC tables
+- 從 DB 已匯入資料匯出 `Query2` Excel
+- 匯出 TO14C PORT_PPB CSV
+- 提供下載與手動匯出 API
 
 ## 專案結構
 
-- `Configuration`: 排程設定、DB 表名、logging options。
-- `DataModels`: Quant、LOT、RF 與 DB row 用到的 DTO/model。
-- `Logging`: Serilog 初始化與檔案輸出設定。
-- `Logs`: Serilog 檔案輸出目錄，實際 `.log` 不提交。
-- `Services/Infrastructure`: SQL connection factory 與 Dapper repository。
-- `Services/Interface`: 介面契約。
-- `Services/Service`: parser、scanner、calculation、orchestrator、job 實作。
-- `Services/Processing`: `Worker`，負責 BackgroundService 宿主與輪詢。
-
-## 設定
-
-主要設定在 `src/JinZhaoYi.GasQcDataLoader/appsettings.json`。
-
-正式 DB 密碼不可提交到 GitHub。repo 內的 `appsettings.json` 只保留範例連線字串，實際開發機設定請放在被 `.gitignore` 排除的 `appsettings.Development.json`、user-secrets 或環境變數。
-
-主要設定項：
-
-| 設定 | 說明 |
+| 目錄 | 說明 |
 | --- | --- |
-| `ConnectionStrings:Connection` | SQL Server 連線字串，repo 內只放範例值 |
-| `Scheduler:WatchRoot` | 掃描根目錄，可用 `GAS\yyyyMMdd` 或直接指定 `QC01` 共享資料夾根目錄 |
-| `Scheduler:IntervalSeconds` | 常駐輪詢秒數 |
-| `Scheduler:MinimumIntervalSeconds` | 最小輪詢秒數保護 |
-| `Scheduler:StableFolderMinutes` | 資料夾最後修改時間需穩定幾分鐘後才處理 |
-| `Scheduler:InstrumentName` | 寫入 `Inst`，預設 `QC-01` |
-| `Scheduler:SampleType` | `ZZ_NF_GAS_MFG_LOT.SampleType` 為空時的 fallback，預設 `TO14C1` |
-| `Scheduler:DryRun` | `true` 時只解析和驗證，不寫 DB、不搬移資料夾 |
-| `Scheduler:RunOnce` | `true` 時跑完一輪即結束，適合手動測試 |
-| `Scheduler:UseDailySchedule` | `true` 時常駐服務每天只在 `DailyWakeUpTime` 醒來執行一次 |
-| `Scheduler:DailyWakeUpTime` | 每日醒來時間，格式 `HH:mm`，例如 `02:00` |
-| `Scheduler:NormalTargetDayOffset` | 正常模式目標日期位移，`-1` 代表跑昨天資料夾 |
-| `Scheduler:BackfillEnabled` | `true` 時改跑 `BackfillTargetDate` 指定日期 |
-| `Scheduler:BackfillTargetDate` | 補跑日期，格式 `yyyyMMdd`，例如 `20251119` |
-| `Scheduler:MoveProcessedFilesToDone` | 成功匯入後是否搬移 `.D` 資料夾到 `Done` |
-| `Scheduler:UseAverageSnapshotTables` | `true` 時 AVG 表維持 snapshot 覆蓋；`false` 時保留 AVG 歷史 |
-| `Scheduler:CreateUser` | 寫入 DB 的 `CREATE_USER` |
-| `Scheduler:Tables` | 所有讀寫資料表名稱 |
-| `AppLogging` | Serilog 最小層級、檔案 sink、Seq sink |
+| `Configuration` | Scheduler、table name、Excel/CSV/API 設定模型。 |
+| `DataModels` | Quant、LOT、RF、QC row、Query2、CSV、API DTO。 |
+| `Services/Infrastructure` | SQL connection factory 與 Dapper repository。 |
+| `Services/Service` | Scanner、parser、calculation、import/export orchestration。 |
+| `Services/Processing` | Worker background loop。 |
+| `Docs` | 維護中的流程文件與 DB helper script。 |
 
-user-secrets 範例：
+## 主要資料表
 
-```powershell
-dotnet user-secrets set "ConnectionStrings:Connection" "<connection-string>" --project .\src\JinZhaoYi.GasQcDataLoader\JinZhaoYi.GasQcDataLoader.csproj
-```
+表名可由 `Scheduler:Tables` 設定覆寫，預設如下：
 
-### 排程參數設定方式
+| 用途 | Table |
+| --- | --- |
+| LOT 主檔 | `ZZ_NF_GAS_MFG_LOT` |
+| RF | `ZZ_NF_GAS_QC_RF` |
+| STD raw | `ZZ_NF_GAS_QC_LOT_STD` |
+| STD AVG | `ZZ_NF_GAS_QC_LOT_STD_AVG` |
+| STD QC | `ZZ_NF_GAS_QC_LOT_STD_QC` |
+| STD RPD | `ZZ_NF_GAS_QC_LOT_STD_RPD` |
+| PORT raw | `ZZ_NF_GAS_QC_LOT_PORT` |
+| PORT AVG | `ZZ_NF_GAS_QC_LOT_PORT_AVG` |
+| PORT PPB | `ZZ_NF_GAS_QC_LOT_PORT_PPB` |
+| PORT RPD | `ZZ_NF_GAS_QC_LOT_PORT_RPD` |
 
-正式常駐服務建議設定如下。此模式會讓程式常駐，等到每天 `DailyWakeUpTime` 才醒來跑一次；例如今天是 `2026/04/16`，`NormalTargetDayOffset=-1` 會處理 `20260415` 資料夾。
+## 設定重點
 
-```json
-{
-  "Scheduler": {
-    "RunOnce": false,
-    "UseDailySchedule": true,
-    "DailyWakeUpTime": "02:00",
-    "NormalTargetDayOffset": -1,
-    "BackfillEnabled": false,
-    "BackfillTargetDate": "",
-    "DryRun": false
-  }
-}
-```
+主要設定在 `src/JinZhaoYi.GasQcDataLoader/appsettings.json` 與 `appsettings.Development.json`。
 
-若生產環境使用共享資料夾直放 `STD`、`PORT2`、`PORT3` 這類目錄，`WatchRoot` 可直接設成：
+| Setting | 說明 |
+| --- | --- |
+| `ConnectionStrings:Connection` | SQL Server 連線字串。 |
+| `Scheduler:WatchRoot` | GAS 根目錄，可是日期資料夾上層，也可以是已經指向批次資料夾的路徑。 |
+| `Scheduler:TargetMode` | `TargetDate` 處理指定日期；`AllNewStableFiles` 處理所有穩定且未處理檔案。 |
+| `Scheduler:StableFolderMinutes` | `.D` folder 穩定多久後才處理。 |
+| `Scheduler:DryRun` | `true` 時只解析、驗證與計算，不寫 DB。 |
+| `Scheduler:RunOnce` | `true` 時跑一輪後結束。 |
+| `Scheduler:BackfillEnabled` / `BackfillTargetDate` | 補跑指定 `yyyyMMdd` 日期。 |
+| `Scheduler:MoveProcessedFilesToDone` | 成功後是否搬到 archive。 |
+| `Scheduler:UseAverageSnapshotTables` | `true` 時 AVG tables 保持 snapshot 行為；`false` 時保留 AVG history。 |
+| `Scheduler:ExcelExport:Enabled` | 是否輸出 Query2 Excel。 |
+| `Scheduler:ExcelExport:TemplatePath` | Query2 Excel template 路徑。 |
+| `Scheduler:DownloadApi:Enabled` | 是否啟用查詢、匯出與下載 API。 |
 
-```json
-{
-  "Scheduler": {
-    "WatchRoot": "\\\\10.0.55.30\\nf55_分享資料夾\\MES_Demo\\QC01"
-  }
-}
-```
+## 常用指令
 
-此模式下程式會從 `QC01` 底下的 `STD`、`PORT2`、`PORT3` 等來源資料夾找 `Quant.txt`，並用 `.D` 資料夾名稱中的時間判斷屬於哪一天。
-
-手動補跑歷史日期時，指定 `BackfillTargetDate`。補跑日期格式固定是 `yyyyMMdd`。
-
-```json
-{
-  "Scheduler": {
-    "RunOnce": true,
-    "BackfillEnabled": true,
-    "BackfillTargetDate": "20251119",
-    "StableFolderMinutes": 0,
-    "DryRun": false
-  }
-}
-```
-
-補跑完成後，如果要回到每日常駐模式，務必改回：
-
-```json
-{
-  "Scheduler": {
-    "RunOnce": false,
-    "BackfillEnabled": false,
-    "BackfillTargetDate": ""
-  }
-}
-```
-
-也可以不改檔案，直接用命令列覆寫參數：
-
-```powershell
-dotnet run --project .\src\JinZhaoYi.GasQcDataLoader\JinZhaoYi.GasQcDataLoader.csproj -- --Scheduler:RunOnce=true --Scheduler:BackfillEnabled=true --Scheduler:BackfillTargetDate=20251119 --Scheduler:StableFolderMinutes=0 --Scheduler:DryRun=false
-```
-
-`RunOnce=true` 代表程式啟動後立刻跑一輪，跑完就結束，不會等待 `DailyWakeUpTime`。正式常駐服務請使用 `RunOnce=false`。
-
-### 公式異常處理
-
-AVG、RPD、PPB 遇到以下狀況會寫入 DB `NULL`，也就是查詢結果留白，不寫 `0`：
-
-- 必要輸入值缺失。
-- 除法分母為 `0` 或小於 `0`。
-- Area 或 RF 輸入值為負數。
-
-不使用 fallback `0` 的原因是 `0` 容易被誤判為有效測值；`NULL` 才表示本次公式無法成立。
-
-## 資料來源責任
-
-| 資料來源 | 用途 | 程式是否修改 |
-| --- | --- | --- |
-| `Quant.txt` | 正式匯入來源，提供 compound `Response`、`R.T.` 與 Misc 中的 `LotNo` | 不修改 |
-| `ZZ_NF_GAS_MFG_LOT` | 人工維護 LOT 主檔，提供 `LotNo` 驗證與 `SamplName`、`SampleNo`、`SampleType`、`Container`、`EMVolts`、`RelativeEM` | 只查詢，不修改 |
-| `ZZ_NF_GAS_QC_RF` | RF 參考係數來源，提供各 compound 的 `Area_*` | 只查詢，不修改 |
-| Excel `Query2` | 只作公式與結果驗證參考，不作正式匯入來源 | 不修改 |
-| `.D` 資料夾 | 匯入成功後搬移到 `Done` | 搬移 |
-
-## 匯入規則
-
-- 每個 `.D\Quant.txt` 轉成一筆 raw row。
-- `STD` 寫入 `ZZ_NF_GAS_QC_LOT_STD`。
-- `PORT X` 寫入 `ZZ_NF_GAS_QC_LOT_PORT`。
-- `PROT X` 會視為 `PORT X`，支援現場資料夾 typo。
-- `Area_*` 來自 Quant `Response`。
-- `RT_*` 來自 Quant `R.T.`。
-- STD raw 不採用 Quant `Conc ppb`，`ppb_*` 維持 `NULL`。
-- PORT raw `ppb_*` 使用 `RF.Area * PORT_RAW.Area / ACTIVE_STD_AVG.Area`。
-- `ACTIVE_STD_AVG` 是依 PORT 的 `AnlzTime`，從 `ZZ_NF_GAS_QC_LOT_STD` 找 `AnlzTime <= PORT時間` 的最近兩筆 STD raw 後即時計算，不直接讀 `ZZ_NF_GAS_QC_LOT_STD_AVG` 最後快照。
-- STD/PORT AVG、RPD、PPB 依同一輪同一天資料夾的連續群組處理，取該群組最後兩筆 raw 計算。
-- `ZZ_NF_GAS_QC_LOT_STD_AVG` 與 `ZZ_NF_GAS_QC_LOT_PORT_AVG` 由 `Scheduler:UseAverageSnapshotTables` 控制；`true` 時維持 snapshot 覆蓋，`false` 時保留 AVG 歷史紀錄。
-- AVG 表 `Area_*` 欄位需保留小數，現行 DB 已調整為 `decimal(18,6)`。
-- STD/PORT RPD 使用 `(MAX - MIN) / AVERAGE(MAX, MIN)`。
-- PORT PPB 使用 `RF.Area * PORT_AVG.Area / ACTIVE_STD_AVG.Area`，寫入 `ZZ_NF_GAS_QC_LOT_PORT_PPB` 的 `Area_*` 欄位。
-- `ZZ_NF_GAS_QC_RF` 和 `ZZ_NF_GAS_MFG_LOT` 只查詢，不修改。
-- 任一 LOT 查不到 `ZZ_NF_GAS_MFG_LOT.LotNo` 時，整批停止，不寫入任何資料，也不搬移 `.D` 資料夾。
-
-## 查重規則
-
-Raw 表查重：
-
-```text
-LotNo + Port + SampleNo + DataFilename
-```
-
-計算表查重：
-
-```text
-ID + LotNo + Port + DataFilename
-```
-
-加入 `DataFilename` 是因為 raw `ID` 目前使用 `yyyyMMdd + SampleNo`，同一天同 SampleNo 可能有多筆 raw。
-
-## 執行
-
-測試：
+Build/test：
 
 ```powershell
 dotnet test .\JinZhaoYi.GasQcDataLoader.sln
 ```
 
-單輪正式匯入：
+單次匯入：
 
 ```powershell
 dotnet run --project .\src\JinZhaoYi.GasQcDataLoader\JinZhaoYi.GasQcDataLoader.csproj -- --Scheduler:RunOnce=true --Scheduler:StableFolderMinutes=0 --Scheduler:DryRun=false
 ```
 
-DryRun：
+補跑指定日期：
 
 ```powershell
-dotnet run --project .\src\JinZhaoYi.GasQcDataLoader\JinZhaoYi.GasQcDataLoader.csproj -- --Scheduler:RunOnce=true --Scheduler:StableFolderMinutes=0 --Scheduler:DryRun=true
+dotnet run --project .\src\JinZhaoYi.GasQcDataLoader\JinZhaoYi.GasQcDataLoader.csproj -- --Scheduler:RunOnce=true --Scheduler:BackfillEnabled=true --Scheduler:BackfillTargetDate=20251119 --Scheduler:StableFolderMinutes=0 --Scheduler:DryRun=false
 ```
 
-## 20251119 實跑結果
+## API
 
-以 `GAS\20251119` 實跑：
+啟用 `Scheduler:DownloadApi:Enabled=true` 後提供：
 
-| 類型 | 筆數 |
-| --- | ---: |
-| 掃描 Quant.txt | 68 |
-| 成功處理 | 68 |
-| 搬移到 Done | 68 |
-| `ZZ_NF_GAS_QC_LOT_STD` | 18 |
-| `ZZ_NF_GAS_QC_LOT_PORT` | 50 |
-| `ZZ_NF_GAS_QC_LOT_STD_AVG` | 1 |
-| `ZZ_NF_GAS_QC_LOT_STD_RPD` | 6 |
-| `ZZ_NF_GAS_QC_LOT_PORT_AVG` | 1 |
-| `ZZ_NF_GAS_QC_LOT_PORT_PPB` | 10 |
-| `ZZ_NF_GAS_QC_LOT_PORT_RPD` | 10 |
-
-代表性 Excel 比對：
-
-| 項目 | Acetone | IPA |
-| --- | ---: | ---: |
-| `PORT 2[20251119 1147]_023.D` PORT PPB | 98.228605394643 | 105.475527415479 |
-| `PORT 2[20251119 1147]_023.D` PORT RPD | 0.030336845014 | 0.021699853922 |
-| `STD[20251119 1032]_903.D` STD RPD | 0.000563829471 | 0.015242791187 |
-| 最新 STD AVG `STD[20251120 0412]_903.D` | 1041657.500000 | 3688957.500000 |
-| 最新 PORT AVG `PORT 12[20251120 0342]_034.D` | 1028027.500000 | 3469187.500000 |
-
-## 文件
-
-- `Docs/程式碼流程與資料流說明書.md`: 程式入口、排程、資料流、DB 寫入、Done 搬移與維運說明。
-- `Docs/ZZ_NF_GAS_QC_LOT_PORT欄位來源說明.md`: PORT raw 與 STD/PORT 計算表欄位來源。
-
-## 待確認
-
-- RF 每日來源規則目前以程式既有邏輯取可用 RF，若未來規則更明確，需調整 `DapperRepository.GetLatestRfAsync()`。
-- `STD_QC` 公式已保留在程式中，但目前未寫 DB，因尚未確認對應資料表。
-
-## Query2 Excel Export
-
-Set `Scheduler:ExcelExport:Enabled=true` to export `Query2` into an Excel workbook after each import batch. The workbook uses a template file and only rewrites the `Query2` sheet data area. Formulas are not generated; values are written directly while keeping the template headers, widths, styles, and number formats.
-
-Required settings:
-
-| Setting | Description |
+| Endpoint | 說明 |
 | --- | --- |
-| `Scheduler:ExcelExport:Enabled` | Enable or disable Query2 workbook export. |
-| `Scheduler:ExcelExport:TemplatePath` | Full path to the template workbook, for example `C:\Data\Cylinder_DataBase_20251119.xlsx`. |
+| `GET /api/export-groups?startDate=yyyyMMdd&endDate=yyyyMMdd` | 從 DB raw tables 讀指定日期區間，依 STD/PORT、Port、Lot、SampleName 分組，供 UI 勾選。 |
+| `GET /api/rf-options` | 從 RF table 讀可選 RF rows。 |
+| `POST /api/exports/query2-excel` | 依 UI 選取的 RF、STD raw、PORT raw 從 DB 重新產生 Query2 Excel。 |
+| `POST /api/exports/port-ppb-csv` | 依選取 PORT_PPB rows 產生 TO14C CSV。 |
+| `GET /api/downloads/cylinder-qc/{batchDate}` | 下載已產生的 `Cylinder_Qc[{batchDate}].xlsx`。 |
+| `GET /api/downloads/to14c-csv/{sampleName}` | 下載指定 sample 的 TO14C CSV。 |
 
-Output rules:
+## TO14C PORT_PPB CSV 欄位規則
 
-- Output file name: `Cylinder_Qc[{batchDate}].xlsx`
-- Output location: the batch folder `QC` subfolder, for example `...\20260420\QC`
-- Export sheet: `Query2` only
-- Data start row: row `4`
-- Row types included: `RF`, `Raw`, `AVG`, `PPB`, `RPD`, `QC`, `Crit`
+`POST /api/exports/port-ppb-csv` 會依選取的 PORT_PPB row 讀 `ZZ_NF_GAS_QC_LOT_PORT_PPB`。CSV 中 `Item,N,MEAN,SD,MAX,MIN,VALUE,DL` 的來源如下：
 
-Example appsettings fragment:
+| 欄位 | 來源 / 規則 |
+| --- | --- |
+| `Item` | `To14cCsvAnalyteMap` 的 TO14C 固定品項名稱。 |
+| `N` | 依範例保留空白。 |
+| `MEAN` | 依範例保留空白。 |
+| `SD` | 依範例保留空白。 |
+| `MAX` | 依範例保留空白。 |
+| `MIN` | 依範例保留空白。 |
+| `VALUE` | `ZZ_NF_GAS_QC_LOT_PORT_PPB.Area_*` 的最終 PPB 結果，CSV 依規格輸出為整數。 |
+| `DL` | 依範例保留空白。 |
 
-```json
-{
-  "Scheduler": {
-    "ExcelExport": {
-      "Enabled": true,
-      "TemplatePath": "C:\\Users\\Andy\\Downloads\\Cylinder_DataBase_20251119.template.xlsx"
-    }
-  }
-}
-```
+`Water`、`Oxygen`、`Nitrogen` 為設定檔固定值。`RemainLifeTime` 由 `DeliverDate` 與 `ShelfLifeTime` 計算；若 `DeliverDate` 未設定則保留空白。
 
-Example replay command for the `20251119` sample:
+## Query2 Excel 從 DB 匯出演算法
 
-```powershell
-dotnet run --project .\src\JinZhaoYi.GasQcDataLoader\JinZhaoYi.GasQcDataLoader.csproj -- --Scheduler:WatchRoot=C:\Users\Andy\Downloads\GAS_replay_20251119\20251119 --Scheduler:RunOnce=true --Scheduler:DryRun=true --Scheduler:StableFolderMinutes=0 --Scheduler:BackfillEnabled=true --Scheduler:BackfillTargetDate=20251119 --Scheduler:MoveProcessedFilesToDone=false --Scheduler:ExcelExport:Enabled=true --Scheduler:ExcelExport:TemplatePath=C:\Users\Andy\Downloads\Cylinder_DataBase_20251119.template.xlsx
-```
+詳細規則請看：
+
+[Query2 Excel DB Export Algorithm](./Query2Excel_FromDbRawData_README.md)
+
+這份文件說明：
+
+- API 從 DB 抓哪些資料
+- UI 勾選資料如何用 `RawDataIdentity` 對回 DB raw rows
+- RF / STD raw / PORT raw 如何排序與分組
+- active STD AVG 如何選定
+- Query2 row 產生順序
+- `Area_*`、`ppb_*`、`RT_*` 如何寫進 Excel
+- 為什麼 `Cylinder_DataBase_20251119.xlsx` 有 5 格手動公式與標準演算法不同
+
+## 維護中的文件
+
+| 文件 | 用途 |
+| --- | --- |
+| `README.md` | 專案入口與常用設定/API。 |
+| `Query2Excel_FromDbRawData_README.md` | 從 DB rawdata 產生 Query2 Excel 的主要演算法。 |
+| `QuantParser_DB_Mapping_README.md` | `Quant.txt` 解析與 DB 欄位 mapping。 |
+| `Create_ZZ_NF_GAS_QC_LOT_STD_QC.sql` | 建立 `ZZ_NF_GAS_QC_LOT_STD_QC` 的 helper script。 |

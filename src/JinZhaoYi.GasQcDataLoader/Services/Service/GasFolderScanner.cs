@@ -5,7 +5,7 @@ using JinZhaoYi.GasQcDataLoader.Services.Interface;
 
 namespace JinZhaoYi.GasQcDataLoader.Services.Service;
 
-public sealed partial class GasFolderScanner : IGasFolderScanner
+public sealed partial class GasFolderScanner(ILogger<GasFolderScanner>? logger = null) : IGasFolderScanner
 {
     public IReadOnlyList<string> FindStableDayFolders(string watchRoot, TimeSpan stableAge)
     {
@@ -67,6 +67,15 @@ public sealed partial class GasFolderScanner : IGasFolderScanner
                 }
 
                 var dataFolder = Path.GetDirectoryName(quantPath) ?? topFolder;
+                if (!IsFormalDataFolder(dataFolder))
+                {
+                    logger?.LogInformation(
+                        "Skipping Quant file because .D folder does not contain an underscore suffix. QuantPath={QuantPath}, DataFolder={DataFolder}.",
+                        quantPath,
+                        dataFolder);
+                    continue;
+                }
+
                 var dataFilename = Path.GetRelativePath(topFolder, quantPath);
 
                 candidates.Add(new QuantFileCandidate(
@@ -240,7 +249,15 @@ public sealed partial class GasFolderScanner : IGasFolderScanner
         Directory.EnumerateDirectories(rootPath)
             .Where(path => TryClassifyTopFolder(Path.GetFileName(path), out _, out _))
             .Any(path => Directory.EnumerateFiles(path, "Quant.txt", SearchOption.AllDirectories)
-                .Any(quantPath => !IsUnderArchiveSubfolder(path, quantPath)));
+                .Any(quantPath =>
+                    !IsUnderArchiveSubfolder(path, quantPath) &&
+                    IsFormalDataFolder(Path.GetDirectoryName(quantPath) ?? path)));
+
+    private static bool IsFormalDataFolder(string dataFolderPath)
+    {
+        var folderName = Path.GetFileName(dataFolderPath);
+        return !string.IsNullOrWhiteSpace(folderName) && FormalDataFolderRegex().IsMatch(folderName);
+    }
 
     private static bool IsDoneFolder(string folderName) =>
         folderName.Equals("Done", StringComparison.OrdinalIgnoreCase);
@@ -295,4 +312,7 @@ public sealed partial class GasFolderScanner : IGasFolderScanner
 
     [GeneratedRegex(@"\[(?<value>\d{8}\s\d{4})\]", RegexOptions.Compiled)]
     private static partial Regex DataFolderTimeRegex();
+
+    [GeneratedRegex(@"_.+\.D$", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
+    private static partial Regex FormalDataFolderRegex();
 }

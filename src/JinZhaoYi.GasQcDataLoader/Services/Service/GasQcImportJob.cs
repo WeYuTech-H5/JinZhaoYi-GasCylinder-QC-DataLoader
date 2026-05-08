@@ -13,6 +13,8 @@ public sealed class GasQcImportJob(
     ILogger<GasQcImportJob> logger,
     IGasFolderScanner scanner,
     IImportOrchestrator orchestrator,
+    IProcessedQuantFileStore processedQuantFileStore,
+    IImportErrorReportExporter importErrorReportExporter,
     IOptions<SchedulerOptions> options) : Job
 {
     private readonly SchedulerOptions _options = options.Value;
@@ -28,19 +30,20 @@ public sealed class GasQcImportJob(
         var plannedRowCount = 0;
         var movedCount = 0;
         var moveFailedCount = 0;
+        var errorRows = new List<ImportErrorReportRow>();
 
         var stableAge = TimeSpan.FromMinutes(Math.Max(0, _options.StableFolderMinutes));
 
         try
         {
-            var targetDayFolderName = ResolveTargetDayFolderName(DateTime.Today, _options);
             var allStableCandidates = scanner.FindStableQuantFiles(_options.WatchRoot, stableAge).ToArray();
-            var candidates = allStableCandidates
-                .Where(candidate => string.Equals(
-                    candidate.LogicalBatchDate,
-                    targetDayFolderName,
-                    StringComparison.OrdinalIgnoreCase))
-                .ToArray();
+            var targetDayFolderName = _options.TargetMode == SchedulerTargetMode.AllNewStableFiles
+                ? "all-new-stable-files"
+                : ResolveTargetDayFolderName(DateTime.Today, _options);
+            var candidates = await ResolveCandidatesForCurrentCycleAsync(
+                allStableCandidates,
+                targetDayFolderName,
+                cancellationToken);
             totalCandidates = candidates.Length;
 
             logger.LogInformation(
@@ -54,7 +57,7 @@ public sealed class GasQcImportJob(
                 _options.DryRun);
 
             var dayGroups = candidates
-                .GroupBy(candidate => candidate.DayFolderPath, StringComparer.OrdinalIgnoreCase)
+                .GroupBy(candidate => BuildImportGroupKey(candidate), StringComparer.OrdinalIgnoreCase)
                 .OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase)
                 .ToArray();
 
@@ -66,7 +69,19 @@ public sealed class GasQcImportJob(
 
                 processedCount += groupCandidates.Length;
 
-                var result = await orchestrator.ImportCandidatesAsync(groupCandidates, cancellationToken);
+                ImportResult result;
+                try
+                {
+                    result = await orchestrator.ImportCandidatesAsync(groupCandidates, cancellationToken);
+                }
+                catch (Exception ex) when (_options.TargetMode == SchedulerTargetMode.AllNewStableFiles && ex is not OperationCanceledException)
+                {
+                    failedCount++;
+                    errorRows.AddRange(BuildErrorRows(groupCandidates, "ParseOrImportException", ex.Message));
+                    logger.LogError(ex, "Import failed for {DayFolder}; continuing with remaining new stable groups.", dayGroup.Key);
+                    continue;
+                }
+
                 plannedRowCount += result.PlannedRowCount;
 
                 foreach (var message in result.Messages)
@@ -77,11 +92,19 @@ public sealed class GasQcImportJob(
                 if (!result.Succeeded)
                 {
                     failedCount++;
+                    errorRows.AddRange(BuildErrorRows(groupCandidates, "ImportValidationFailed", string.Join(Environment.NewLine, result.Messages)));
+                    if (_options.TargetMode == SchedulerTargetMode.AllNewStableFiles)
+                    {
+                        logger.LogWarning("Import failed for {DayFolder}; continuing with remaining new stable groups.", dayGroup.Key);
+                        continue;
+                    }
+
                     logger.LogWarning("Import failed for {DayFolder}; remaining groups are skipped.", dayGroup.Key);
                     break;
                 }
 
                 successCount += groupCandidates.Length;
+                await processedQuantFileStore.MarkProcessedAsync(groupCandidates, cancellationToken);
 
                 if (!_options.DryRun && _options.MoveProcessedFilesToDone)
                 {
@@ -116,6 +139,18 @@ public sealed class GasQcImportJob(
         }
         finally
         {
+            if (errorRows.Count > 0)
+            {
+                try
+                {
+                    await importErrorReportExporter.ExportAsync(errorRows, cancellationToken);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    logger.LogError(ex, "Failed to export import error report.");
+                }
+            }
+
             var skippedCount = Math.Max(0, totalCandidates - processedCount);
             var elapsedSeconds = (DateTimeOffset.Now - cycleStartedAt).TotalSeconds;
 
@@ -161,6 +196,44 @@ public sealed class GasQcImportJob(
         }
 
         return options.BackfillTargetDate;
+    }
+
+    private async Task<QuantFileCandidate[]> ResolveCandidatesForCurrentCycleAsync(
+        IReadOnlyCollection<QuantFileCandidate> allStableCandidates,
+        string targetDayFolderName,
+        CancellationToken cancellationToken)
+    {
+        if (_options.TargetMode == SchedulerTargetMode.AllNewStableFiles)
+        {
+            var candidatesWithLogicalDate = allStableCandidates
+                .Where(candidate => !string.IsNullOrWhiteSpace(candidate.LogicalBatchDate))
+                .ToArray();
+
+            var unprocessedCandidates = (await processedQuantFileStore.FilterUnprocessedAsync(
+                    candidatesWithLogicalDate,
+                    cancellationToken))
+                .ToArray();
+
+            if (unprocessedCandidates.Length == 0)
+            {
+                return [];
+            }
+
+            var groupsWithNewFiles = unprocessedCandidates
+                .Select(BuildImportGroupKey)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            return candidatesWithLogicalDate
+                .Where(candidate => groupsWithNewFiles.Contains(BuildImportGroupKey(candidate)))
+                .ToArray();
+        }
+
+        return allStableCandidates
+            .Where(candidate => string.Equals(
+                candidate.LogicalBatchDate,
+                targetDayFolderName,
+                StringComparison.OrdinalIgnoreCase))
+            .ToArray();
     }
 
     private bool TryMoveProcessedCandidate(QuantFileCandidate candidate)
@@ -244,5 +317,108 @@ public sealed class GasQcImportJob(
                 return candidate;
             }
         }
+    }
+
+    private static string BuildImportGroupKey(QuantFileCandidate candidate) =>
+        $"{candidate.DayFolderPath} ({candidate.LogicalBatchDate})";
+
+    private static IReadOnlyList<ImportErrorReportRow> BuildErrorRows(
+        IReadOnlyCollection<QuantFileCandidate> candidates,
+        string errorType,
+        string message)
+    {
+        var occurredAt = DateTimeOffset.Now;
+        var suggestedAction = ResolveSuggestedAction(errorType, message);
+
+        return candidates
+            .OrderBy(candidate => candidate.FullPath, StringComparer.OrdinalIgnoreCase)
+            .Select(candidate =>
+            {
+                var lotNo = TryReadLotNo(candidate.FullPath);
+                var rowMessage = ResolveRowMessage(message, lotNo);
+                return new ImportErrorReportRow(
+                    OccurredAt: occurredAt,
+                    LogicalBatchDate: candidate.LogicalBatchDate,
+                    Port: candidate.Port,
+                    TopFolderName: candidate.TopFolderName,
+                    LotNo: lotNo,
+                    QuantPath: candidate.FullPath,
+                    DataFolderPath: candidate.DataFilepath,
+                    ErrorType: errorType,
+                    Message: rowMessage,
+                    SuggestedAction: ResolveSuggestedAction(errorType, rowMessage));
+            })
+            .ToArray();
+    }
+
+    private static string ResolveRowMessage(string groupMessage, string lotNo)
+    {
+        if (!string.IsNullOrWhiteSpace(lotNo) &&
+            groupMessage.Contains("ZZ_NF_GAS_MFG_LOT", StringComparison.OrdinalIgnoreCase) &&
+            groupMessage.Contains(lotNo, StringComparison.OrdinalIgnoreCase))
+        {
+            return $"ZZ_NF_GAS_MFG_LOT 查無 LOT：{lotNo}。";
+        }
+
+        return groupMessage;
+    }
+
+    private static string TryReadLotNo(string quantPath)
+    {
+        try
+        {
+            foreach (var line in File.ReadLines(quantPath))
+            {
+                var trimmed = line.TrimStart();
+                if (!trimmed.StartsWith("Misc", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var markerIndex = trimmed.LastIndexOf('#');
+                if (markerIndex < 0 || markerIndex == trimmed.Length - 1)
+                {
+                    return string.Empty;
+                }
+
+                return trimmed[(markerIndex + 1)..].Trim();
+            }
+        }
+        catch (IOException)
+        {
+            return string.Empty;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return string.Empty;
+        }
+
+        return string.Empty;
+    }
+
+    private static string ResolveSuggestedAction(string errorType, string message)
+    {
+        if (message.Contains("ZZ_NF_GAS_MFG_LOT", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("查無 LOT", StringComparison.OrdinalIgnoreCase))
+        {
+            return "請確認基本參數檔或 MES 主檔是否已有對應 LOT。";
+        }
+
+        if (message.Contains("Misc value does not contain a LOT marker", StringComparison.OrdinalIgnoreCase))
+        {
+            return "請確認 Quant.txt 的 Misc 欄位是否有 #LOT，例如 #20260505001。";
+        }
+
+        if (message.Contains("sample number", StringComparison.OrdinalIgnoreCase))
+        {
+            return "請確認 .D 資料夾名稱或 Quant.txt 的 Data File 是否含可辨識的樣品序號。";
+        }
+
+        if (message.Contains("RF", StringComparison.OrdinalIgnoreCase))
+        {
+            return "請確認 RF 基準資料是否已建立且時間早於採樣時間。";
+        }
+
+        return "請依錯誤訊息確認 Quant.txt 內容、資料夾命名或基本參數檔設定。";
     }
 }

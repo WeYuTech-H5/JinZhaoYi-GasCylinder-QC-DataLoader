@@ -29,8 +29,10 @@ public sealed class PortPpbCsvExporterTests : IDisposable
 
         paths.Should().ContainSingle();
         var lines = await File.ReadAllLinesAsync(paths[0]);
+        lines.Should().Contain("CoACompletionDate,2025/11/18");
         lines.Should().Contain("Maker,\"New-Fast Technology Co., LTD\"");
         lines.Should().Contain("ValveType,\"1/4\"\" VCR Female\"");
+        lines.Should().Contain("ManufacturingDate,2026/4/20");
         lines.Should().Contain("ContainerID,TSMC-024");
         lines.Should().Contain("RawLotId,CC-706988");
 
@@ -45,11 +47,36 @@ public sealed class PortPpbCsvExporterTests : IDisposable
     }
 
     [Fact]
-    public void BuildFileName_uses_manufacturing_date_sample_name_and_lot_no()
+    public void BuildFileName_uses_manufacturing_date_sample_name_and_raw_lot_id()
     {
         var row = CreatePpbRow();
 
-        PortPpbCsvExporter.BuildFileName(row).Should().Be("2025-11-18_TSMC-024_20260420004_pass.csv");
+        PortPpbCsvExporter.BuildFileName(row, "CC-706988").Should().Be("2026-04-20_TSMC-024_CC-706988_pass.csv");
+    }
+
+    [Fact]
+    public async Task ExportAsync_uses_export_root_and_overwrites_in_all_new_mode()
+    {
+        var exportRoot = Path.Combine(_rootPath, "out");
+        var exporter = new PortPpbCsvExporter(
+            Options.Create(new SchedulerOptions
+            {
+                ExportRoot = exportRoot,
+                TargetMode = SchedulerTargetMode.AllNewStableFiles,
+                CsvExport = new SchedulerCsvExportOptions { Enabled = true }
+            }),
+            NullLogger<PortPpbCsvExporter>.Instance);
+        var row = CreatePpbRow();
+
+        var firstPaths = await exporter.ExportAsync([row], [CreateCandidate()], CancellationToken.None);
+        await File.WriteAllTextAsync(firstPaths[0], "stale");
+
+        var secondPaths = await exporter.ExportAsync([row], [CreateCandidate()], CancellationToken.None);
+
+        firstPaths.Should().ContainSingle();
+        secondPaths.Should().ContainSingle().Which.Should().Be(firstPaths[0]);
+        Directory.GetFiles(Path.Combine(exportRoot, "QC"), "*.csv").Should().ContainSingle();
+        File.ReadAllText(secondPaths[0]).Should().NotBe("stale");
     }
 
     public void Dispose()

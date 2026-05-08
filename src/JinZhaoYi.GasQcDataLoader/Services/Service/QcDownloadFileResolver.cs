@@ -35,7 +35,7 @@ public sealed class QcDownloadFileResolver(IOptions<SchedulerOptions> options) :
             return null;
         }
 
-        var root = Path.GetFullPath(_options.WatchRoot);
+        var root = Path.GetFullPath(ResolveDownloadRoot());
         if (!Directory.Exists(root))
         {
             return null;
@@ -58,7 +58,7 @@ public sealed class QcDownloadFileResolver(IOptions<SchedulerOptions> options) :
 
     private IReadOnlyList<string> ResolveCandidateQcDirectories(string batchDate)
     {
-        var root = Path.GetFullPath(_options.WatchRoot);
+        var root = Path.GetFullPath(ResolveDownloadRoot());
         var directories = new List<string>();
 
         if (string.Equals(Path.GetFileName(root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)), batchDate, StringComparison.OrdinalIgnoreCase))
@@ -69,6 +69,11 @@ public sealed class QcDownloadFileResolver(IOptions<SchedulerOptions> options) :
         directories.Add(Path.Combine(root, batchDate, "QC"));
         return directories;
     }
+
+    private string ResolveDownloadRoot() =>
+        string.IsNullOrWhiteSpace(_options.ExportRoot)
+            ? _options.WatchRoot
+            : _options.ExportRoot;
 
     private static bool IsUnderRoot(string path, string root)
     {

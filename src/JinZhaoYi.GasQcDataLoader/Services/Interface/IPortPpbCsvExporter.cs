@@ -8,4 +8,6 @@ public interface IPortPpbCsvExporter
         IReadOnlyCollection<QcDataRow> portPpbRows,
         IReadOnlyCollection<QuantFileCandidate> candidates,
         CancellationToken cancellationToken);
+
+    byte[] ExportToBytes(IReadOnlyCollection<QcDataRow> portPpbRows);
 }

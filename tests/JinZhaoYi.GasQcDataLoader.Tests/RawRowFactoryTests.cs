@@ -21,6 +21,8 @@ public sealed class RawRowFactoryTests
         row.RelativeEm.Should().Be("1.05");
         row.DataFilename.Should().Be(@"STD[20251119 0947]_903.D\0001.D");
         row.DataFilepath.Should().Be(@"D:\data\");
+        row.SourceKind.Should().Be("Std");
+        row.SourceFolderName.Should().Be("STD[20251119 0947]_903.D");
     }
 
     [Fact]

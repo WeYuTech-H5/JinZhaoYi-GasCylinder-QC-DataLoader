@@ -11,7 +11,7 @@ namespace JinZhaoYi.GasQcDataLoader.Tests;
 public sealed class ImportOrchestratorCsvExportTests
 {
     [Fact]
-    public async Task ImportCandidatesAsync_exports_csv_after_successful_db_commit()
+    public async Task ImportCandidatesAsync_does_not_export_csv_after_successful_db_commit()
     {
         var context = CreateContext(dryRun: false);
 
@@ -19,9 +19,9 @@ public sealed class ImportOrchestratorCsvExportTests
 
         result.Succeeded.Should().BeTrue();
         context.Repository.ExecuteImportCallCount.Should().Be(1);
-        context.Repository.GetPortPpbCallCount.Should().Be(1);
-        context.CsvExporter.ExportCallCount.Should().Be(1);
-        result.Messages.Should().Contain(message => message.Contains("TO14C PPB CSV 已輸出", StringComparison.Ordinal));
+        context.Repository.GetPortPpbCallCount.Should().Be(0);
+        context.CsvExporter.ExportCallCount.Should().Be(0);
+        result.Messages.Should().NotContain(message => message.Contains("TO14C PPB CSV", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -50,10 +50,42 @@ public sealed class ImportOrchestratorCsvExportTests
         context.CsvExporter.ExportCallCount.Should().Be(0);
     }
 
-    private static TestContext CreateContext(bool dryRun)
+    [Fact]
+    public async Task ImportCandidatesAsync_skips_duplicate_raw_identity_before_db_commit()
+    {
+        var context = CreateContext(dryRun: false);
+        context.Repository.ExistingRawIdentityIds.Add(new RawDataIdentity(
+            "20251118001",
+            "PORT 2",
+            24,
+            "TSMC-024",
+            new DateTime(2025, 11, 18, 14, 30, 0)).ToStableId());
+
+        var result = await context.Orchestrator.ImportCandidatesAsync([context.Candidate], CancellationToken.None);
+
+        result.Succeeded.Should().BeTrue();
+        context.Repository.ExecuteImportCallCount.Should().Be(0);
+        result.PlannedRowCount.Should().Be(0);
+        result.Messages.Should().Contain(message => message.Contains("DB", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task ImportCandidatesAsync_skips_non_11_digit_lot()
+    {
+        var context = CreateContext(dryRun: false, lotNo: "63265");
+
+        var result = await context.Orchestrator.ImportCandidatesAsync([context.Candidate], CancellationToken.None);
+
+        result.Succeeded.Should().BeTrue();
+        context.Repository.ExecuteImportCallCount.Should().Be(0);
+        result.PlannedRowCount.Should().Be(0);
+        result.Messages.Should().Contain(message => message.Contains("非 11 位數字 LOT", StringComparison.Ordinal));
+    }
+
+    private static TestContext CreateContext(bool dryRun, string lotNo = "20251118001")
     {
         var candidate = new QuantFileCandidate(
-            FullPath: @"C:\GAS\20251118\PORT 2\Quant.txt",
+            FullPath: @"C:\GAS\20251118\PORT 2\PORT 2[20251118 1430]_024.D\Quant.txt",
             DayFolderPath: @"C:\GAS\20251118",
             SourceRootPath: @"C:\GAS\20251118",
             OutputRootPath: @"C:\GAS",
@@ -62,8 +94,8 @@ public sealed class ImportOrchestratorCsvExportTests
             TopFolderName: "PORT 2",
             SourceKind: QuantSourceKind.Port,
             Port: "PORT 2",
-            DataFilename: "PORT 2\\Quant.txt",
-            DataFilepath: @"C:\GAS\20251118\PORT 2");
+            DataFilename: @"PORT 2[20251118 1430]_024.D\Quant.txt",
+            DataFilepath: @"C:\GAS\20251118\PORT 2\PORT 2[20251118 1430]_024.D");
         var parsed = new ParsedQuantFile
         {
             Source = candidate,
@@ -71,31 +103,29 @@ public sealed class ImportOrchestratorCsvExportTests
             DataFile = "Quant.txt",
             DataPath = @"C:\Data",
             Sample = "Sample",
-            Misc = "desc",
-            LotNo = "CC-706988",
+            Misc = $"desc #{lotNo}",
+            LotNo = lotNo,
             SampleNo = 24
         };
         var portPpbRow = new QcDataRow
         {
             Id = "ppb(5900)",
             Port = "PORT 2",
-            LotNo = "CC-706988",
-            DataFilename = "PORT 2\\Quant.txt",
+            LotNo = lotNo,
+            DataFilename = candidate.DataFilename,
             SampleName = "TSMC-024",
             AnlzTime = parsed.AcquiredAt
         };
         var writeSet = new ImportWriteSet();
         writeSet.PortPpbRows.Add(portPpbRow);
 
-        var repository = new FakeRepository(portPpbRow);
+        var repository = new FakeRepository(portPpbRow, lotNo);
         var csvExporter = new FakeCsvExporter();
         var orchestrator = new ImportOrchestrator(
             new FakeScanner(candidate),
             new FakeParser(parsed),
             repository,
             new FakeWriteSetBuilder(writeSet),
-            new FakeWorkbookExporter(),
-            csvExporter,
             Options.Create(new SchedulerOptions
             {
                 DryRun = dryRun,
@@ -127,8 +157,10 @@ public sealed class ImportOrchestratorCsvExportTests
             Task.FromResult(parsed);
     }
 
-    private sealed class FakeRepository(QcDataRow committedPpbRow) : IDapperRepository
+    private sealed class FakeRepository(QcDataRow committedPpbRow, string lotNo) : IDapperRepository
     {
+        public HashSet<string> ExistingRawIdentityIds { get; } = new(StringComparer.OrdinalIgnoreCase);
+
         public int ExecuteImportCallCount { get; private set; }
 
         public int GetPortPpbCallCount { get; private set; }
@@ -139,7 +171,7 @@ public sealed class ImportOrchestratorCsvExportTests
             Task.FromResult<IReadOnlyDictionary<string, MfgLot>>(
                 new Dictionary<string, MfgLot>(StringComparer.OrdinalIgnoreCase)
                 {
-                    ["CC-706988"] = new() { LotNo = "CC-706988", SampleName = "TSMC-024" }
+                    [lotNo] = new() { LotNo = lotNo, SampleName = "TSMC-024" }
                 });
 
         public Task<QcDataRow?> GetLatestRfAsync(DateTime asOf, CancellationToken cancellationToken) =>
@@ -150,6 +182,45 @@ public sealed class ImportOrchestratorCsvExportTests
             GetPortPpbCallCount++;
             return Task.FromResult<IReadOnlyList<QcDataRow>>([committedPpbRow]);
         }
+
+        public Task<IReadOnlySet<string>> GetExistingRawIdentityIdsAsync(
+            IReadOnlyCollection<RawDataIdentity> identities,
+            CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlySet<string>>(ExistingRawIdentityIds);
+
+        public Task<IReadOnlyList<ExportOption>> GetExportOptionsAsync(DateTime batchDate, CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<ExportOption>>([]);
+
+        public Task<IReadOnlyList<ExportOption>> GetExportOptionsAsync(DateTime startDate, DateTime endDate, CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<ExportOption>>([]);
+
+        public Task<IReadOnlyList<ExportOption>> GetPortPpbExportOptionsAsync(DateTime batchDate, CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<ExportOption>>([]);
+
+        public Task<IReadOnlyList<RfOption>> GetRfOptionsAsync(CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<RfOption>>([]);
+
+        public Task<QcDataRow?> GetRfByIdAsync(string rfId, CancellationToken cancellationToken) =>
+            Task.FromResult<QcDataRow?>(null);
+
+        public Task<IReadOnlyList<QcDataRow>> GetRawRowsForExportAsync(
+            DateTime startDate,
+            DateTime endDate,
+            IReadOnlyCollection<string> selectedIds,
+            CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<QcDataRow>>([]);
+
+        public Task<IReadOnlyList<Query2ExportRow>> GetQuery2ExportRowsAsync(
+            DateTime batchDate,
+            IReadOnlyCollection<string> selectedIds,
+            CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<Query2ExportRow>>([]);
+
+        public Task<IReadOnlyList<QcDataRow>> GetPortPpbRowsForExportAsync(
+            DateTime batchDate,
+            IReadOnlyCollection<string> selectedIds,
+            CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<QcDataRow>>([]);
 
         public Task ExecuteImportAsync(ImportWriteSet writeSet, QcDataRow rf, DateTime importDate, CancellationToken cancellationToken)
         {
@@ -173,15 +244,6 @@ public sealed class ImportOrchestratorCsvExportTests
             QcDataRow rf) => writeSet;
     }
 
-    private sealed class FakeWorkbookExporter : IQuery2WorkbookExporter
-    {
-        public Task<string?> ExportAsync(
-            ImportWriteSet writeSet,
-            IReadOnlyCollection<QuantFileCandidate> candidates,
-            CancellationToken cancellationToken) =>
-            Task.FromResult<string?>(null);
-    }
-
     private sealed class FakeCsvExporter : IPortPpbCsvExporter
     {
         public int ExportCallCount { get; private set; }
@@ -192,7 +254,9 @@ public sealed class ImportOrchestratorCsvExportTests
             CancellationToken cancellationToken)
         {
             ExportCallCount++;
-            return Task.FromResult<IReadOnlyList<string>>([@"C:\GAS\20251118\QC\2025-11-18_TSMC-024_CC-706988_pass.csv"]);
+            return Task.FromResult<IReadOnlyList<string>>([@"C:\GAS\20251118\QC\2025-11-18_TSMC-024_20251118001_pass.csv"]);
         }
+
+        public byte[] ExportToBytes(IReadOnlyCollection<QcDataRow> portPpbRows) => [];
     }
 }

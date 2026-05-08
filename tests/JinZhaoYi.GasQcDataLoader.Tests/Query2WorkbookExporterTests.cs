@@ -145,6 +145,39 @@ public sealed class Query2WorkbookExporterTests : IDisposable
     }
 
     [Fact]
+    public async Task ExportAsync_uses_export_root_when_configured()
+    {
+        var templateDirectory = Path.Combine(_rootPath, "template-export-root");
+        var batchDirectory = Path.Combine(_rootPath, "2026");
+        var exportRoot = Path.Combine(_rootPath, "out");
+        Directory.CreateDirectory(templateDirectory);
+        Directory.CreateDirectory(batchDirectory);
+
+        var templatePath = Path.Combine(templateDirectory, "template.xlsx");
+        CreateTemplateWorkbook(templatePath);
+
+        var exporter = new Query2WorkbookExporter(
+            Options.Create(new SchedulerOptions
+            {
+                ExportRoot = exportRoot,
+                ExcelExport = new SchedulerExcelExportOptions
+                {
+                    Enabled = true,
+                    TemplatePath = templatePath
+                }
+            }),
+            NullLogger<Query2WorkbookExporter>.Instance);
+
+        var writeSet = new ImportWriteSet();
+        writeSet.Query2Rows.Add(new Query2ExportRow(Query2ExportRowType.Raw, Row("20260505009", "PORT 12", "20260505004")));
+
+        var outputPath = await exporter.ExportAsync(writeSet, [CreateCandidate(batchDirectory, "20260505")], CancellationToken.None);
+
+        outputPath.Should().Be(Path.Combine(exportRoot, "QC", "Cylinder_Qc[20260505].xlsx"));
+        File.Exists(outputPath!).Should().BeTrue();
+    }
+
+    [Fact]
     public async Task ExportAsync_treats_zero_si0_id_as_missing_for_excel_display()
     {
         var templateDirectory = Path.Combine(_rootPath, "template-zero");
@@ -243,6 +276,20 @@ public sealed class Query2WorkbookExporterTests : IDisposable
         worksheet.Cell(rowNumber, 1).Value = id;
         worksheet.Cell(rowNumber, 17).Value = rowNumber;
     }
+
+    private static QuantFileCandidate CreateCandidate(string batchDirectory, string logicalBatchDate) =>
+        new(
+            FullPath: Path.Combine(batchDirectory, "PORT 12", "PORT 12[20260505 1732].D", "Quant.txt"),
+            DayFolderPath: batchDirectory,
+            SourceRootPath: batchDirectory,
+            OutputRootPath: batchDirectory,
+            LogicalBatchDate: logicalBatchDate,
+            IsArchivedInput: false,
+            TopFolderName: "PORT 12",
+            SourceKind: QuantSourceKind.Port,
+            Port: "PORT 12",
+            DataFilename: @"PORT 12[20260505 1732].D\Quant.txt",
+            DataFilepath: Path.Combine(batchDirectory, "PORT 12", "PORT 12[20260505 1732].D"));
 
     private static QcDataRow Row(
         string id,

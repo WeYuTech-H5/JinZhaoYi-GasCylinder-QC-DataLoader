@@ -14,6 +14,10 @@ public sealed class QcDataRow
 
     public string? Port { get; set; }
 
+    public string? SourceKind { get; set; }
+
+    public string? SourceFolderName { get; set; }
+
     public int? Si0Id { get; set; }
 
     public int? SampleNo { get; set; }
@@ -66,6 +70,8 @@ public sealed class QcDataRow
             AnlzTime = AnlzTime,
             Inst = Inst,
             Port = Port,
+            SourceKind = SourceKind,
+            SourceFolderName = SourceFolderName,
             Si0Id = Si0Id,
             SampleNo = SampleNo,
             LotNo = LotNo,

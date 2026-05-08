@@ -84,4 +84,41 @@ public sealed class QuantParserTests
             Directory.Delete(root, recursive: true);
         }
     }
+
+    [Fact]
+    public async Task ParseAsync_rejects_folder_without_sample_suffix()
+    {
+        var root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        var dataFolder = Path.Combine(root, "PORT 12", "PORT 12[20260505 1732].D");
+        Directory.CreateDirectory(dataFolder);
+        var quantPath = Path.Combine(dataFolder, "Quant.txt");
+        await File.WriteAllTextAsync(quantPath, QuantFixtures.Std0947
+            .Replace("Data File : 010-0102.D", "Data File : 0001.D")
+            .Replace("#20251030001", "#20260505001"));
+
+        try
+        {
+            var candidate = new QuantFileCandidate(
+                FullPath: quantPath,
+                DayFolderPath: root,
+                SourceRootPath: Path.Combine(root, "PORT 12"),
+                OutputRootPath: root,
+                LogicalBatchDate: "20260505",
+                IsArchivedInput: false,
+                TopFolderName: "PORT 12",
+                SourceKind: QuantSourceKind.Port,
+                Port: "PORT 12",
+                DataFilename: Path.Combine("PORT 12[20260505 1732].D", "Quant.txt"),
+                DataFilepath: dataFolder);
+
+            var act = () => new QuantParser().ParseAsync(candidate, CancellationToken.None);
+
+            await act.Should().ThrowAsync<InvalidDataException>()
+                .WithMessage("*does not contain a sample number*");
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
 }

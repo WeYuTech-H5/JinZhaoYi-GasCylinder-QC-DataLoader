@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MES STD 匯出工具</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="app-shell">
+    <header class="topbar">
+      <div>
+        <h1>MES STD 匯出工具</h1>
+        <p id="statusText">選擇匯出類型，載入可匯出的 DB 資料。</p>
+      </div>
+      <div class="top-actions">
+        <button id="exportExcelButton" class="primary-button" type="button" disabled>匯出 Excel</button>
+        <button id="exportCsvButton" class="primary-button" type="button" disabled hidden>匯出 CSV</button>
+      </div>
+    </header>
+
+    <nav class="mode-tabs" aria-label="匯出類型">
+      <button class="tab-button active" type="button" data-mode="excel">Query2 Excel</button>
+      <button class="tab-button" type="button" data-mode="csv">PORT_PPB CSV</button>
+    </nav>
+
+    <section class="controls excel-view" aria-label="Excel 查詢條件">
+      <label>
+        開始日期
+        <input id="startDate" type="date">
+      </label>
+      <label>
+        結束日期
+        <input id="endDate" type="date">
+      </label>
+      <button id="loadExcelButton" type="button">載入資料</button>
+    </section>
+
+    <section class="controls csv-view" aria-label="CSV 查詢條件" hidden>
+      <label>
+        批次日期
+        <input id="csvBatchDate" type="date">
+      </label>
+      <button id="loadCsvButton" type="button">載入 PORT_PPB</button>
+    </section>
+
+    <section class="summary-grid excel-view" aria-label="Excel 選取摘要">
+      <div>
+        <span>STD</span>
+        <strong id="stdCount">0</strong>
+      </div>
+      <div>
+        <span>PORT</span>
+        <strong id="portCount">0</strong>
+      </div>
+      <div>
+        <span>RF</span>
+        <strong id="rfCount">0</strong>
+      </div>
+    </section>
+
+    <section class="summary-grid csv-view" aria-label="CSV 選取摘要" hidden>
+      <div>
+        <span>PORT_PPB</span>
+        <strong id="ppbCount">0</strong>
+      </div>
+      <div>
+        <span>批次日期</span>
+        <strong id="csvDateText">-</strong>
+      </div>
+      <div>
+        <span>群組</span>
+        <strong id="ppbGroupCount">0</strong>
+      </div>
+    </section>
+
+    <section class="workspace excel-view">
+      <aside class="panel rf-panel">
+        <div class="panel-header">
+          <h2>RF</h2>
+          <button id="reloadRfButton" type="button" title="重新載入 RF">更新</button>
+        </div>
+        <div id="rfList" class="list empty">尚未載入 RF</div>
+      </aside>
+
+      <section class="panel data-panel">
+        <div class="panel-header">
+          <h2>STD</h2>
+          <div class="button-row">
+            <button id="selectAllStd" type="button">全選</button>
+            <button id="clearStd" type="button">清除</button>
+          </div>
+        </div>
+        <div id="stdGroups" class="group-list empty">尚未載入 STD</div>
+      </section>
+
+      <section class="panel data-panel">
+        <div class="panel-header">
+          <h2>PORT</h2>
+          <div class="button-row">
+            <button id="selectAllPort" type="button">全選</button>
+            <button id="clearPort" type="button">清除</button>
+          </div>
+        </div>
+        <div id="portGroups" class="group-list empty">尚未載入 PORT</div>
+      </section>
+    </section>
+
+    <section class="workspace csv-workspace csv-view" hidden>
+      <section class="panel data-panel ppb-panel">
+        <div class="panel-header">
+          <h2>PORT_PPB</h2>
+          <div class="button-row">
+            <button id="selectAllPpb" type="button">全選</button>
+            <button id="clearPpb" type="button">清除</button>
+          </div>
+        </div>
+        <div id="ppbGroups" class="group-list empty">尚未載入 PORT_PPB</div>
+      </section>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>

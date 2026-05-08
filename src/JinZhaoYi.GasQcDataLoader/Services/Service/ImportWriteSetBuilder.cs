@@ -36,6 +36,8 @@ public sealed class ImportWriteSetBuilder(
 
         var orderedFiles = parsedFiles
             .OrderBy(file => file.AcquiredAt)
+            .ThenBy(file => file.SampleNo)
+            .ThenBy(file => Path.GetFileName(file.Source.DataFilepath), StringComparer.OrdinalIgnoreCase)
             .ThenBy(file => file.Source.Port, StringComparer.OrdinalIgnoreCase)
             .ThenBy(file => file.Source.DataFilename, StringComparer.OrdinalIgnoreCase)
             .ToArray();

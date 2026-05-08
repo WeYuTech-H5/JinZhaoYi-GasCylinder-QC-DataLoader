@@ -43,6 +43,15 @@ public sealed class SchedulerOptions
     // 補跑日期，格式 yyyyMMdd；BackfillEnabled=true 時必填。
     public string? BackfillTargetDate { get; init; }
 
+    // 匯入目標模式。TargetDate 沿用日期目標；AllNewStableFiles 會處理所有穩定且尚未成功處理的 Quant.txt。
+    public SchedulerTargetMode TargetMode { get; init; } = SchedulerTargetMode.TargetDate;
+
+    // AllNewStableFiles 模式的處理紀錄檔路徑，用來避免不搬檔時重複匯入同一份 Quant.txt。
+    public string? ProcessedStatePath { get; init; }
+
+    // Excel/CSV 獨立輸出根目錄。空值時沿用批次資料夾底下的 QC。
+    public string? ExportRoot { get; init; }
+
     // 成功處理後，將 .D 資料夾搬到各 source folder 底下的 archive 目錄。
     public bool MoveProcessedFilesToDone { get; init; } = true;
 
@@ -139,6 +148,12 @@ public sealed class SchedulerCsvExportOptions
 public sealed class SchedulerDownloadApiOptions
 {
     public bool Enabled { get; init; }
+}
+
+public enum SchedulerTargetMode
+{
+    TargetDate,
+    AllNewStableFiles
 }
 
 public sealed class SchedulerTableOptions
