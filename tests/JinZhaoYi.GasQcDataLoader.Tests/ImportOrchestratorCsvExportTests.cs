@@ -222,6 +222,11 @@ public sealed class ImportOrchestratorCsvExportTests
             CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<QcDataRow>>([]);
 
+        public Task UpsertImportErrorLogsAsync(
+            IReadOnlyCollection<ImportErrorReportRow> rows,
+            CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+
         public Task ExecuteImportAsync(ImportWriteSet writeSet, QcDataRow rf, DateTime importDate, CancellationToken cancellationToken)
         {
             ExecuteImportCallCount++;

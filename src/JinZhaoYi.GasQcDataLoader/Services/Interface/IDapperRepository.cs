@@ -50,4 +50,8 @@ public interface IDapperRepository
         CancellationToken cancellationToken);
 
     Task ExecuteImportAsync(ImportWriteSet writeSet, QcDataRow rf, DateTime importDate, CancellationToken cancellationToken);
+
+    Task UpsertImportErrorLogsAsync(
+        IReadOnlyCollection<ImportErrorReportRow> rows,
+        CancellationToken cancellationToken);
 }

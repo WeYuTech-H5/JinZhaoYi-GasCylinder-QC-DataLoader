@@ -15,6 +15,7 @@ public sealed class GasQcImportJob(
     IImportOrchestrator orchestrator,
     IProcessedQuantFileStore processedQuantFileStore,
     IImportErrorReportExporter importErrorReportExporter,
+    IDapperRepository repository,
     IOptions<SchedulerOptions> options) : Job
 {
     private readonly SchedulerOptions _options = options.Value;
@@ -148,6 +149,18 @@ public sealed class GasQcImportJob(
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
                     logger.LogError(ex, "Failed to export import error report.");
+                }
+
+                if (!_options.DryRun)
+                {
+                    try
+                    {
+                        await repository.UpsertImportErrorLogsAsync(errorRows, cancellationToken);
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        logger.LogError(ex, "Failed to write import error logs to database.");
+                    }
                 }
             }
 
@@ -357,12 +370,11 @@ public sealed class GasQcImportJob(
             groupMessage.Contains("ZZ_NF_GAS_MFG_LOT", StringComparison.OrdinalIgnoreCase) &&
             groupMessage.Contains(lotNo, StringComparison.OrdinalIgnoreCase))
         {
-            return $"ZZ_NF_GAS_MFG_LOT 查無 LOT：{lotNo}。";
+            return $"ZZ_NF_GAS_MFG_LOT missing LOT: {lotNo}.";
         }
 
         return groupMessage;
     }
-
     private static string TryReadLotNo(string quantPath)
     {
         try
@@ -399,26 +411,26 @@ public sealed class GasQcImportJob(
     private static string ResolveSuggestedAction(string errorType, string message)
     {
         if (message.Contains("ZZ_NF_GAS_MFG_LOT", StringComparison.OrdinalIgnoreCase) ||
-            message.Contains("查無 LOT", StringComparison.OrdinalIgnoreCase))
+            message.Contains("missing LOT", StringComparison.OrdinalIgnoreCase))
         {
-            return "請確認基本參數檔或 MES 主檔是否已有對應 LOT。";
+            return "Check whether the cylinder LOT exists in MES/ZZ_NF_GAS_MFG_LOT, and verify the LOT in Quant.txt Misc.";
         }
 
         if (message.Contains("Misc value does not contain a LOT marker", StringComparison.OrdinalIgnoreCase))
         {
-            return "請確認 Quant.txt 的 Misc 欄位是否有 #LOT，例如 #20260505001。";
+            return "Check whether Quant.txt Misc contains #LOT, for example #20260505001.";
         }
 
         if (message.Contains("sample number", StringComparison.OrdinalIgnoreCase))
         {
-            return "請確認 .D 資料夾名稱或 Quant.txt 的 Data File 是否含可辨識的樣品序號。";
+            return "Check whether the .D folder name and Quant.txt Data File can be parsed for sample number.";
         }
 
         if (message.Contains("RF", StringComparison.OrdinalIgnoreCase))
         {
-            return "請確認 RF 基準資料是否已建立且時間早於採樣時間。";
+            return "Check whether RF source data has been imported and can match the current import batch time.";
         }
 
-        return "請依錯誤訊息確認 Quant.txt 內容、資料夾命名或基本參數檔設定。";
+        return "Check source Quant.txt format, folder naming, and related master data settings.";
     }
 }

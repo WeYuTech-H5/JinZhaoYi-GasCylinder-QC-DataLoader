@@ -1,4 +1,6 @@
 using System.Data;
+using System.Security.Cryptography;
+using System.Text;
 using Dapper;
 using JinZhaoYi.GasQcDataLoader.Configuration;
 using JinZhaoYi.GasQcDataLoader.DataModels;
@@ -395,6 +397,115 @@ public sealed class DapperRepository(
             .ThenBy(row => row.SourceFolderName, StringComparer.OrdinalIgnoreCase)
             .ThenBy(row => row.SampleName, StringComparer.OrdinalIgnoreCase)
             .ToArray();
+    }
+
+    public async Task UpsertImportErrorLogsAsync(
+        IReadOnlyCollection<ImportErrorReportRow> rows,
+        CancellationToken cancellationToken)
+    {
+        if (rows.Count == 0)
+        {
+            return;
+        }
+
+        await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
+        await connection.OpenAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
+
+        try
+        {
+            var sql = $"""
+                UPDATE dbo.{Quote(_tables.ImportErrorLog)}
+                SET
+                    LAST_OCCURRED_AT = @LAST_OCCURRED_AT,
+                    OCCURRENCE_COUNT = OCCURRENCE_COUNT + 1,
+                    MESSAGE = @MESSAGE,
+                    SUGGESTED_ACTION = @SUGGESTED_ACTION,
+                    EDIT_USER = @EDIT_USER,
+                    EDIT_TIME = @EDIT_TIME
+                WHERE QUANT_PATH = @QUANT_PATH
+                  AND ERROR_TYPE = @ERROR_TYPE
+                  AND SOURCE_KEY_HASH = @SOURCE_KEY_HASH
+                  AND ((LOT_NO = @LOT_NO) OR (LOT_NO IS NULL AND @LOT_NO IS NULL));
+
+                IF @@ROWCOUNT = 0
+                BEGIN
+                    INSERT INTO dbo.{Quote(_tables.ImportErrorLog)}
+                    (
+                        OCCURRED_AT,
+                        LAST_OCCURRED_AT,
+                        OCCURRENCE_COUNT,
+                        LOGICAL_BATCH_DATE,
+                        PORT,
+                        TOP_FOLDER_NAME,
+                        LOT_NO,
+                        QUANT_PATH,
+                        SOURCE_KEY_HASH,
+                        DATA_FOLDER_PATH,
+                        ERROR_TYPE,
+                        MESSAGE,
+                        SUGGESTED_ACTION,
+                        CREATE_USER,
+                        CREATE_TIME
+                    )
+                    VALUES
+                    (
+                        @OCCURRED_AT,
+                        @LAST_OCCURRED_AT,
+                        1,
+                        @LOGICAL_BATCH_DATE,
+                        @PORT,
+                        @TOP_FOLDER_NAME,
+                        @LOT_NO,
+                        @QUANT_PATH,
+                        @SOURCE_KEY_HASH,
+                        @DATA_FOLDER_PATH,
+                        @ERROR_TYPE,
+                        @MESSAGE,
+                        @SUGGESTED_ACTION,
+                        @CREATE_USER,
+                        @CREATE_TIME
+                    );
+                END
+                """;
+
+            foreach (var row in rows)
+            {
+                var occurredAt = row.OccurredAt.LocalDateTime;
+                var lotNo = string.IsNullOrWhiteSpace(row.LotNo) ? null : row.LotNo;
+                var parameters = new DynamicParameters();
+                parameters.Add("OCCURRED_AT", occurredAt);
+                parameters.Add("LAST_OCCURRED_AT", occurredAt);
+                parameters.Add("LOGICAL_BATCH_DATE", row.LogicalBatchDate);
+                parameters.Add("PORT", row.Port);
+                parameters.Add("TOP_FOLDER_NAME", row.TopFolderName);
+                parameters.Add("LOT_NO", lotNo);
+                parameters.Add("QUANT_PATH", row.QuantPath);
+                parameters.Add("SOURCE_KEY_HASH", ComputeImportErrorSourceHash(row.QuantPath, row.ErrorType, lotNo));
+                parameters.Add("DATA_FOLDER_PATH", row.DataFolderPath);
+                parameters.Add("ERROR_TYPE", row.ErrorType);
+                parameters.Add("MESSAGE", row.Message);
+                parameters.Add("SUGGESTED_ACTION", row.SuggestedAction);
+                parameters.Add("CREATE_USER", "GasQcDataLoader");
+                parameters.Add("CREATE_TIME", DateTime.Now);
+                parameters.Add("EDIT_USER", "GasQcDataLoader");
+                parameters.Add("EDIT_TIME", DateTime.Now);
+
+                await connection.ExecuteAsync(
+                    new CommandDefinition(
+                        sql,
+                        parameters,
+                        transaction,
+                        cancellationToken: cancellationToken));
+            }
+
+            await transaction.CommitAsync(cancellationToken);
+        }
+        catch
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            throw;
+        }
     }
 
     public async Task ExecuteImportAsync(ImportWriteSet writeSet, QcDataRow rf, DateTime importDate, CancellationToken cancellationToken)
@@ -1019,6 +1130,16 @@ public sealed class DapperRepository(
     }
 
     private static string Quote(string identifier) => $"[{identifier.Replace("]", "]]")}]";
+
+    private static byte[] ComputeImportErrorSourceHash(string quantPath, string errorType, string? lotNo)
+    {
+        var sourceKey = string.Join(
+            '\u001F',
+            quantPath,
+            errorType,
+            lotNo ?? "<NULL>");
+        return SHA256.HashData(Encoding.UTF8.GetBytes(sourceKey));
+    }
 
     private static string ParameterName(string columnName) =>
         columnName

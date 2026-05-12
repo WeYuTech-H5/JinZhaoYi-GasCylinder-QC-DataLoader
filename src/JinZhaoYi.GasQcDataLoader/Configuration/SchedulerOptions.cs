@@ -177,4 +177,6 @@ public sealed class SchedulerTableOptions
     public string PortPpb { get; init; } = "ZZ_NF_GAS_QC_LOT_PORT_PPB";
 
     public string PortRpd { get; init; } = "ZZ_NF_GAS_QC_LOT_PORT_RPD";
+
+    public string ImportErrorLog { get; init; } = "ZZ_NF_GAS_QC_ERROR_LOG";
 }

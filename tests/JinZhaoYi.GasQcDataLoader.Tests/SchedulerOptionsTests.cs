@@ -33,6 +33,14 @@ public sealed class SchedulerOptionsTests
     }
 
     [Fact]
+    public void Import_error_log_table_defaults_to_expected_name()
+    {
+        var options = new SchedulerOptions();
+
+        options.Tables.ImportErrorLog.Should().Be("ZZ_NF_GAS_QC_ERROR_LOG");
+    }
+
+    [Fact]
     public void Daily_schedule_options_default_to_yesterday_mode()
     {
         var options = new SchedulerOptions();
