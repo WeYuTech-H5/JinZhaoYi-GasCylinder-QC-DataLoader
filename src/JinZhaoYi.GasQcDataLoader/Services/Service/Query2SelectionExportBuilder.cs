@@ -1,5 +1,6 @@
 using JinZhaoYi.GasQcDataLoader.DataModels;
 using JinZhaoYi.GasQcDataLoader.Services.Interface;
+using System.Globalization;
 
 namespace JinZhaoYi.GasQcDataLoader.Services.Service;
 
@@ -12,12 +13,14 @@ public sealed class Query2SelectionExportBuilder(
         IReadOnlyCollection<QcDataRow> stdRawRows,
         IReadOnlyCollection<QcDataRow> portRawRows)
     {
+        var displayStdRawRows = BuildDisplayRawRows(stdRawRows);
+        var displayPortRawRows = BuildDisplayRawRows(portRawRows);
         var exportRows = new List<Query2ExportRow>
         {
             new(Query2ExportRowType.Rf, rf.DeepClone())
         };
 
-        var segments = BuildTimeSegments(stdRawRows, portRawRows);
+        var segments = BuildTimeSegments(displayStdRawRows, displayPortRawRows);
         var stdAverages = BuildStdAverages(segments);
         QcDataRow? previousStdAverage = null;
 
@@ -169,6 +172,54 @@ public sealed class Query2SelectionExportBuilder(
 
     private static (QcDataRow First, QcDataRow Second) LastTwo(IReadOnlyList<QcDataRow> rows) =>
         (rows[^2], rows[^1]);
+
+    private static IReadOnlyList<QcDataRow> BuildDisplayRawRows(IEnumerable<QcDataRow> rows)
+    {
+        var clones = OrderRows(rows)
+            .Select(row => row.DeepClone())
+            .ToArray();
+        var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var row in clones)
+        {
+            var id = BuildDisplayRawId(row);
+            counts.TryGetValue(id, out var count);
+            counts[id] = ++count;
+            row.Id = count == 1
+                ? id
+                : $"{id}#{count.ToString(CultureInfo.InvariantCulture)}";
+        }
+
+        return clones;
+    }
+
+    private static string BuildDisplayRawId(QcDataRow row)
+    {
+        var prefix = BuildDisplayPortPrefix(row);
+        var sampleNo = row.SampleNo?.ToString("000", CultureInfo.InvariantCulture) ?? "000";
+        var time = row.AnlzTime?.ToString("yyyyMMdd-HHmm", CultureInfo.InvariantCulture) ?? "NO_TIME";
+        return $"{prefix}{sampleNo}@{time}";
+    }
+
+    private static string BuildDisplayPortPrefix(QcDataRow row)
+    {
+        var sourceKind = Normalize(row.SourceKind);
+        var port = Normalize(row.Port);
+        if (sourceKind == "STD" || port == "STD")
+        {
+            return "STD";
+        }
+
+        var digits = new string(port.Where(char.IsDigit).ToArray());
+        if (int.TryParse(digits, NumberStyles.Integer, CultureInfo.InvariantCulture, out var portNo))
+        {
+            return $"P{portNo:00}-";
+        }
+
+        return string.IsNullOrWhiteSpace(port)
+            ? "PORT-"
+            : port.Replace(" ", string.Empty, StringComparison.OrdinalIgnoreCase) + "-";
+    }
 
     private static string Normalize(string? value) =>
         string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim().ToUpperInvariant();

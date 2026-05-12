@@ -41,6 +41,18 @@ public sealed class Query2SelectionExportBuilderTests
             Query2ExportRowType.Ppb,
             Query2ExportRowType.Rpd);
         rows.Single(row => row.RowType == Query2ExportRowType.Ppb).Row.Areas["Acetone"].Should().Be(2.5m);
+        rows.Where(row => row.RowType == Query2ExportRowType.Raw && row.Row.Port == "STD")
+            .Select(row => row.Row.Id)
+            .Should()
+            .Equal("STD904@20260430-0041", "STD904@20260430-0057", "STD904@20260430-1216");
+        rows.Single(row => row.RowType == Query2ExportRowType.Avg && row.Row.Port == "STD")
+            .Row.Id.Should().Be("AVG(STD904@20260430-0057:STD904@20260430-1216)");
+        rows.Single(row => row.RowType == Query2ExportRowType.Rpd && row.Row.Port == "STD")
+            .Row.Id.Should().Be("RPD(STD904@20260430-0057:STD904@20260430-1216)");
+        rows.Where(row => row.RowType == Query2ExportRowType.Raw && row.Row.Port == "PORT 4")
+            .Select(row => row.Row.Id)
+            .Should()
+            .Equal("P04-033@20260430-1619", "P04-033@20260430-1634");
         rows.Where(row => row.RowType == Query2ExportRowType.Raw && row.Row.Port == "PORT 4")
             .Select(row => row.Row.Ppbs["Acetone"])
             .Should()
