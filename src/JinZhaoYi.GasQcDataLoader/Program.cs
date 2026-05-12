@@ -44,6 +44,7 @@ try
     builder.Services.AddSingleton<IQcDownloadFileResolver, QcDownloadFileResolver>();
     builder.Services.AddSingleton<IImportOrchestrator, ImportOrchestrator>();
     builder.Services.AddSingleton<IJob, GasQcImportJob>();
+    builder.Services.AddHttpClient<IRfExtractorImportService, RfExtractorImportService>();
 
     builder.Services.AddCors(options =>
     {
@@ -121,6 +122,49 @@ static void MapDownloadEndpoints(WebApplication app)
     {
         var options = await repository.GetRfOptionsAsync(cancellationToken);
         return Results.Ok(options);
+    });
+
+    app.MapGet("/api/std-rf-source-options", async (
+        string? search,
+        int? limit,
+        IDapperRepository repository,
+        CancellationToken cancellationToken) =>
+    {
+        var options = await repository.GetStdRawOptionsForRfAsync(search, limit ?? 200, cancellationToken);
+        return Results.Ok(options);
+    });
+
+    app.MapPost("/api/rf/import-from-std", async (
+        RfImportFromStdRequest request,
+        IRfExtractorImportService importer,
+        CancellationToken cancellationToken) =>
+    {
+        if (string.IsNullOrWhiteSpace(request.StdRawId))
+        {
+            return Results.BadRequest(new { message = "stdRawId is required." });
+        }
+
+        try
+        {
+            var result = await importer.ImportFromStdAsync(request.StdRawId.Trim(), cancellationToken);
+            return Results.Ok(result);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new { message = ex.Message });
+        }
+        catch (DirectoryNotFoundException ex)
+        {
+            return Results.BadRequest(new { message = ex.Message });
+        }
+        catch (FileNotFoundException ex)
+        {
+            return Results.BadRequest(new { message = ex.Message });
+        }
+        catch (HttpRequestException ex)
+        {
+            return Results.BadRequest(new { message = ex.Message });
+        }
     });
 
     app.MapGet("/api/port-ppb-options", async (

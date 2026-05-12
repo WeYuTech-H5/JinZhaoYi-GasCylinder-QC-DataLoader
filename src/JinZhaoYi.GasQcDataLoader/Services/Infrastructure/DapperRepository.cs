@@ -109,6 +109,25 @@ public sealed class DapperRepository(
         ORDER BY AnlzTime DESC, CREATE_TIME DESC, SID DESC
         """;
 
+    private const string StdRawForRfSqlFormat = """
+        SELECT TOP (@Limit) *
+        FROM dbo.{0}
+        WHERE
+            @Search IS NULL
+            OR LotNo LIKE @SearchPattern
+            OR SampleName LIKE @SearchPattern
+            OR CAST(SampleNo AS NVARCHAR(32)) LIKE @SearchPattern
+            OR DataFilename LIKE @SearchPattern
+            OR SourceFolderName LIKE @SearchPattern
+        ORDER BY AnlzTime DESC, CREATE_TIME DESC, SID DESC
+        """;
+
+    private const string AllStdRawRowsSqlFormat = """
+        SELECT *
+        FROM dbo.{0}
+        ORDER BY AnlzTime DESC, CREATE_TIME DESC, SID DESC
+        """;
+
     private const string RawRowsByIdentitiesSqlFormat = """
         SELECT *
         FROM dbo.{0}
@@ -298,6 +317,122 @@ public sealed class DapperRepository(
         var row = await connection.QueryFirstOrDefaultAsync(
             new CommandDefinition(sql, new { RfId = rfId }, cancellationToken: cancellationToken));
         return row is null ? null : DynamicToQcDataRow(row);
+    }
+
+    public async Task<IReadOnlyList<ExportOption>> GetStdRawOptionsForRfAsync(
+        string? search,
+        int limit,
+        CancellationToken cancellationToken)
+    {
+        var normalizedLimit = Math.Clamp(limit, 1, 500);
+        var normalizedSearch = string.IsNullOrWhiteSpace(search) ? null : search.Trim();
+        await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
+        var sql = string.Format(StdRawForRfSqlFormat, Quote(_tables.StdRaw));
+        var rows = await connection.QueryAsync(
+            new CommandDefinition(
+                sql,
+                new
+                {
+                    Limit = normalizedLimit,
+                    Search = normalizedSearch,
+                    SearchPattern = normalizedSearch is null ? null : $"%{normalizedSearch}%"
+                },
+                cancellationToken: cancellationToken));
+
+        return rows
+            .Select(DynamicToQcDataRow)
+            .Select(ToExportOption)
+            .ToArray();
+    }
+
+    public async Task<QcDataRow?> GetStdRawByStableIdAsync(string stableId, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(stableId))
+        {
+            return null;
+        }
+
+        await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
+        var sql = string.Format(AllStdRawRowsSqlFormat, Quote(_tables.StdRaw));
+        var rows = await connection.QueryAsync(new CommandDefinition(sql, cancellationToken: cancellationToken));
+        return rows
+            .Select(DynamicToQcDataRow)
+            .FirstOrDefault(row => string.Equals(
+                RawDataIdentity.FromRow(row).ToStableId(),
+                stableId,
+                StringComparison.OrdinalIgnoreCase));
+    }
+
+    public async Task<RfOption> UpsertRfAsync(
+        QcDataRow row,
+        DateTime importDate,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(row.LotNo))
+        {
+            throw new InvalidOperationException("RF LotNo is required.");
+        }
+
+        await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
+        await connection.OpenAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
+
+        try
+        {
+            var values = BuildValues(row, includePpb: false, includeRt: false, includeIdRefs: false);
+            values["EDIT_USER"] = row.EditUser;
+            values["EDIT_TIME"] = row.EditTime;
+            values.Remove("SID");
+            values.Remove("CREATE_USER");
+            values.Remove("CREATE_TIME");
+
+            var updateSet = string.Join(
+                ", ",
+                values.Keys
+                    .Where(key => !string.Equals(key, "LotNo", StringComparison.OrdinalIgnoreCase))
+                    .Select(key => $"{Quote(key)} = @{ParameterName(key)}"));
+            var updateParameters = new DynamicParameters();
+            foreach (var (key, value) in values)
+            {
+                updateParameters.Add(ParameterName(key), value);
+            }
+
+            var updateSql = $"""
+                UPDATE dbo.{Quote(_tables.Rf)}
+                SET {updateSet}
+                WHERE LotNo = @LotNo
+                """;
+
+            var affectedRows = await connection.ExecuteAsync(
+                new CommandDefinition(
+                    updateSql,
+                    updateParameters,
+                    transaction,
+                    cancellationToken: cancellationToken));
+
+            if (affectedRows == 0)
+            {
+                row.Sid = await GetMaxSidAsync(connection, transaction, _tables.Rf, importDate, cancellationToken) + 1;
+                await InsertRowAsync(
+                    connection,
+                    transaction,
+                    _tables.Rf,
+                    row,
+                    includePpb: false,
+                    includeRt: false,
+                    includeIdRefs: false,
+                    cancellationToken);
+            }
+
+            await transaction.CommitAsync(cancellationToken);
+        }
+        catch
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            throw;
+        }
+
+        return new RfOption(row.Id, row.AnlzTime, row.Si0Id, row.SampleName, row.SampleNo, row.Description);
     }
 
     public async Task<IReadOnlyList<QcDataRow>> GetRawRowsForExportAsync(

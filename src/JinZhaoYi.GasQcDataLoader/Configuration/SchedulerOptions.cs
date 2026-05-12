@@ -70,6 +70,9 @@ public sealed class SchedulerOptions
     // QC 檔案下載 API 設定。
     public SchedulerDownloadApiOptions DownloadApi { get; init; } = new();
 
+    // RF extractor API 與輸出檔設定。
+    public SchedulerRfExtractorOptions RfExtractor { get; init; } = new();
+
     // Windows Service 顯示名稱。
     public string ServiceName { get; init; } = "JinZhaoYi Gas QC DataLoader";
 
@@ -148,6 +151,15 @@ public sealed class SchedulerCsvExportOptions
 public sealed class SchedulerDownloadApiOptions
 {
     public bool Enabled { get; init; }
+}
+
+public sealed class SchedulerRfExtractorOptions
+{
+    public string BaseUrl { get; init; } = "http://localhost:5015";
+
+    public string ExportPath { get; init; } = "/api/Export";
+
+    public string OutputDirectory { get; init; } = @"D:\RFExtratorFile";
 }
 
 public enum SchedulerTargetMode

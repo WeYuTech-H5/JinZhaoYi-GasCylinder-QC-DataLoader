@@ -218,6 +218,23 @@ public sealed class GasQcImportJobTests
         public Task<QcDataRow?> GetRfByIdAsync(string rfId, CancellationToken cancellationToken) =>
             Task.FromResult<QcDataRow?>(null);
 
+        public Task<IReadOnlyList<ExportOption>> GetStdRawOptionsForRfAsync(
+            string? search,
+            int limit,
+            CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<ExportOption>>([]);
+
+        public Task<QcDataRow?> GetStdRawByStableIdAsync(
+            string stableId,
+            CancellationToken cancellationToken) =>
+            Task.FromResult<QcDataRow?>(null);
+
+        public Task<RfOption> UpsertRfAsync(
+            QcDataRow row,
+            DateTime importDate,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(new RfOption(row.Id, row.AnlzTime, row.Si0Id, row.SampleName, row.SampleNo, row.Description));
+
         public Task<IReadOnlyList<QcDataRow>> GetRawRowsForExportAsync(
             DateTime startDate,
             DateTime endDate,

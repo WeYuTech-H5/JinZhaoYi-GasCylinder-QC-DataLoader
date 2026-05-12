@@ -33,6 +33,20 @@ public interface IDapperRepository
 
     Task<QcDataRow?> GetRfByIdAsync(string rfId, CancellationToken cancellationToken);
 
+    Task<IReadOnlyList<ExportOption>> GetStdRawOptionsForRfAsync(
+        string? search,
+        int limit,
+        CancellationToken cancellationToken);
+
+    Task<QcDataRow?> GetStdRawByStableIdAsync(
+        string stableId,
+        CancellationToken cancellationToken);
+
+    Task<RfOption> UpsertRfAsync(
+        QcDataRow row,
+        DateTime importDate,
+        CancellationToken cancellationToken);
+
     Task<IReadOnlyList<QcDataRow>> GetRawRowsForExportAsync(
         DateTime startDate,
         DateTime endDate,
