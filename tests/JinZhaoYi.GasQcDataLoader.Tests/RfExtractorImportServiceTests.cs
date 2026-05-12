@@ -45,7 +45,7 @@ public sealed class RfExtractorImportServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task ImportFromStdAsync_preserves_null_values_as_null()
+    public async Task ImportFromStdAsync_rejects_null_values()
     {
         Directory.CreateDirectory(_tempRoot);
         var stdRow = CreateStdRow();
@@ -57,9 +57,11 @@ public sealed class RfExtractorImportServiceTests : IDisposable
         });
         var service = CreateService(repository, handler);
 
-        await service.ImportFromStdAsync(RawDataIdentity.FromRow(stdRow).ToStableId(), CancellationToken.None);
+        var act = () => service.ImportFromStdAsync(RawDataIdentity.FromRow(stdRow).ToStableId(), CancellationToken.None);
 
-        repository.UpsertedRow!.Areas["Acetone"].Should().BeNull();
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*null Data.Value*Acetone*");
+        repository.UpsertCallCount.Should().Be(0);
     }
 
     public void Dispose()
