@@ -60,7 +60,7 @@ public sealed class RfExtractorImportServiceTests : IDisposable
         var act = () => service.ImportFromStdAsync(RawDataIdentity.FromRow(stdRow).ToStableId(), CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*null Data.Value*Acetone*");
+            .WithMessage("API 內 RF 資料有缺失。");
         repository.UpsertCallCount.Should().Be(0);
     }
 

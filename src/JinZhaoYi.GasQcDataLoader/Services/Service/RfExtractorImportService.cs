@@ -129,16 +129,9 @@ public sealed class RfExtractorImportService(
             throw new InvalidOperationException($"RF extractor JSON missing valid sID: {path}");
         }
 
-        var nullValueItems = export.Data
-            .Where(item => !item.Value.HasValue)
-            .Select(item => string.IsNullOrWhiteSpace(item.PrimeName)
-                ? $"seq {item.Seq}"
-                : $"{item.PrimeName} (seq {item.Seq})")
-            .ToArray();
-        if (nullValueItems.Length > 0)
+        if (export.Data.Any(item => !item.Value.HasValue))
         {
-            throw new InvalidOperationException(
-                "RF extractor JSON contains null Data.Value: " + string.Join(", ", nullValueItems) + ".");
+            throw new InvalidOperationException("API 內 RF 資料有缺失。");
         }
 
         return export;
