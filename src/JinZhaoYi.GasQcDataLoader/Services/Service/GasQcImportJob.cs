@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.RegularExpressions;
 using JinZhaoYi.GasQcDataLoader.Configuration;
 using JinZhaoYi.GasQcDataLoader.DataModels;
 using JinZhaoYi.GasQcDataLoader.Services.Interface;
@@ -341,27 +342,32 @@ public sealed class GasQcImportJob(
         string message)
     {
         var occurredAt = DateTimeOffset.Now;
-        var suggestedAction = ResolveSuggestedAction(errorType, message);
+        var missingMfgLotNos = ExtractMissingMfgLotNos(message);
+        var rows = new List<ImportErrorReportRow>();
 
-        return candidates
-            .OrderBy(candidate => candidate.FullPath, StringComparer.OrdinalIgnoreCase)
-            .Select(candidate =>
+        foreach (var candidate in candidates.OrderBy(candidate => candidate.FullPath, StringComparer.OrdinalIgnoreCase))
+        {
+            var lotNo = TryReadLotNo(candidate.FullPath);
+            if (missingMfgLotNos.Count > 0 && !missingMfgLotNos.Contains(lotNo))
             {
-                var lotNo = TryReadLotNo(candidate.FullPath);
-                var rowMessage = ResolveRowMessage(message, lotNo);
-                return new ImportErrorReportRow(
-                    OccurredAt: occurredAt,
-                    LogicalBatchDate: candidate.LogicalBatchDate,
-                    Port: candidate.Port,
-                    TopFolderName: candidate.TopFolderName,
-                    LotNo: lotNo,
-                    QuantPath: candidate.FullPath,
-                    DataFolderPath: candidate.DataFilepath,
-                    ErrorType: errorType,
-                    Message: rowMessage,
-                    SuggestedAction: ResolveSuggestedAction(errorType, rowMessage));
-            })
-            .ToArray();
+                continue;
+            }
+
+            var rowMessage = ResolveRowMessage(message, lotNo);
+            rows.Add(new ImportErrorReportRow(
+                OccurredAt: occurredAt,
+                LogicalBatchDate: candidate.LogicalBatchDate,
+                Port: candidate.Port,
+                TopFolderName: candidate.TopFolderName,
+                LotNo: lotNo,
+                QuantPath: candidate.FullPath,
+                DataFolderPath: candidate.DataFilepath,
+                ErrorType: errorType,
+                Message: rowMessage,
+                SuggestedAction: ResolveSuggestedAction(errorType, rowMessage)));
+        }
+
+        return rows;
     }
 
     private static string ResolveRowMessage(string groupMessage, string lotNo)
@@ -375,6 +381,24 @@ public sealed class GasQcImportJob(
 
         return groupMessage;
     }
+
+    private static IReadOnlySet<string> ExtractMissingMfgLotNos(string message)
+    {
+        if (!message.Contains("ZZ_NF_GAS_MFG_LOT", StringComparison.OrdinalIgnoreCase))
+        {
+            return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        if (!message.Contains("LOT", StringComparison.OrdinalIgnoreCase))
+        {
+            return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        return Regex.Matches(message, @"\b\d{11}\b")
+            .Select(match => match.Value)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
     private static string TryReadLotNo(string quantPath)
     {
         try
