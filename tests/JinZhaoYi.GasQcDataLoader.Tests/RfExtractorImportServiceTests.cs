@@ -40,8 +40,13 @@ public sealed class RfExtractorImportServiceTests : IDisposable
         repository.UpsertedRow.Areas["Acetone"].Should().Be(98.6824733960431m);
         repository.UpsertedRow.Areas["Methlene"].Should().Be(93.2100342208844m);
         repository.UpsertedRow.Areas["Chlorobenzene-D5"].Should().Be(0m);
+        repository.UpsertedRow.Areas["p-Xylene"].Should().Be(106.465032672439m);
+        repository.UpsertedRow.Areas["1,3-Dichlorobenzene"].Should().Be(98.9654093275403m);
+        repository.UpsertedRow.Areas["1,4-Dichlorobenzene"].Should().Be(98.3988781733391m);
+        repository.UpsertedRow.Areas["1,2-Dichlorobenzene"].Should().Be(98.1140145763186m);
         repository.UpsertCallCount.Should().Be(1);
         result.Rf.Id.Should().Be("RF,ppb(5841)");
+        result.Warnings.Should().BeEmpty();
     }
 
     [Fact]
@@ -101,7 +106,11 @@ public sealed class RfExtractorImportServiceTests : IDisposable
               "data": [
                 { "seq": 1, "id": 0, "primeName": "Acetone", "value": {{FormatJsonDecimal(acetoneValue)}} },
                 { "seq": 3, "id": 0, "primeName": "Methylene ChlorcIde", "value": 93.2100342208844 },
-                { "seq": 12, "id": 0, "primeName": "Chlorobenzene-D5", "value": 0 }
+                { "seq": 12, "id": 0, "primeName": "Chlorobenzene-D5", "value": 0 },
+                { "seq": 30, "id": 0, "primeName": "p-Xylene", "value": 106.465032672439 },
+                { "seq": 35, "id": 0, "primeName": "1,3-Dichlorobenzene", "value": 98.9654093275403 },
+                { "seq": 36, "id": 0, "primeName": "1,4-Dichlorobenzene", "value": 98.3988781733391 },
+                { "seq": 37, "id": 0, "primeName": "1,2-Dichlorobenzene", "value": 98.1140145763186 }
               ]
             }
             """);
