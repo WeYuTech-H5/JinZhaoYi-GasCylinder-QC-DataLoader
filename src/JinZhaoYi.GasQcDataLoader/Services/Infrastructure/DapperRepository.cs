@@ -379,7 +379,7 @@ public sealed class DapperRepository(
 
         try
         {
-            var values = BuildValues(row, includePpb: false, includeRt: false, includeIdRefs: false);
+            var values = BuildRfValues(row);
             values["EDIT_USER"] = row.EditUser;
             values["EDIT_TIME"] = row.EditTime;
             values.Remove("SID");
@@ -413,15 +413,22 @@ public sealed class DapperRepository(
             if (affectedRows == 0)
             {
                 row.Sid = await GetMaxSidAsync(connection, transaction, _tables.Rf, importDate, cancellationToken) + 1;
-                await InsertRowAsync(
-                    connection,
-                    transaction,
-                    _tables.Rf,
-                    row,
-                    includePpb: false,
-                    includeRt: false,
-                    includeIdRefs: false,
-                    cancellationToken);
+                var insertValues = BuildRfValues(row);
+                var columns = string.Join(", ", insertValues.Keys.Select(Quote));
+                var parameters = string.Join(", ", insertValues.Keys.Select(key => "@" + ParameterName(key)));
+                var insertSql = $"INSERT INTO dbo.{Quote(_tables.Rf)} ({columns}) VALUES ({parameters})";
+                var insertParameters = new DynamicParameters();
+                foreach (var (key, value) in insertValues)
+                {
+                    insertParameters.Add(ParameterName(key), value);
+                }
+
+                await connection.ExecuteAsync(
+                    new CommandDefinition(
+                        insertSql,
+                        insertParameters,
+                        transaction,
+                        cancellationToken: cancellationToken));
             }
 
             await transaction.CommitAsync(cancellationToken);
@@ -1196,6 +1203,41 @@ public sealed class DapperRepository(
         {
             values["ID1"] = row.Id1;
             values["ID2"] = row.Id2;
+        }
+
+        values["CREATE_USER"] = row.CreateUser;
+        values["CREATE_TIME"] = row.CreateTime;
+        values["EDIT_USER"] = row.EditUser;
+        values["EDIT_TIME"] = row.EditTime;
+        return values;
+    }
+
+    private static Dictionary<string, object?> BuildRfValues(QcDataRow row)
+    {
+        var values = new Dictionary<string, object?>
+        {
+            ["SID"] = row.Sid,
+            ["ID"] = row.Id,
+            ["AnlzTime"] = row.AnlzTime,
+            ["Inst"] = row.Inst,
+            ["Port"] = row.Port,
+            ["si0_id"] = row.Si0Id,
+            ["SampleNo"] = row.SampleNo,
+            ["LotNo"] = row.LotNo,
+            ["DataFilename"] = row.DataFilename,
+            ["DataFilepath"] = row.DataFilepath,
+            ["PCName"] = row.PcName,
+            ["Container"] = row.Container,
+            ["Description"] = row.Description,
+            ["EMVolts"] = row.EmVolts,
+            ["RelativeEM"] = row.RelativeEm,
+            ["SampleName"] = row.SampleName,
+            ["SampleType"] = row.SampleType
+        };
+
+        foreach (var analyte in CompoundMap.Analytes)
+        {
+            values[analyte.AreaColumn] = row.Areas.GetValueOrDefault(analyte.Suffix);
         }
 
         values["CREATE_USER"] = row.CreateUser;
