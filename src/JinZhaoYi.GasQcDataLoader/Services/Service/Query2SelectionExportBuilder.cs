@@ -195,30 +195,7 @@ public sealed class Query2SelectionExportBuilder(
 
     private static string BuildDisplayRawId(QcDataRow row)
     {
-        var prefix = BuildDisplayPortPrefix(row);
-        var sampleNo = row.SampleNo?.ToString("000", CultureInfo.InvariantCulture) ?? "000";
-        var time = row.AnlzTime?.ToString("yyyyMMdd-HHmm", CultureInfo.InvariantCulture) ?? "NO_TIME";
-        return $"{prefix}{sampleNo}@{time}";
-    }
-
-    private static string BuildDisplayPortPrefix(QcDataRow row)
-    {
-        var sourceKind = Normalize(row.SourceKind);
-        var port = Normalize(row.Port);
-        if (sourceKind == "STD" || port == "STD")
-        {
-            return "STD";
-        }
-
-        var digits = new string(port.Where(char.IsDigit).ToArray());
-        if (int.TryParse(digits, NumberStyles.Integer, CultureInfo.InvariantCulture, out var portNo))
-        {
-            return $"P{portNo:00}-";
-        }
-
-        return string.IsNullOrWhiteSpace(port)
-            ? "PORT-"
-            : port.Replace(" ", string.Empty, StringComparison.OrdinalIgnoreCase) + "-";
+        return row.AnlzTime?.ToString("MMddHHmm", CultureInfo.InvariantCulture) ?? "NO_TIME";
     }
 
     private static string Normalize(string? value) =>
