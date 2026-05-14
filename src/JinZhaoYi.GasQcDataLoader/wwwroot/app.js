@@ -13,7 +13,7 @@ const state = {
   selectedPpbIds: new Set()
 };
 
-const API_BASE_URL = "http://127.0.0.1:5000";
+const API_BASE_URL = window.GAS_QC_API_BASE_URL ?? location.pathname.replace(/\/[^/]*$/, "");
 
 const els = {
   startDate: document.querySelector("#startDate"),
@@ -407,7 +407,7 @@ async function getJson(url) {
 }
 
 function apiUrl(path) {
-  return `${API_BASE_URL}${path}`;
+  return API_BASE_URL ? `${API_BASE_URL}${path}` : path;
 }
 
 async function readError(response) {
