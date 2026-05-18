@@ -30,7 +30,7 @@ public sealed partial class GasFolderScanner(ILogger<GasFolderScanner>? logger =
 
     public IReadOnlyList<QuantFileCandidate> FindQuantFiles(string dayFolderPath)
     {
-        if (!Directory.Exists(dayFolderPath))
+        if (!DirectoryExists(dayFolderPath, "configured day folder"))
         {
             return [];
         }
@@ -44,14 +44,14 @@ public sealed partial class GasFolderScanner(ILogger<GasFolderScanner>? logger =
 
     private IReadOnlyList<QuantFileCandidate> FindQuantFiles(BatchContext batch)
     {
-        if (!Directory.Exists(batch.SourceRootPath))
+        if (!DirectoryExists(batch.SourceRootPath, "Gas QC source root"))
         {
             return [];
         }
 
         var candidates = new List<QuantFileCandidate>();
 
-        foreach (var topFolder in Directory.EnumerateDirectories(batch.SourceRootPath))
+        foreach (var topFolder in EnumerateDirectories(batch.SourceRootPath, "Gas QC source root"))
         {
             var topFolderName = Path.GetFileName(topFolder);
             if (!TryClassifyTopFolder(topFolderName, out var sourceKind, out var port))
@@ -59,7 +59,7 @@ public sealed partial class GasFolderScanner(ILogger<GasFolderScanner>? logger =
                 continue;
             }
 
-            foreach (var quantPath in Directory.EnumerateFiles(topFolder, "Quant.txt", SearchOption.AllDirectories))
+            foreach (var quantPath in EnumerateFiles(topFolder, "Quant.txt", SearchOption.AllDirectories, "Gas QC source folder"))
             {
                 if (IsUnderArchiveSubfolder(topFolder, quantPath))
                 {
@@ -93,15 +93,25 @@ public sealed partial class GasFolderScanner(ILogger<GasFolderScanner>? logger =
             }
         }
 
+        if (candidates.Count == 0)
+        {
+            logger?.LogWarning(
+                "No formal Quant.txt candidates were found under source root. SourceRootPath={SourceRootPath}. Expected Quant.txt under STD or PORT folders, inside .D folders with an underscore suffix such as PORT 11[yyyyMMdd HHmm]_001.D.",
+                batch.SourceRootPath);
+        }
+
         return candidates
             .OrderBy(candidate => candidate.FullPath, StringComparer.OrdinalIgnoreCase)
             .ToArray();
     }
 
-    private static IReadOnlyList<BatchContext> FindStableBatchContexts(string watchRoot, TimeSpan stableAge)
+    private IReadOnlyList<BatchContext> FindStableBatchContexts(string watchRoot, TimeSpan stableAge)
     {
-        if (!Directory.Exists(watchRoot))
+        if (!DirectoryExists(watchRoot, "Scheduler:WatchRoot"))
         {
+            logger?.LogWarning(
+                "Gas QC watch root is not accessible. WatchRoot={WatchRoot}. If this is a UNC path, verify the IIS app pool or Windows service identity has share and NTFS permissions.",
+                watchRoot);
             return [];
         }
 
@@ -113,28 +123,55 @@ public sealed partial class GasFolderScanner(ILogger<GasFolderScanner>? logger =
 
         var cutoff = DateTime.Now.Subtract(stableAge);
 
-        return Directory.EnumerateDirectories(rootPath)
+        var batches = EnumerateDirectories(rootPath, "Scheduler:WatchRoot")
             .Where(path => DayFolderRegex().IsMatch(Path.GetFileName(path)))
-            .Where(path => Directory.GetLastWriteTime(path) <= cutoff)
+            .Where(path => IsDirectoryStable(path, cutoff))
             .Select(path => ResolveBatchContext(Path.GetFullPath(path)))
             .Where(batch => batch is not null)
             .Cast<BatchContext>()
             .OrderBy(batch => batch.DayFolderPath, StringComparer.OrdinalIgnoreCase)
             .ToArray();
+
+        if (batches.Length == 0)
+        {
+            logger?.LogWarning(
+                "No Gas QC batch contexts were found under WatchRoot={WatchRoot}. Expected either source folders like STD/PORT 1 directly under the root, or yyyyMMdd day folders containing STD/PORT folders with Quant.txt files.",
+                rootPath);
+        }
+
+        return batches;
     }
 
-    private static bool IsStable(QuantFileCandidate candidate, DateTime cutoff)
+    private bool IsStable(QuantFileCandidate candidate, DateTime cutoff)
     {
-        if (!File.Exists(candidate.FullPath) || !Directory.Exists(candidate.DataFilepath))
+        if (!File.Exists(candidate.FullPath))
+        {
+            logger?.LogWarning("Skipping Quant candidate because the file is not accessible. QuantPath={QuantPath}.", candidate.FullPath);
+            return false;
+        }
+
+        if (!DirectoryExists(candidate.DataFilepath, "Quant data folder"))
         {
             return false;
         }
 
-        return File.GetLastWriteTime(candidate.FullPath) <= cutoff &&
-               Directory.GetLastWriteTime(candidate.DataFilepath) <= cutoff;
+        try
+        {
+            return File.GetLastWriteTime(candidate.FullPath) <= cutoff &&
+                   Directory.GetLastWriteTime(candidate.DataFilepath) <= cutoff;
+        }
+        catch (Exception ex) when (IsFileSystemAccessException(ex))
+        {
+            logger?.LogWarning(
+                ex,
+                "Skipping Quant candidate because last-write time could not be read. QuantPath={QuantPath}, DataFolder={DataFolder}.",
+                candidate.FullPath,
+                candidate.DataFilepath);
+            return false;
+        }
     }
 
-    private static BatchContext? ResolveBatchContext(string rootPath)
+    private BatchContext? ResolveBatchContext(string rootPath)
     {
         var folderName = Path.GetFileName(rootPath);
         var parentPath = Directory.GetParent(rootPath)?.FullName;
@@ -240,15 +277,15 @@ public sealed partial class GasFolderScanner(ILogger<GasFolderScanner>? logger =
         return false;
     }
 
-    private static bool ContainsSourceFolders(string rootPath) =>
-        Directory.EnumerateDirectories(rootPath)
+    private bool ContainsSourceFolders(string rootPath) =>
+        EnumerateDirectories(rootPath, "Gas QC root")
             .Select(Path.GetFileName)
             .Any(name => name is not null && TryClassifyTopFolder(name, out _, out _));
 
-    private static bool ContainsQuantFiles(string rootPath) =>
-        Directory.EnumerateDirectories(rootPath)
+    private bool ContainsQuantFiles(string rootPath) =>
+        EnumerateDirectories(rootPath, "Gas QC root")
             .Where(path => TryClassifyTopFolder(Path.GetFileName(path), out _, out _))
-            .Any(path => Directory.EnumerateFiles(path, "Quant.txt", SearchOption.AllDirectories)
+            .Any(path => EnumerateFiles(path, "Quant.txt", SearchOption.AllDirectories, "Gas QC source folder")
                 .Any(quantPath =>
                     !IsUnderArchiveSubfolder(path, quantPath) &&
                     IsFormalDataFolder(Path.GetDirectoryName(quantPath) ?? path)));
@@ -296,6 +333,88 @@ public sealed partial class GasFolderScanner(ILogger<GasFolderScanner>? logger =
 
         return Directory.GetLastWriteTime(dataFolderPath).ToString("yyyyMMdd", CultureInfo.InvariantCulture);
     }
+
+    private bool DirectoryExists(string path, string description)
+    {
+        try
+        {
+            if (Directory.Exists(path))
+            {
+                return true;
+            }
+
+            logger?.LogWarning(
+                "Directory is not accessible or does not exist. Description={Description}, Path={Path}. If this is a UNC path, verify the process identity has share and NTFS permissions.",
+                description,
+                path);
+            return false;
+        }
+        catch (Exception ex) when (IsFileSystemAccessException(ex))
+        {
+            logger?.LogWarning(
+                ex,
+                "Directory access check failed. Description={Description}, Path={Path}. If this is a UNC path, verify the process identity has share and NTFS permissions.",
+                description,
+                path);
+            return false;
+        }
+    }
+
+    private IReadOnlyList<string> EnumerateDirectories(string path, string description)
+    {
+        try
+        {
+            return Directory.EnumerateDirectories(path).ToArray();
+        }
+        catch (Exception ex) when (IsFileSystemAccessException(ex))
+        {
+            logger?.LogWarning(
+                ex,
+                "Failed to enumerate directories. Description={Description}, Path={Path}. If this is a UNC path, verify the process identity has share and NTFS permissions.",
+                description,
+                path);
+            return [];
+        }
+    }
+
+    private IReadOnlyList<string> EnumerateFiles(
+        string path,
+        string searchPattern,
+        SearchOption searchOption,
+        string description)
+    {
+        try
+        {
+            return Directory.EnumerateFiles(path, searchPattern, searchOption).ToArray();
+        }
+        catch (Exception ex) when (IsFileSystemAccessException(ex))
+        {
+            logger?.LogWarning(
+                ex,
+                "Failed to enumerate files. Description={Description}, Path={Path}, SearchPattern={SearchPattern}, SearchOption={SearchOption}. If this is a UNC path, verify the process identity has share and NTFS permissions.",
+                description,
+                path,
+                searchPattern,
+                searchOption);
+            return [];
+        }
+    }
+
+    private bool IsDirectoryStable(string path, DateTime cutoff)
+    {
+        try
+        {
+            return Directory.GetLastWriteTime(path) <= cutoff;
+        }
+        catch (Exception ex) when (IsFileSystemAccessException(ex))
+        {
+            logger?.LogWarning(ex, "Skipping directory because last-write time could not be read. Path={Path}.", path);
+            return false;
+        }
+    }
+
+    private static bool IsFileSystemAccessException(Exception ex) =>
+        ex is IOException or UnauthorizedAccessException or DirectoryNotFoundException or PathTooLongException;
 
     private sealed record BatchContext(
         string DayFolderPath,
