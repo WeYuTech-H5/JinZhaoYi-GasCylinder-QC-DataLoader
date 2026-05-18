@@ -31,8 +31,8 @@ public sealed class ImportErrorReportExporterTests : IDisposable
                     Port: "PORT 12",
                     TopFolderName: "PORT 12",
                     LotNo: "20260505001",
-                    QuantPath: @"C:\MES_STD\2026\PORT 12\PORT 12[20260505 1732].D\Quant.txt",
-                    DataFolderPath: @"C:\MES_STD\2026\PORT 12\PORT 12[20260505 1732].D",
+                    QuantPath: @"C:\MES_PRD\2026\PORT 12\PORT 12[20260505 1732].D\Quant.txt",
+                    DataFolderPath: @"C:\MES_PRD\2026\PORT 12\PORT 12[20260505 1732].D",
                     ErrorType: "ParseOrImportException",
                     Message: "Misc value does not contain a LOT marker.",
                     SuggestedAction: "請確認 Quant.txt 的 Misc 欄位是否有 #LOT。")
