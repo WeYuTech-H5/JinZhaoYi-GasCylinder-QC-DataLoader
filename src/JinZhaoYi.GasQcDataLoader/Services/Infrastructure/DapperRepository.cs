@@ -96,6 +96,47 @@ public sealed class DapperRepository(
           AND CAST(AnlzTime AS date) <= @EndDate
         """;
 
+    private const string PortPpbGroupCountSqlFormat = """
+        SELECT COUNT(1)
+        FROM (
+            SELECT Port, LotNo, SampleName
+            FROM dbo.{0}
+            WHERE CAST(AnlzTime AS date) = @BatchDate
+              AND AnlzTime IS NOT NULL
+              AND SampleNo IS NOT NULL
+            GROUP BY Port, LotNo, SampleName
+        ) grouped
+        """;
+
+    private const string PortPpbPagedGroupsSqlFormat = """
+        WITH PageGroups AS (
+            SELECT Port, LotNo, SampleName
+            FROM dbo.{0}
+            WHERE CAST(AnlzTime AS date) = @BatchDate
+              AND AnlzTime IS NOT NULL
+              AND SampleNo IS NOT NULL
+            GROUP BY Port, LotNo, SampleName
+            ORDER BY Port, LotNo, SampleName
+            OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY
+        )
+        SELECT rows.*
+        FROM dbo.{0} rows
+        INNER JOIN PageGroups pageGroups
+            ON ISNULL(rows.Port, '') = ISNULL(pageGroups.Port, '')
+           AND ISNULL(rows.LotNo, '') = ISNULL(pageGroups.LotNo, '')
+           AND ISNULL(rows.SampleName, '') = ISNULL(pageGroups.SampleName, '')
+        WHERE CAST(rows.AnlzTime AS date) = @BatchDate
+          AND rows.AnlzTime IS NOT NULL
+          AND rows.SampleNo IS NOT NULL
+        ORDER BY
+            rows.Port,
+            rows.LotNo,
+            rows.SampleName,
+            rows.AnlzTime,
+            rows.SampleNo,
+            rows.SourceFolderName
+        """;
+
     private const string AllRfRowsSqlFormat = """
         SELECT *
         FROM dbo.{0}
@@ -120,6 +161,32 @@ public sealed class DapperRepository(
             OR DataFilename LIKE @SearchPattern
             OR SourceFolderName LIKE @SearchPattern
         ORDER BY AnlzTime DESC, CREATE_TIME DESC, SID DESC
+        """;
+
+    private const string StdRawForRfPagedSqlFormat = """
+        SELECT *
+        FROM dbo.{0}
+        WHERE
+            @Search IS NULL
+            OR LotNo LIKE @SearchPattern
+            OR SampleName LIKE @SearchPattern
+            OR CAST(SampleNo AS NVARCHAR(32)) LIKE @SearchPattern
+            OR DataFilename LIKE @SearchPattern
+            OR SourceFolderName LIKE @SearchPattern
+        ORDER BY AnlzTime DESC, CREATE_TIME DESC, SID DESC
+        OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY
+        """;
+
+    private const string StdRawForRfCountSqlFormat = """
+        SELECT COUNT(1)
+        FROM dbo.{0}
+        WHERE
+            @Search IS NULL
+            OR LotNo LIKE @SearchPattern
+            OR SampleName LIKE @SearchPattern
+            OR CAST(SampleNo AS NVARCHAR(32)) LIKE @SearchPattern
+            OR DataFilename LIKE @SearchPattern
+            OR SourceFolderName LIKE @SearchPattern
         """;
 
     private const string AllStdRawRowsSqlFormat = """
@@ -299,6 +366,43 @@ public sealed class DapperRepository(
             .ToArray();
     }
 
+    public async Task<PagedResponse<ExportOption>> GetPortPpbExportOptionsAsync(
+        DateTime batchDate,
+        int page,
+        int pageSize,
+        CancellationToken cancellationToken)
+    {
+        var normalizedPage = Math.Max(1, page);
+        var normalizedPageSize = Math.Clamp(pageSize, 1, 500);
+        var parameters = new
+        {
+            BatchDate = batchDate.Date,
+            Offset = (normalizedPage - 1) * normalizedPageSize,
+            PageSize = normalizedPageSize
+        };
+
+        await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
+        var countSql = string.Format(PortPpbGroupCountSqlFormat, Quote(_tables.PortPpb));
+        var totalCount = await connection.ExecuteScalarAsync<int>(
+            new CommandDefinition(countSql, parameters, cancellationToken: cancellationToken));
+
+        var pageSql = string.Format(PortPpbPagedGroupsSqlFormat, Quote(_tables.PortPpb));
+        var rows = await connection.QueryAsync(
+            new CommandDefinition(pageSql, parameters, cancellationToken: cancellationToken));
+
+        var items = rows
+            .Select(DynamicToQcDataRow)
+            .GroupBy(row => RawDataIdentity.FromRow(row).ToStableId(), StringComparer.OrdinalIgnoreCase)
+            .Select(group => ToExportOption(group.First()))
+            .OrderBy(option => option.AnlzTime)
+            .ThenBy(option => option.Port, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(option => option.SourceFolderName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(option => option.DisplayName, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        return new PagedResponse<ExportOption>(normalizedPage, normalizedPageSize, totalCount, items);
+    }
+
     public async Task<IReadOnlyList<RfOption>> GetRfOptionsAsync(CancellationToken cancellationToken)
     {
         await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
@@ -343,6 +447,40 @@ public sealed class DapperRepository(
             .Select(DynamicToQcDataRow)
             .Select(ToExportOption)
             .ToArray();
+    }
+
+    public async Task<PagedResponse<ExportOption>> GetStdRawOptionsForRfAsync(
+        string? search,
+        int page,
+        int pageSize,
+        CancellationToken cancellationToken)
+    {
+        var normalizedPage = Math.Max(1, page);
+        var normalizedPageSize = Math.Clamp(pageSize, 1, 500);
+        var normalizedSearch = string.IsNullOrWhiteSpace(search) ? null : search.Trim();
+        var parameters = new
+        {
+            Offset = (normalizedPage - 1) * normalizedPageSize,
+            PageSize = normalizedPageSize,
+            Search = normalizedSearch,
+            SearchPattern = normalizedSearch is null ? null : $"%{normalizedSearch}%"
+        };
+
+        await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
+        var countSql = string.Format(StdRawForRfCountSqlFormat, Quote(_tables.StdRaw));
+        var totalCount = await connection.ExecuteScalarAsync<int>(
+            new CommandDefinition(countSql, parameters, cancellationToken: cancellationToken));
+
+        var pageSql = string.Format(StdRawForRfPagedSqlFormat, Quote(_tables.StdRaw));
+        var rows = await connection.QueryAsync(
+            new CommandDefinition(pageSql, parameters, cancellationToken: cancellationToken));
+
+        var items = rows
+            .Select(DynamicToQcDataRow)
+            .Select(ToExportOption)
+            .ToArray();
+
+        return new PagedResponse<ExportOption>(normalizedPage, normalizedPageSize, totalCount, items);
     }
 
     public async Task<QcDataRow?> GetStdRawByStableIdAsync(string stableId, CancellationToken cancellationToken)

@@ -212,6 +212,9 @@ public sealed class GasQcImportJobTests
         public Task<IReadOnlyList<ExportOption>> GetPortPpbExportOptionsAsync(DateTime batchDate, CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<ExportOption>>([]);
 
+        public Task<PagedResponse<ExportOption>> GetPortPpbExportOptionsAsync(DateTime batchDate, int page, int pageSize, CancellationToken cancellationToken) =>
+            Task.FromResult(new PagedResponse<ExportOption>(page, pageSize, 0, []));
+
         public Task<IReadOnlyList<RfOption>> GetRfOptionsAsync(CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<RfOption>>([]);
 
@@ -223,6 +226,13 @@ public sealed class GasQcImportJobTests
             int limit,
             CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<ExportOption>>([]);
+
+        public Task<PagedResponse<ExportOption>> GetStdRawOptionsForRfAsync(
+            string? search,
+            int page,
+            int pageSize,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(new PagedResponse<ExportOption>(page, pageSize, 0, []));
 
         public Task<QcDataRow?> GetStdRawByStableIdAsync(
             string stableId,

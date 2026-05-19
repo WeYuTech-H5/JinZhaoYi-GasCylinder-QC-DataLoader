@@ -29,6 +29,12 @@ public interface IDapperRepository
         DateTime batchDate,
         CancellationToken cancellationToken);
 
+    Task<PagedResponse<ExportOption>> GetPortPpbExportOptionsAsync(
+        DateTime batchDate,
+        int page,
+        int pageSize,
+        CancellationToken cancellationToken);
+
     Task<IReadOnlyList<RfOption>> GetRfOptionsAsync(CancellationToken cancellationToken);
 
     Task<QcDataRow?> GetRfByIdAsync(string rfId, CancellationToken cancellationToken);
@@ -36,6 +42,12 @@ public interface IDapperRepository
     Task<IReadOnlyList<ExportOption>> GetStdRawOptionsForRfAsync(
         string? search,
         int limit,
+        CancellationToken cancellationToken);
+
+    Task<PagedResponse<ExportOption>> GetStdRawOptionsForRfAsync(
+        string? search,
+        int page,
+        int pageSize,
         CancellationToken cancellationToken);
 
     Task<QcDataRow?> GetStdRawByStableIdAsync(

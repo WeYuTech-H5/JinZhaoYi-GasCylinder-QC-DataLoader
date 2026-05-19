@@ -127,9 +127,22 @@ static void MapDownloadEndpoints(WebApplication app)
     app.MapGet("/api/std-rf-source-options", async (
         string? search,
         int? limit,
+        int? page,
+        int? pageSize,
         IDapperRepository repository,
         CancellationToken cancellationToken) =>
     {
+        if (page.HasValue || pageSize.HasValue)
+        {
+            if (!TryValidatePagination(page, pageSize, out var normalizedPage, out var normalizedPageSize, out var validationMessage))
+            {
+                return Results.BadRequest(new { message = validationMessage });
+            }
+
+            var pagedOptions = await repository.GetStdRawOptionsForRfAsync(search, normalizedPage, normalizedPageSize, cancellationToken);
+            return Results.Ok(pagedOptions);
+        }
+
         var options = await repository.GetStdRawOptionsForRfAsync(search, limit ?? 200, cancellationToken);
         return Results.Ok(options);
     });
@@ -169,12 +182,25 @@ static void MapDownloadEndpoints(WebApplication app)
 
     app.MapGet("/api/port-ppb-options", async (
         string batchDate,
+        int? page,
+        int? pageSize,
         IDapperRepository repository,
         CancellationToken cancellationToken) =>
     {
         if (!TryParseBatchDate(batchDate, out var parsedBatchDate))
         {
             return Results.BadRequest(new { message = "batchDate must use yyyyMMdd format." });
+        }
+
+        if (page.HasValue || pageSize.HasValue)
+        {
+            if (!TryValidatePagination(page, pageSize, out var normalizedPage, out var normalizedPageSize, out var validationMessage))
+            {
+                return Results.BadRequest(new { message = validationMessage });
+            }
+
+            var pagedOptions = await repository.GetPortPpbExportOptionsAsync(parsedBatchDate, normalizedPage, normalizedPageSize, cancellationToken);
+            return Results.Ok(BuildPagedPortPpbGroupResponse(parsedBatchDate, pagedOptions));
         }
 
         var options = await repository.GetPortPpbExportOptionsAsync(parsedBatchDate, cancellationToken);
@@ -396,6 +422,32 @@ static string[] NormalizeIds(IEnumerable<string> ids) =>
         .Distinct(StringComparer.OrdinalIgnoreCase)
         .ToArray();
 
+static bool TryValidatePagination(
+    int? pageValue,
+    int? pageSizeValue,
+    out int page,
+    out int pageSize,
+    out string message)
+{
+    page = pageValue ?? 1;
+    pageSize = pageSizeValue ?? 50;
+
+    if (page < 1)
+    {
+        message = "page must be greater than or equal to 1.";
+        return false;
+    }
+
+    if (pageSize is < 1 or > 500)
+    {
+        message = "pageSize must be between 1 and 500.";
+        return false;
+    }
+
+    message = string.Empty;
+    return true;
+}
+
 static ExportGroupResponse BuildExportGroupResponse(
     DateTime startDate,
     DateTime endDate,
@@ -446,7 +498,31 @@ static ExportGroupResponse BuildPortPpbGroupResponse(
     DateTime batchDate,
     IReadOnlyCollection<ExportOption> options)
 {
-    var groups = options
+    var groups = BuildPortPpbGroups(options);
+
+    var batchDateText = batchDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
+    return new ExportGroupResponse(batchDateText, batchDateText, [], groups);
+}
+
+static PagedExportGroupResponse BuildPagedPortPpbGroupResponse(
+    DateTime batchDate,
+    PagedResponse<ExportOption> options)
+{
+    var groups = BuildPortPpbGroups(options.Items);
+
+    var batchDateText = batchDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
+    return new PagedExportGroupResponse(
+        batchDateText,
+        batchDateText,
+        [],
+        groups,
+        options.Page,
+        options.PageSize,
+        options.TotalCount);
+}
+
+static ExportGroup[] BuildPortPpbGroups(IReadOnlyCollection<ExportOption> options) =>
+    options
         .GroupBy(option => new
         {
             Port = option.Port,
@@ -478,7 +554,3 @@ static ExportGroupResponse BuildPortPpbGroupResponse(
         .ThenBy(group => group.LotNo, StringComparer.OrdinalIgnoreCase)
         .ThenBy(group => group.SampleName, StringComparer.OrdinalIgnoreCase)
         .ToArray();
-
-    var batchDateText = batchDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
-    return new ExportGroupResponse(batchDateText, batchDateText, [], groups);
-}
