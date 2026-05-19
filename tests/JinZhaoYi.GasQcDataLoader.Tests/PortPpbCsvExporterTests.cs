@@ -1,4 +1,5 @@
 using FluentAssertions;
+using System.IO.Compression;
 using JinZhaoYi.GasQcDataLoader.Configuration;
 using JinZhaoYi.GasQcDataLoader.DataModels;
 using JinZhaoYi.GasQcDataLoader.Services.Service;
@@ -65,6 +66,53 @@ public sealed class PortPpbCsvExporterTests : IDisposable
         var content = System.Text.Encoding.UTF8.GetString(bytes);
         content.Should().Contain("SupplierName,金兆益科技股份有限公司");
         content.Should().NotContain("\uFFFD");
+    }
+
+    [Fact]
+    public void ExportForDownload_returns_single_csv_when_one_row_is_selected()
+    {
+        var exporter = CreateExporter(new SchedulerCsvExportOptions
+        {
+            Enabled = true,
+            RawLotId = "CC-706988"
+        });
+
+        var download = exporter.ExportForDownload([CreatePpbRow()], "20251118");
+
+        download.ContentType.Should().Be("text/csv; charset=utf-8");
+        download.FileName.Should().Be("2026-04-20_TSMC-024_CC-706988_pass.csv");
+        download.Content.Take(3).Should().Equal(0xEF, 0xBB, 0xBF);
+    }
+
+    [Fact]
+    public void ExportForDownload_returns_zip_with_one_csv_per_row_when_multiple_rows_are_selected()
+    {
+        var exporter = CreateExporter(new SchedulerCsvExportOptions
+        {
+            Enabled = true,
+            RawLotId = "CC-706988"
+        });
+        var firstRow = CreatePpbRow();
+        var secondRow = CreatePpbRow();
+        secondRow.SampleName = "TSMC-025";
+        secondRow.LotNo = "20260421004";
+
+        var download = exporter.ExportForDownload([secondRow, firstRow], "20251118");
+
+        download.ContentType.Should().Be("application/zip");
+        download.FileName.Should().Be("TO14C_PPB[20251118].zip");
+
+        using var archive = new ZipArchive(new MemoryStream(download.Content), ZipArchiveMode.Read);
+        archive.Entries.Select(entry => entry.FullName).Should().Equal(
+            "2026-04-20_TSMC-024_CC-706988_pass.csv",
+            "2026-04-21_TSMC-025_CC-706988_pass.csv");
+
+        foreach (var entry in archive.Entries)
+        {
+            using var stream = entry.Open();
+            using var reader = new StreamReader(stream);
+            reader.ReadToEnd().Should().Contain("SchemaName");
+        }
     }
 
     [Fact]

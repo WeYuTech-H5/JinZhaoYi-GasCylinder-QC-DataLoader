@@ -280,5 +280,8 @@ public sealed class ImportOrchestratorCsvExportTests
         }
 
         public byte[] ExportToBytes(IReadOnlyCollection<QcDataRow> portPpbRows) => [];
+
+        public CsvDownload ExportForDownload(IReadOnlyCollection<QcDataRow> portPpbRows, string batchDateText) =>
+            new([], "text/csv; charset=utf-8", $"TO14C_PPB[{batchDateText}].csv");
     }
 }

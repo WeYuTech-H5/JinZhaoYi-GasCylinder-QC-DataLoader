@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.IO.Compression;
 using System.Text;
 using JinZhaoYi.GasQcDataLoader.Configuration;
 using JinZhaoYi.GasQcDataLoader.DataModels;
@@ -50,8 +51,28 @@ public sealed class PortPpbCsvExporter(
                 .ThenBy(row => row.SampleName, StringComparer.OrdinalIgnoreCase)
                 .Select(BuildContent));
 
-        var encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: true);
-        return encoding.GetPreamble().Concat(encoding.GetBytes(content)).ToArray();
+        return EncodeContent(content);
+    }
+
+    public CsvDownload ExportForDownload(IReadOnlyCollection<QcDataRow> portPpbRows, string batchDateText)
+    {
+        var orderedRows = portPpbRows
+            .OrderBy(row => row.AnlzTime)
+            .ThenBy(row => row.SampleName, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        if (orderedRows.Length == 1)
+        {
+            return new CsvDownload(
+                ExportToBytes(orderedRows),
+                "text/csv; charset=utf-8",
+                BuildFileName(orderedRows[0], _options.CsvExport.RawLotId));
+        }
+
+        return new CsvDownload(
+            ExportZipToBytes(orderedRows),
+            "application/zip",
+            $"TO14C_PPB[{batchDateText}].zip");
     }
 
     internal static string BuildFileName(QcDataRow row, string? rawLotId = null)
@@ -164,6 +185,31 @@ public sealed class PortPpbCsvExporter(
     private static string? FormatAnalyteValue(decimal? value) =>
         value?.ToString("0", CultureInfo.InvariantCulture);
 
+    private byte[] ExportZipToBytes(IReadOnlyCollection<QcDataRow> orderedRows)
+    {
+        using var stream = new MemoryStream();
+        using (var archive = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true))
+        {
+            var usedFileNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var row in orderedRows)
+            {
+                var fileName = ResolveUniqueFileName(BuildFileName(row, _options.CsvExport.RawLotId), usedFileNames);
+                var entry = archive.CreateEntry(fileName, CompressionLevel.Optimal);
+                using var entryStream = entry.Open();
+                var bytes = EncodeContent(BuildContent(row));
+                entryStream.Write(bytes, 0, bytes.Length);
+            }
+        }
+
+        return stream.ToArray();
+    }
+
+    private static byte[] EncodeContent(string content)
+    {
+        var encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: true);
+        return encoding.GetPreamble().Concat(encoding.GetBytes(content)).ToArray();
+    }
+
     private static string FormatCsvLine(IReadOnlyList<string?> fields) =>
         string.Join(",", fields.Select(EscapeCsv));
 
@@ -212,6 +258,26 @@ public sealed class PortPpbCsvExporter(
         {
             var candidate = Path.Combine(directory, $"{fileName}_{index}{extension}");
             if (!File.Exists(candidate))
+            {
+                return candidate;
+            }
+        }
+    }
+
+    private static string ResolveUniqueFileName(string fileName, ISet<string> usedFileNames)
+    {
+        if (usedFileNames.Add(fileName))
+        {
+            return fileName;
+        }
+
+        var name = Path.GetFileNameWithoutExtension(fileName);
+        var extension = Path.GetExtension(fileName);
+
+        for (var index = 1; ; index++)
+        {
+            var candidate = $"{name}_{index}{extension}";
+            if (usedFileNames.Add(candidate))
             {
                 return candidate;
             }

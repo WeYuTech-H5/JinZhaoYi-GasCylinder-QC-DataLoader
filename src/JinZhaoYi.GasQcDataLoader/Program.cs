@@ -243,10 +243,11 @@ static void MapDownloadEndpoints(WebApplication app)
         }
 
         var batchDateText = batchDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
+        var download = exporter.ExportForDownload(rows, batchDateText);
         return Results.File(
-            exporter.ExportToBytes(rows),
-            "text/csv; charset=utf-8",
-            $"TO14C_PPB[{batchDateText}].csv");
+            download.Content,
+            download.ContentType,
+            download.FileName);
     });
 
     app.MapGet("/api/downloads/cylinder-qc/{batchDate}", (

@@ -10,4 +10,8 @@ public interface IPortPpbCsvExporter
         CancellationToken cancellationToken);
 
     byte[] ExportToBytes(IReadOnlyCollection<QcDataRow> portPpbRows);
+
+    CsvDownload ExportForDownload(IReadOnlyCollection<QcDataRow> portPpbRows, string batchDateText);
 }
+
+public sealed record CsvDownload(byte[] Content, string ContentType, string FileName);
