@@ -1,4 +1,6 @@
 using ClosedXML.Excel;
+using DocumentFormat.OpenXml.Packaging;
+using DocumentFormat.OpenXml.Spreadsheet;
 using FluentAssertions;
 using JinZhaoYi.GasQcDataLoader.Configuration;
 using JinZhaoYi.GasQcDataLoader.DataModels;
@@ -28,6 +30,8 @@ public sealed class CoaWorkbookExporterTests
         workbook.Worksheet("COA_STD-100").Cell("E52").GetDouble().Should().BeApproximately(98.6, 0.0001);
         workbook.Worksheet("COA_STD-050").Cell("B11").GetString().Should().Be("PG000-0006 / PG000-0016");
         workbook.Worksheet("COA_STD-100").Cell("B11").GetString().Should().Be("PG000-0010");
+        HasWorksheetDrawing(download, "COA_STD-050").Should().BeTrue();
+        HasWorksheetDrawing(download, "COA_STD-100").Should().BeTrue();
     }
 
     [Fact]
@@ -47,10 +51,10 @@ public sealed class CoaWorkbookExporterTests
     }
 
     [Fact]
-    public void ExportSmallForDownload_writes_nine_card_page_and_second_page()
+    public void ExportSmallForDownload_repeats_each_selected_row_across_requested_card_count()
     {
         var exporter = CreateExporter();
-        var rows = Enumerable.Range(1, 10)
+        var rows = Enumerable.Range(1, 2)
             .Select(index =>
             {
                 var row = CreateRow($"STD-N{index:000}", "1L_Cylinder", index);
@@ -65,13 +69,24 @@ public sealed class CoaWorkbookExporterTests
         download.FileName.Should().Be("COA(小卡)_20260521.xlsx");
         using var workbook = Open(download);
         workbook.Worksheets.Count.Should().Be(2);
-        workbook.Worksheet("COA小卡1").Cell("F6").GetString().Should().Be("STD-N001");
-        workbook.Worksheet("COA小卡1").Cell("F8").GetDouble().Should().Be(91);
-        workbook.Worksheet("COA小卡1").Cell("F9").GetDouble().Should().Be(101);
-        workbook.Worksheet("COA小卡1").Cell("B19").GetString().Should().Be("母瓶 NO.  CC-706988");
-        workbook.Worksheet("COA小卡2").Cell("F6").GetString().Should().Be("STD-N010");
-        workbook.Worksheet("COA小卡2").Cell("F8").GetDouble().Should().Be(100);
-        workbook.Worksheet("COA小卡2").Cell("O6").GetString().Should().BeEmpty();
+        var firstSheet = workbook.Worksheet("COA小卡_STD-N001");
+        firstSheet.Cell("F6").GetString().Should().Be("STD-N001");
+        firstSheet.Cell("O6").GetString().Should().Be("STD-N001");
+        firstSheet.Cell("X6").GetString().Should().Be("STD-N001");
+        firstSheet.Cell("F28").GetString().Should().Be("STD-N001");
+        firstSheet.Cell("O28").GetString().Should().Be("STD-N001");
+        firstSheet.Cell("X28").GetString().Should().Be("STD-N001");
+        firstSheet.Cell("F50").GetString().Should().Be("STD-N001");
+        firstSheet.Cell("O50").GetString().Should().Be("STD-N001");
+        firstSheet.Cell("X50").GetString().Should().Be("STD-N001");
+        firstSheet.Cell("F8").GetDouble().Should().Be(91);
+        firstSheet.Cell("O8").GetDouble().Should().Be(91);
+        firstSheet.Cell("B19").GetString().Should().Be("母瓶 NO.  CC-706988");
+
+        var secondSheet = workbook.Worksheet("COA小卡_STD-N002");
+        secondSheet.Cell("F6").GetString().Should().Be("STD-N002");
+        secondSheet.Cell("X50").GetString().Should().Be("STD-N002");
+        secondSheet.Cell("F8").GetDouble().Should().Be(92);
     }
 
     [Fact]
@@ -108,6 +123,18 @@ public sealed class CoaWorkbookExporterTests
 
     private static XLWorkbook Open(CoaWorkbookDownload download) =>
         new(new MemoryStream(download.Content));
+
+    private static bool HasWorksheetDrawing(CoaWorkbookDownload download, string sheetName)
+    {
+        using var stream = new MemoryStream(download.Content);
+        using var document = SpreadsheetDocument.Open(stream, false);
+        var workbookPart = document.WorkbookPart!;
+        var sheet = workbookPart.Workbook.Sheets!.Elements<Sheet>()
+            .First(item => string.Equals(item.Name?.Value, sheetName, StringComparison.OrdinalIgnoreCase));
+        var worksheetPart = (WorksheetPart)workbookPart.GetPartById(sheet.Id!);
+        return worksheetPart.DrawingsPart is not null &&
+            worksheetPart.Worksheet.Descendants<Drawing>().Any();
+    }
 
     private static string ResolveTemplatePath(string fileName)
     {

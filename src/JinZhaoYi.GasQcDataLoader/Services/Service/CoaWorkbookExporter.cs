@@ -99,22 +99,11 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
         var orderedRows = OrderRows(rows);
         var templatePath = ResolveTemplatePath(_options.CoaExport.LargeTemplatePath, "COA(大卡).xlsx");
 
-        // COA 只從 Excel PPB history 匯出；第一張直接沿用模板 sheet，避免跨 workbook 複製造成版型差異。
-        using var workbook = new XLWorkbook(templatePath);
-        for (var index = 0; index < orderedRows.Count; index++)
-        {
-            var row = orderedRows[index];
-            var sourceSheetName = ResolveLargeSourceSheetName(row, templateType);
-            var targetSheetName = BuildUniqueSheetName(workbook, $"COA_{row.SampleName}", index + 1);
-            var worksheet = index == 0
-                ? workbook.Worksheet(sourceSheetName)
-                : CopySheetFromTemplate(templatePath, sourceSheetName, workbook, targetSheetName, index + 1);
-            worksheet.Name = targetSheetName;
-            WriteLargeRow(worksheet, row);
-        }
-
-        DeleteUnusedSheets(workbook, Large500MlSheetName, Large1LSheetName, LargeYadongSheetName, "欄位註解");
-        return BuildDownload(workbook, $"COA(大卡)_{batchDateText}.xlsx");
+        var content = ExportLargeWorkbookToBytes(templatePath, orderedRows, templateType);
+        return new CoaWorkbookDownload(
+            content,
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            $"COA(大卡)_{batchDateText}.xlsx");
     }
 
     public CoaWorkbookDownload ExportSmallForDownload(
@@ -137,6 +126,38 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
             $"COA(小卡)_{batchDateText}.xlsx");
     }
 
+    private byte[] ExportLargeWorkbookToBytes(
+        string templatePath,
+        IReadOnlyList<QcDataRow> orderedRows,
+        CoaLargeTemplateType templateType)
+    {
+        using var stream = new MemoryStream(File.ReadAllBytes(templatePath));
+        using var document = SpreadsheetDocument.Open(stream, true);
+        var workbookPart = document.WorkbookPart ?? throw new InvalidOperationException("COA large template has no workbook part.");
+        var sheets = workbookPart.Workbook.Sheets ?? throw new InvalidOperationException("COA large template has no sheets.");
+
+        // 大卡模板含頁首 logo 與公司資訊圖片；直接複製 OpenXML worksheet 與 drawing 關聯，避免 ClosedXML 存檔時遺失圖片內容。
+        for (var index = 0; index < orderedRows.Count; index++)
+        {
+            var row = orderedRows[index];
+            var sourceSheetName = ResolveLargeSourceSheetName(row, templateType);
+            var sourceSheet = sheets.Elements<Sheet>()
+                .FirstOrDefault(sheet => string.Equals(sheet.Name?.Value, sourceSheetName, StringComparison.OrdinalIgnoreCase))
+                ?? throw new InvalidOperationException($"COA large template does not contain worksheet '{sourceSheetName}'.");
+            var sourcePart = (WorksheetPart)workbookPart.GetPartById(sourceSheet.Id!);
+            var targetSheetName = BuildUniqueOpenXmlSheetName(workbookPart, $"COA_{row.SampleName}", index + 1);
+            var targetPart = CloneWorksheetPartWithRelationships(workbookPart, sourcePart, targetSheetName);
+            WriteLargeRow(targetPart, row);
+        }
+
+        DeleteOpenXmlSheets(workbookPart, Large500MlSheetName, Large1LSheetName, LargeYadongSheetName, "欄位註解");
+        DeleteCalculationChain(workbookPart);
+        ResetWorkbookView(workbookPart);
+        workbookPart.Workbook.Save();
+        document.Dispose();
+        return stream.ToArray();
+    }
+
     private byte[] ExportSmallWorkbookToBytes(string templatePath, IReadOnlyList<QcDataRow> orderedRows, int cardsPerPage)
     {
         using var stream = new MemoryStream(File.ReadAllBytes(templatePath));
@@ -148,11 +169,15 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
             ?? throw new InvalidOperationException($"COA small template does not contain worksheet '{SmallBlankSheetName}'.");
         var templatePart = (WorksheetPart)workbookPart.GetPartById(templateSheet.Id!);
 
-        // 小卡直接修改原 xlsx package，避免重存舊式物件造成 Excel 開啟時修復檔案。
-        var pageCount = Math.Max(1, (int)Math.Ceiling(orderedRows.Count / (double)cardsPerPage));
-        for (var pageIndex = 0; pageIndex < pageCount; pageIndex++)
+        // 小卡的「格數」代表同一筆 Excel PPB history 要印幾張貼紙；例如 9 格就是 9 格都填同一筆資料。
+        var sheetCount = Math.Max(1, orderedRows.Count);
+        for (var pageIndex = 0; pageIndex < sheetCount; pageIndex++)
         {
-            var targetSheetName = BuildUniqueOpenXmlSheetName(workbookPart, $"COA小卡{pageIndex + 1}", pageIndex + 1);
+            var row = orderedRows.ElementAtOrDefault(pageIndex);
+            var targetSheetName = BuildUniqueOpenXmlSheetName(
+                workbookPart,
+                row is null ? $"COA小卡{pageIndex + 1}" : $"COA小卡_{row.SampleName}",
+                pageIndex + 1);
             var worksheetPart = pageIndex == 0
                 ? templatePart
                 : CloneWorksheetPartWithoutDrawings(workbookPart, templatePart, targetSheetName);
@@ -164,14 +189,14 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
 
             ClearSmallDynamicCells(worksheetPart);
 
-            var pageRows = orderedRows
-                .Skip(pageIndex * cardsPerPage)
-                .Take(cardsPerPage)
-                .ToArray();
-
-            for (var cardIndex = 0; cardIndex < pageRows.Length; cardIndex++)
+            if (row is null)
             {
-                WriteSmallCard(worksheetPart, SmallCardLayouts[cardIndex], pageRows[cardIndex]);
+                continue;
+            }
+
+            for (var cardIndex = 0; cardIndex < cardsPerPage; cardIndex++)
+            {
+                WriteSmallCard(worksheetPart, SmallCardLayouts[cardIndex], row);
             }
         }
 
@@ -211,6 +236,26 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
             }
 
             WriteDecimal(worksheet.Cell(rowNumber, 5), row.Areas.GetValueOrDefault(suffix));
+        }
+    }
+
+    private void WriteLargeRow(WorksheetPart worksheetPart, QcDataRow row)
+    {
+        SetStringCell(worksheetPart, "B12", FormatDate(row.AnlzTime));
+        // 目前來源資料沒有獨立的鋼瓶到期日欄位，先依既有規則用分析時間 AnlzTime + 364 天計算。
+        SetStringCell(worksheetPart, "B13", FormatDate(ResolveExpirationDate(row)));
+        SetStringCell(worksheetPart, "B15", row.SampleName ?? string.Empty);
+
+        for (uint rowNumber = 19; rowNumber <= 57; rowNumber++)
+        {
+            var componentName = GetCellText(worksheetPart, $"A{rowNumber}").Trim();
+            if (string.IsNullOrWhiteSpace(componentName) ||
+                !LargeComponentSuffixes.TryGetValue(componentName, out var suffix))
+            {
+                continue;
+            }
+
+            SetDecimalCell(worksheetPart, $"E{rowNumber}", row.Areas.GetValueOrDefault(suffix));
         }
     }
 
@@ -352,6 +397,47 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
         return newPart;
     }
 
+    private static WorksheetPart CloneWorksheetPartWithRelationships(WorkbookPart workbookPart, WorksheetPart templatePart, string sheetName)
+    {
+        var newPart = workbookPart.AddNewPart<WorksheetPart>();
+        using (var sourceStream = templatePart.GetStream(FileMode.Open, FileAccess.Read))
+        using (var targetStream = newPart.GetStream(FileMode.Create, FileAccess.Write))
+        {
+            sourceStream.CopyTo(targetStream);
+        }
+
+        CopyPartRelationships(templatePart, newPart);
+
+        var sheets = workbookPart.Workbook.Sheets ?? workbookPart.Workbook.AppendChild(new Sheets());
+        var nextSheetId = sheets.Elements<Sheet>().Select(sheet => sheet.SheetId?.Value ?? 0U).DefaultIfEmpty().Max() + 1;
+        sheets.Append(new Sheet
+        {
+            Id = workbookPart.GetIdOfPart(newPart),
+            SheetId = nextSheetId,
+            Name = sheetName
+        });
+
+        return newPart;
+    }
+
+    private static void CopyPartRelationships(OpenXmlPart sourcePart, OpenXmlPart targetPart)
+    {
+        foreach (var relationship in sourcePart.Parts)
+        {
+            targetPart.AddPart(relationship.OpenXmlPart, relationship.RelationshipId);
+        }
+
+        foreach (var relationship in sourcePart.ExternalRelationships)
+        {
+            targetPart.AddExternalRelationship(relationship.RelationshipType, relationship.Uri, relationship.Id);
+        }
+
+        foreach (var relationship in sourcePart.HyperlinkRelationships)
+        {
+            targetPart.AddHyperlinkRelationship(relationship.Uri, relationship.IsExternal, relationship.Id);
+        }
+    }
+
     private static void DeleteOpenXmlSheets(WorkbookPart workbookPart, params string[] sheetNames)
     {
         var sheets = workbookPart.Workbook.Sheets;
@@ -444,6 +530,30 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
             .FirstOrDefault(item => ColumnIndex(SplitCellReference(item.CellReference?.Value ?? "A1").Column) > ColumnIndex(reference.Column));
         row.InsertBefore(cell, nextCell);
         return cell;
+    }
+
+    private static string GetCellText(WorksheetPart worksheetPart, string cellReference)
+    {
+        var cell = worksheetPart.Worksheet.Descendants<Cell>()
+            .FirstOrDefault(item => string.Equals(item.CellReference?.Value, cellReference, StringComparison.OrdinalIgnoreCase));
+        if (cell?.CellValue?.Text is null)
+        {
+            return string.Empty;
+        }
+
+        if (cell.DataType?.Value == CellValues.SharedString)
+        {
+            var sharedStringPart = worksheetPart.GetParentParts()
+                .OfType<WorkbookPart>()
+                .FirstOrDefault()
+                ?.SharedStringTablePart;
+            return sharedStringPart?.SharedStringTable
+                ?.Elements<SharedStringItem>()
+                .ElementAtOrDefault(int.Parse(cell.CellValue.Text, CultureInfo.InvariantCulture))
+                ?.InnerText ?? string.Empty;
+        }
+
+        return cell.CellValue.Text;
     }
 
     private static IXLWorksheet CopySheetFromTemplate(
