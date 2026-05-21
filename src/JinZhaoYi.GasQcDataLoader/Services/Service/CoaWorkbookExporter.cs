@@ -1,6 +1,11 @@
 using System.Globalization;
+using System.IO.Compression;
 using System.Text;
+using System.Xml.Linq;
 using ClosedXML.Excel;
+using DocumentFormat.OpenXml;
+using DocumentFormat.OpenXml.Packaging;
+using DocumentFormat.OpenXml.Spreadsheet;
 using JinZhaoYi.GasQcDataLoader.Configuration;
 using JinZhaoYi.GasQcDataLoader.DataModels;
 using JinZhaoYi.GasQcDataLoader.Services.Interface;
@@ -94,25 +99,22 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
         var orderedRows = OrderRows(rows);
         var templatePath = ResolveTemplatePath(_options.CoaExport.LargeTemplatePath, "COA(大卡).xlsx");
 
-        // COA 只從 Excel PPB history 匯出，避免和匯入流程即時計算的 PORT_PPB 混用。
-        using var templateWorkbook = new XLWorkbook(templatePath);
-        using var workbook = new XLWorkbook();
-        foreach (var templateSheetName in new[] { Large500MlSheetName, Large1LSheetName, LargeYadongSheetName })
-        {
-            RenamePictures(templateWorkbook.Worksheet(templateSheetName), 0);
-        }
-
+        // COA 只從 Excel PPB history 匯出；第一張直接沿用模板 sheet，避免跨 workbook 複製造成版型差異。
+        using var workbook = new XLWorkbook(templatePath);
         for (var index = 0; index < orderedRows.Count; index++)
         {
             var row = orderedRows[index];
             var sourceSheetName = ResolveLargeSourceSheetName(row, templateType);
-            var worksheet = templateWorkbook.Worksheet(sourceSheetName)
-                .CopyTo(workbook, BuildUniqueSheetName(workbook, $"COA_{row.SampleName}", index + 1));
-            RenamePictures(worksheet, index + 1);
+            var targetSheetName = BuildUniqueSheetName(workbook, $"COA_{row.SampleName}", index + 1);
+            var worksheet = index == 0
+                ? workbook.Worksheet(sourceSheetName)
+                : CopySheetFromTemplate(templatePath, sourceSheetName, workbook, targetSheetName, index + 1);
+            worksheet.Name = targetSheetName;
             WriteLargeRow(worksheet, row);
         }
 
-        return BuildDownload(workbook, $"COA大卡[{batchDateText}].xlsx");
+        DeleteUnusedSheets(workbook, Large500MlSheetName, Large1LSheetName, LargeYadongSheetName, "欄位註解");
+        return BuildDownload(workbook, $"COA(大卡)_{batchDateText}.xlsx");
     }
 
     public CoaWorkbookDownload ExportSmallForDownload(
@@ -128,18 +130,39 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
         var orderedRows = OrderRows(rows);
         var templatePath = ResolveTemplatePath(_options.CoaExport.SmallTemplatePath, "COA(小卡).xlsx");
 
-        // 小卡一頁最多九格；超過使用者選擇的格數就複製下一頁 sheet。
-        using var templateWorkbook = new XLWorkbook(templatePath);
-        using var workbook = new XLWorkbook();
-        var template = templateWorkbook.Worksheet(SmallBlankSheetName);
-        RenamePictures(template, 0);
-        var pageCount = Math.Max(1, (int)Math.Ceiling(orderedRows.Count / (double)cardsPerPage));
+        var content = ExportSmallWorkbookToBytes(templatePath, orderedRows, cardsPerPage);
+        return new CoaWorkbookDownload(
+            content,
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            $"COA(小卡)_{batchDateText}.xlsx");
+    }
 
+    private byte[] ExportSmallWorkbookToBytes(string templatePath, IReadOnlyList<QcDataRow> orderedRows, int cardsPerPage)
+    {
+        using var stream = new MemoryStream(File.ReadAllBytes(templatePath));
+        using var document = SpreadsheetDocument.Open(stream, true);
+        var workbookPart = document.WorkbookPart ?? throw new InvalidOperationException("COA small template has no workbook part.");
+        var sheets = workbookPart.Workbook.Sheets ?? throw new InvalidOperationException("COA small template has no sheets.");
+        var templateSheet = sheets.Elements<Sheet>()
+            .FirstOrDefault(sheet => string.Equals(sheet.Name?.Value, SmallBlankSheetName, StringComparison.OrdinalIgnoreCase))
+            ?? throw new InvalidOperationException($"COA small template does not contain worksheet '{SmallBlankSheetName}'.");
+        var templatePart = (WorksheetPart)workbookPart.GetPartById(templateSheet.Id!);
+
+        // 小卡直接修改原 xlsx package，避免重存舊式物件造成 Excel 開啟時修復檔案。
+        var pageCount = Math.Max(1, (int)Math.Ceiling(orderedRows.Count / (double)cardsPerPage));
         for (var pageIndex = 0; pageIndex < pageCount; pageIndex++)
         {
-            var worksheet = template.CopyTo(workbook, BuildUniqueSheetName(workbook, $"COA小卡{pageIndex + 1}", pageIndex + 1));
-            RenamePictures(worksheet, pageIndex + 1);
-            ClearSmallDynamicCells(worksheet);
+            var targetSheetName = BuildUniqueOpenXmlSheetName(workbookPart, $"COA小卡{pageIndex + 1}", pageIndex + 1);
+            var worksheetPart = pageIndex == 0
+                ? templatePart
+                : CloneWorksheetPartWithoutDrawings(workbookPart, templatePart, targetSheetName);
+
+            if (pageIndex == 0)
+            {
+                templateSheet.Name = targetSheetName;
+            }
+
+            ClearSmallDynamicCells(worksheetPart);
 
             var pageRows = orderedRows
                 .Skip(pageIndex * cardsPerPage)
@@ -148,11 +171,16 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
 
             for (var cardIndex = 0; cardIndex < pageRows.Length; cardIndex++)
             {
-                WriteSmallCard(worksheet, SmallCardLayouts[cardIndex], pageRows[cardIndex]);
+                WriteSmallCard(worksheetPart, SmallCardLayouts[cardIndex], pageRows[cardIndex]);
             }
         }
 
-        return BuildDownload(workbook, $"COA小卡[{batchDateText}].xlsx");
+        DeleteOpenXmlSheets(workbookPart, "Report(範本)", "欄位註解");
+        DeleteCalculationChain(workbookPart);
+        ResetWorkbookView(workbookPart);
+        workbookPart.Workbook.Save();
+        document.Dispose();
+        return stream.ToArray();
     }
 
     private string ResolveLargeSourceSheetName(QcDataRow row, CoaLargeTemplateType templateType)
@@ -200,6 +228,23 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
         }
     }
 
+    private void WriteSmallCard(WorksheetPart worksheetPart, SmallCardLayout layout, QcDataRow row)
+    {
+        SetStringCell(worksheetPart, layout.SampleCell, row.SampleName ?? string.Empty);
+        SetStringCell(worksheetPart, layout.MotherLotCell, $"母瓶 NO.  {_options.CsvExport.RawLotId}");
+        SetStringCell(worksheetPart, layout.QcDateCell, $"QC: {FormatDate(row.AnlzTime)}");
+        SetStringCell(worksheetPart, layout.ExpirationCell, $"{row.SampleName}有效期限：{FormatDate(ResolveExpirationDate(row))}");
+
+        var firstResult = SplitCellReference(layout.FirstResultCell);
+        for (var index = 0; index < SmallCardSuffixes.Count; index++)
+        {
+            SetDecimalCell(
+                worksheetPart,
+                $"{firstResult.Column}{firstResult.Row + index}",
+                row.Areas.GetValueOrDefault(SmallCardSuffixes[index]));
+        }
+    }
+
     private static void ClearSmallDynamicCells(IXLWorksheet worksheet)
     {
         foreach (var layout in SmallCardLayouts)
@@ -213,6 +258,23 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
             for (var index = 0; index < SmallCardSuffixes.Count; index++)
             {
                 resultCell.CellBelow(index).Clear(XLClearOptions.Contents);
+            }
+        }
+    }
+
+    private static void ClearSmallDynamicCells(WorksheetPart worksheetPart)
+    {
+        foreach (var layout in SmallCardLayouts)
+        {
+            SetStringCell(worksheetPart, layout.SampleCell, string.Empty);
+            SetStringCell(worksheetPart, layout.MotherLotCell, string.Empty);
+            SetStringCell(worksheetPart, layout.QcDateCell, string.Empty);
+            SetStringCell(worksheetPart, layout.ExpirationCell, string.Empty);
+
+            var firstResult = SplitCellReference(layout.FirstResultCell);
+            for (var index = 0; index < SmallCardSuffixes.Count; index++)
+            {
+                SetStringCell(worksheetPart, $"{firstResult.Column}{firstResult.Row + index}", string.Empty);
             }
         }
     }
@@ -269,6 +331,227 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
         }
     }
 
+    private static WorksheetPart CloneWorksheetPartWithoutDrawings(WorkbookPart workbookPart, WorksheetPart templatePart, string sheetName)
+    {
+        var newPart = workbookPart.AddNewPart<WorksheetPart>();
+        using (var sourceStream = templatePart.GetStream(FileMode.Open, FileAccess.Read))
+        using (var targetStream = newPart.GetStream(FileMode.Create, FileAccess.Write))
+        {
+            RemoveDrawingElements(sourceStream, targetStream);
+        }
+
+        var sheets = workbookPart.Workbook.Sheets ?? workbookPart.Workbook.AppendChild(new Sheets());
+        var nextSheetId = sheets.Elements<Sheet>().Select(sheet => sheet.SheetId?.Value ?? 0U).DefaultIfEmpty().Max() + 1;
+        sheets.Append(new Sheet
+        {
+            Id = workbookPart.GetIdOfPart(newPart),
+            SheetId = nextSheetId,
+            Name = sheetName
+        });
+
+        return newPart;
+    }
+
+    private static void DeleteOpenXmlSheets(WorkbookPart workbookPart, params string[] sheetNames)
+    {
+        var sheets = workbookPart.Workbook.Sheets;
+        if (sheets is null)
+        {
+            return;
+        }
+
+        foreach (var sheetName in sheetNames)
+        {
+            var sheet = sheets.Elements<Sheet>()
+                .FirstOrDefault(item => string.Equals(item.Name?.Value, sheetName, StringComparison.OrdinalIgnoreCase));
+            if (sheet?.Id is null)
+            {
+                continue;
+            }
+
+            var part = workbookPart.GetPartById(sheet.Id!);
+            sheet.Remove();
+            workbookPart.DeletePart(part);
+        }
+    }
+
+    private static void ResetWorkbookView(WorkbookPart workbookPart)
+    {
+        foreach (var view in workbookPart.Workbook.BookViews?.Elements<WorkbookView>() ?? [])
+        {
+            view.ActiveTab = 0U;
+            view.FirstSheet = 0U;
+        }
+    }
+
+    private static void DeleteCalculationChain(WorkbookPart workbookPart)
+    {
+        if (workbookPart.CalculationChainPart is not null)
+        {
+            workbookPart.DeletePart(workbookPart.CalculationChainPart);
+        }
+
+        workbookPart.Workbook.CalculationProperties ??= new CalculationProperties();
+        workbookPart.Workbook.CalculationProperties.ForceFullCalculation = true;
+        workbookPart.Workbook.CalculationProperties.FullCalculationOnLoad = true;
+    }
+
+    private static void SetStringCell(WorksheetPart worksheetPart, string cellReference, string value)
+    {
+        var cell = GetOrCreateCell(worksheetPart, cellReference);
+        cell.CellFormula?.Remove();
+        cell.DataType = CellValues.String;
+        cell.CellValue = new CellValue(value);
+    }
+
+    private static void SetDecimalCell(WorksheetPart worksheetPart, string cellReference, decimal? value)
+    {
+        var cell = GetOrCreateCell(worksheetPart, cellReference);
+        cell.CellFormula?.Remove();
+        if (!value.HasValue)
+        {
+            cell.DataType = CellValues.String;
+            cell.CellValue = new CellValue(string.Empty);
+            return;
+        }
+
+        cell.DataType = null;
+        cell.CellValue = new CellValue(value.Value.ToString(CultureInfo.InvariantCulture));
+    }
+
+    private static Cell GetOrCreateCell(WorksheetPart worksheetPart, string cellReference)
+    {
+        var worksheet = worksheetPart.Worksheet;
+        var sheetData = worksheet.GetFirstChild<SheetData>() ?? worksheet.AppendChild(new SheetData());
+        var reference = SplitCellReference(cellReference);
+        var row = sheetData.Elements<Row>().FirstOrDefault(item => item.RowIndex?.Value == reference.Row);
+        if (row is null)
+        {
+            row = new Row { RowIndex = reference.Row };
+            var nextRow = sheetData.Elements<Row>().FirstOrDefault(item => (item.RowIndex?.Value ?? 0U) > reference.Row);
+            sheetData.InsertBefore(row, nextRow);
+        }
+
+        var cell = row.Elements<Cell>()
+            .FirstOrDefault(item => string.Equals(item.CellReference?.Value, cellReference, StringComparison.OrdinalIgnoreCase));
+        if (cell is not null)
+        {
+            return cell;
+        }
+
+        cell = new Cell { CellReference = cellReference };
+        var nextCell = row.Elements<Cell>()
+            .FirstOrDefault(item => ColumnIndex(SplitCellReference(item.CellReference?.Value ?? "A1").Column) > ColumnIndex(reference.Column));
+        row.InsertBefore(cell, nextCell);
+        return cell;
+    }
+
+    private static IXLWorksheet CopySheetFromTemplate(
+        string templatePath,
+        string sourceSheetName,
+        XLWorkbook targetWorkbook,
+        string targetSheetName,
+        int sheetIndex,
+        bool stripDrawings = false)
+    {
+        using var templateWorkbook = stripDrawings
+            ? OpenSmallTemplateWorkbook(templatePath)
+            : new XLWorkbook(templatePath);
+        var sourceSheet = templateWorkbook.Worksheet(sourceSheetName);
+        RenamePictures(sourceSheet, sheetIndex);
+        var worksheet = sourceSheet.CopyTo(targetWorkbook, targetSheetName);
+        RenamePictures(worksheet, sheetIndex);
+        return worksheet;
+    }
+
+    private static XLWorkbook OpenSmallTemplateWorkbook(string templatePath)
+    {
+        // 小卡原檔含舊式 WMF drawing；ClosedXML 重存後 Excel 可能無法開啟，因此匯出前移除 drawing parts，保留儲存格樣式與列印版型。
+        return new XLWorkbook(RemoveDrawingParts(templatePath));
+    }
+
+    private static MemoryStream RemoveDrawingParts(string templatePath)
+    {
+        var stream = new MemoryStream();
+        using (var source = ZipFile.OpenRead(templatePath))
+        using (var target = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true))
+        {
+            foreach (var entry in source.Entries)
+            {
+                if (entry.FullName.StartsWith("xl/drawings/", StringComparison.OrdinalIgnoreCase) ||
+                    entry.FullName.StartsWith("xl/media/", StringComparison.OrdinalIgnoreCase) ||
+                    entry.FullName.StartsWith("xl/worksheets/_rels/", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var targetEntry = target.CreateEntry(entry.FullName, CompressionLevel.Optimal);
+                using var sourceStream = entry.Open();
+                using var targetStream = targetEntry.Open();
+
+                if (entry.FullName.StartsWith("xl/worksheets/sheet", StringComparison.OrdinalIgnoreCase) &&
+                    entry.FullName.EndsWith(".xml", StringComparison.OrdinalIgnoreCase))
+                {
+                    RemoveDrawingElements(sourceStream, targetStream);
+                    continue;
+                }
+
+                sourceStream.CopyTo(targetStream);
+            }
+        }
+
+        stream.Position = 0;
+        return stream;
+    }
+
+    private static void RemoveDrawingElements(Stream sourceStream, Stream targetStream)
+    {
+        XNamespace spreadsheetNamespace = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+        var document = XDocument.Load(sourceStream);
+        document.Descendants(spreadsheetNamespace + "drawing").Remove();
+        document.Descendants(spreadsheetNamespace + "legacyDrawing").Remove();
+        document.Save(targetStream);
+    }
+
+    private static (string Column, uint Row) SplitCellReference(string cellReference)
+    {
+        var column = new StringBuilder();
+        var row = new StringBuilder();
+        foreach (var character in cellReference)
+        {
+            if (char.IsLetter(character))
+            {
+                column.Append(character);
+            }
+            else if (char.IsDigit(character))
+            {
+                row.Append(character);
+            }
+        }
+
+        return (column.ToString().ToUpperInvariant(), uint.Parse(row.ToString(), CultureInfo.InvariantCulture));
+    }
+
+    private static int ColumnIndex(string column)
+    {
+        var index = 0;
+        foreach (var character in column)
+        {
+            index = index * 26 + (char.ToUpperInvariant(character) - 'A' + 1);
+        }
+
+        return index;
+    }
+
+    private static void DeleteUnusedSheets(XLWorkbook workbook, params string[] templateSheetNames)
+    {
+        foreach (var sheetName in templateSheetNames)
+        {
+            var worksheet = workbook.Worksheets.FirstOrDefault(sheet => string.Equals(sheet.Name, sheetName, StringComparison.OrdinalIgnoreCase));
+            worksheet?.Delete();
+        }
+    }
+
     private static CoaWorkbookDownload BuildDownload(XLWorkbook workbook, string fileName)
     {
         using var stream = new MemoryStream();
@@ -297,6 +580,34 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
             }
 
             if (!workbook.Worksheets.Any(sheet => string.Equals(sheet.Name, candidate, StringComparison.OrdinalIgnoreCase)))
+            {
+                return candidate;
+            }
+        }
+    }
+
+    private static string BuildUniqueOpenXmlSheetName(WorkbookPart workbookPart, string preferredName, int index)
+    {
+        var usedNames = workbookPart.Workbook.Sheets?.Elements<Sheet>()
+            .Select(sheet => sheet.Name?.Value ?? string.Empty)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase) ?? [];
+
+        var baseName = SanitizeSheetName(string.IsNullOrWhiteSpace(preferredName) ? $"COA{index}" : preferredName);
+        if (baseName.Length > 25)
+        {
+            baseName = baseName[..25];
+        }
+
+        for (var attempt = 0; ; attempt++)
+        {
+            var suffix = attempt == 0 ? string.Empty : $"_{attempt + 1}";
+            var candidate = $"{baseName}{suffix}";
+            if (candidate.Length > 31)
+            {
+                candidate = candidate[..31];
+            }
+
+            if (!usedNames.Contains(candidate))
             {
                 return candidate;
             }

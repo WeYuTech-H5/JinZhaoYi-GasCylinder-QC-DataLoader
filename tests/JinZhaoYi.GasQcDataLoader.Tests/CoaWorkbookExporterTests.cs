@@ -21,7 +21,7 @@ public sealed class CoaWorkbookExporterTests
 
         var download = exporter.ExportLargeForDownload([halfLiter, oneLiter], "20260521", CoaLargeTemplateType.Standard);
 
-        download.FileName.Should().Be("COA大卡[20260521].xlsx");
+        download.FileName.Should().Be("COA(大卡)_20260521.xlsx");
         using var workbook = Open(download);
         workbook.Worksheets.Select(sheet => sheet.Name).Should().BeEquivalentTo("COA_STD-050", "COA_STD-100");
         workbook.Worksheet("COA_STD-050").Cell("E52").GetDouble().Should().BeApproximately(101.2, 0.0001);
@@ -62,6 +62,7 @@ public sealed class CoaWorkbookExporterTests
 
         var download = exporter.ExportSmallForDownload(rows, "20260521", 9);
 
+        download.FileName.Should().Be("COA(小卡)_20260521.xlsx");
         using var workbook = Open(download);
         workbook.Worksheets.Count.Should().Be(2);
         workbook.Worksheet("COA小卡1").Cell("F6").GetString().Should().Be("STD-N001");
