@@ -203,42 +203,68 @@ public sealed class DapperRepository(
         """;
 
     private const string StdRawForRfSqlFormat = """
+        WITH Ranked AS (
+            SELECT *,
+                ROW_NUMBER() OVER (
+                    PARTITION BY ISNULL(LotNo, ''), SampleNo, ISNULL(SampleName, '')
+                    ORDER BY AnlzTime DESC, CREATE_TIME DESC, SID DESC
+                ) AS rn
+            FROM dbo.{0}
+            WHERE
+                @Search IS NULL
+                OR LotNo LIKE @SearchPattern
+                OR SampleName LIKE @SearchPattern
+                OR CAST(SampleNo AS NVARCHAR(32)) LIKE @SearchPattern
+                OR DataFilename LIKE @SearchPattern
+                OR SourceFolderName LIKE @SearchPattern
+        )
         SELECT TOP (@Limit) *
-        FROM dbo.{0}
-        WHERE
-            @Search IS NULL
-            OR LotNo LIKE @SearchPattern
-            OR SampleName LIKE @SearchPattern
-            OR CAST(SampleNo AS NVARCHAR(32)) LIKE @SearchPattern
-            OR DataFilename LIKE @SearchPattern
-            OR SourceFolderName LIKE @SearchPattern
+        FROM Ranked
+        WHERE rn = 1
         ORDER BY AnlzTime DESC, CREATE_TIME DESC, SID DESC
         """;
 
     private const string StdRawForRfPagedSqlFormat = """
+        WITH Ranked AS (
+            SELECT *,
+                ROW_NUMBER() OVER (
+                    PARTITION BY ISNULL(LotNo, ''), SampleNo, ISNULL(SampleName, '')
+                    ORDER BY AnlzTime DESC, CREATE_TIME DESC, SID DESC
+                ) AS rn
+            FROM dbo.{0}
+            WHERE
+                @Search IS NULL
+                OR LotNo LIKE @SearchPattern
+                OR SampleName LIKE @SearchPattern
+                OR CAST(SampleNo AS NVARCHAR(32)) LIKE @SearchPattern
+                OR DataFilename LIKE @SearchPattern
+                OR SourceFolderName LIKE @SearchPattern
+        )
         SELECT *
-        FROM dbo.{0}
-        WHERE
-            @Search IS NULL
-            OR LotNo LIKE @SearchPattern
-            OR SampleName LIKE @SearchPattern
-            OR CAST(SampleNo AS NVARCHAR(32)) LIKE @SearchPattern
-            OR DataFilename LIKE @SearchPattern
-            OR SourceFolderName LIKE @SearchPattern
+        FROM Ranked
+        WHERE rn = 1
         ORDER BY AnlzTime DESC, CREATE_TIME DESC, SID DESC
         OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY
         """;
 
     private const string StdRawForRfCountSqlFormat = """
         SELECT COUNT(1)
-        FROM dbo.{0}
-        WHERE
-            @Search IS NULL
-            OR LotNo LIKE @SearchPattern
-            OR SampleName LIKE @SearchPattern
-            OR CAST(SampleNo AS NVARCHAR(32)) LIKE @SearchPattern
-            OR DataFilename LIKE @SearchPattern
-            OR SourceFolderName LIKE @SearchPattern
+        FROM (
+            SELECT
+                ROW_NUMBER() OVER (
+                    PARTITION BY ISNULL(LotNo, ''), SampleNo, ISNULL(SampleName, '')
+                    ORDER BY AnlzTime DESC, CREATE_TIME DESC, SID DESC
+                ) AS rn
+            FROM dbo.{0}
+            WHERE
+                @Search IS NULL
+                OR LotNo LIKE @SearchPattern
+                OR SampleName LIKE @SearchPattern
+                OR CAST(SampleNo AS NVARCHAR(32)) LIKE @SearchPattern
+                OR DataFilename LIKE @SearchPattern
+                OR SourceFolderName LIKE @SearchPattern
+        ) grouped
+        WHERE rn = 1
         """;
 
     private const string AllStdRawRowsSqlFormat = """
