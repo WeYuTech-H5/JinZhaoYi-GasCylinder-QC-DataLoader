@@ -54,6 +54,24 @@ public sealed class QcDataRow
 
     public DateTime? EditTime { get; set; }
 
+    public string? ExcelPpbExportId { get; set; }
+
+    public string? ExcelExportKey { get; set; }
+
+    public DateTime? ExcelExportedAt { get; set; }
+
+    public string? ExcelExportUser { get; set; }
+
+    public DateTime? ExcelStartDate { get; set; }
+
+    public DateTime? ExcelEndDate { get; set; }
+
+    public string? ExcelRfId { get; set; }
+
+    public string? ExcelStdRawIds { get; set; }
+
+    public string? ExcelPortRawIds { get; set; }
+
     public Dictionary<string, decimal?> Areas { get; } = new(StringComparer.OrdinalIgnoreCase);
 
     public Dictionary<string, decimal?> Ppbs { get; } = new(StringComparer.OrdinalIgnoreCase);
@@ -89,7 +107,16 @@ public sealed class QcDataRow
             CreateUser = CreateUser,
             CreateTime = CreateTime,
             EditUser = EditUser,
-            EditTime = EditTime
+            EditTime = EditTime,
+            ExcelPpbExportId = ExcelPpbExportId,
+            ExcelExportKey = ExcelExportKey,
+            ExcelExportedAt = ExcelExportedAt,
+            ExcelExportUser = ExcelExportUser,
+            ExcelStartDate = ExcelStartDate,
+            ExcelEndDate = ExcelEndDate,
+            ExcelRfId = ExcelRfId,
+            ExcelStdRawIds = ExcelStdRawIds,
+            ExcelPortRawIds = ExcelPortRawIds
         };
     }
 

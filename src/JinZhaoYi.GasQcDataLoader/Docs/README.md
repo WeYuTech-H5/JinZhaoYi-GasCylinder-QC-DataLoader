@@ -84,13 +84,14 @@ dotnet run --project .\src\JinZhaoYi.GasQcDataLoader\JinZhaoYi.GasQcDataLoader.c
 | `GET /api/export-groups?startDate=yyyyMMdd&endDate=yyyyMMdd` | 從 DB raw tables 讀指定日期區間，依 STD/PORT、Port、Lot、SampleName 分組，供 UI 勾選。 |
 | `GET /api/rf-options` | 從 RF table 讀可選 RF rows。 |
 | `POST /api/exports/query2-excel` | 依 UI 選取的 RF、STD raw、PORT raw 從 DB 重新產生 Query2 Excel。 |
-| `POST /api/exports/port-ppb-csv` | 依選取 PORT_PPB rows 產生 TO14C CSV。 |
+| `GET /api/excel-ppb-options?batchDate=yyyyMMdd&page=1&pageSize=50` | 讀取使用者成功產生 Query2 Excel 後保存的 PPB history，供 CSV 頁面勾選。 |
+| `POST /api/exports/excel-ppb-csv` | 依選取的 Excel PPB history rows 產生 TO14C CSV。 |
 | `GET /api/downloads/cylinder-qc/{batchDate}` | 下載已產生的 `Cylinder_Qc[{batchDate}].xlsx`。 |
 | `GET /api/downloads/to14c-csv/{sampleName}` | 下載指定 sample 的 TO14C CSV。 |
 
 ## TO14C PORT_PPB CSV 欄位規則
 
-`POST /api/exports/port-ppb-csv` 會依選取的 PORT_PPB row 讀 `ZZ_NF_GAS_QC_LOT_PORT_PPB`。CSV 中 `Item,N,MEAN,SD,MAX,MIN,VALUE,DL` 的來源如下：
+`POST /api/exports/excel-ppb-csv` 會依選取的 Excel PPB history row 讀 `ZZ_NF_GAS_QC_EXCEL_PPB_HISTORY`。此表是 Query2 Excel 成功產生後的 PPB 快照，不是匯入流程即時計算的 `ZZ_NF_GAS_QC_LOT_PORT_PPB`。CSV 中 `Item,N,MEAN,SD,MAX,MIN,VALUE,DL` 的來源如下：
 
 | 欄位 | 來源 / 規則 |
 | --- | --- |

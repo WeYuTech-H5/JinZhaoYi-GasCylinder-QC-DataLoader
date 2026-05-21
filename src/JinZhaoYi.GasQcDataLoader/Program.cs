@@ -207,11 +207,33 @@ static void MapDownloadEndpoints(WebApplication app)
         return Results.Ok(BuildPortPpbGroupResponse(parsedBatchDate, options));
     });
 
+    app.MapGet("/api/excel-ppb-options", async (
+        string batchDate,
+        int? page,
+        int? pageSize,
+        IDapperRepository repository,
+        CancellationToken cancellationToken) =>
+    {
+        if (!TryParseBatchDate(batchDate, out var parsedBatchDate))
+        {
+            return Results.BadRequest(new { message = "batchDate must use yyyyMMdd format." });
+        }
+
+        if (!TryValidatePagination(page, pageSize, out var normalizedPage, out var normalizedPageSize, out var validationMessage))
+        {
+            return Results.BadRequest(new { message = validationMessage });
+        }
+
+        var pagedOptions = await repository.GetExcelPpbExportOptionsAsync(parsedBatchDate, normalizedPage, normalizedPageSize, cancellationToken);
+        return Results.Ok(BuildPagedExcelPpbGroupResponse(parsedBatchDate, pagedOptions));
+    });
+
     app.MapPost("/api/exports/query2-excel", async (
         Query2ExcelExportRequest request,
         IDapperRepository repository,
         IQuery2SelectionExportBuilder exportBuilder,
         IQuery2WorkbookExporter exporter,
+        IOptions<SchedulerOptions> options,
         CancellationToken cancellationToken) =>
     {
         if (!TryValidateQuery2ExportRequest(request, out var startDate, out var endDate, out var rfId, out var stdRawIds, out var portRawIds, out var validationMessage))
@@ -243,12 +265,28 @@ static void MapDownloadEndpoints(WebApplication app)
         var endDateText = endDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
         var exportDateText = startDate.Date == endDate.Date ? startDateText : $"{startDateText}-{endDateText}";
         var content = await exporter.ExportAsync(exportDateText, rows, cancellationToken);
-        return content is null
-            ? Results.NotFound(new { message = "No Query2 Excel content was generated." })
-            : Results.File(
-                content,
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                $"Cylinder_Qc[{exportDateText}].xlsx");
+        if (content is null)
+        {
+            return Results.NotFound(new { message = "No Query2 Excel content was generated." });
+        }
+
+        // 只有成功產生 Excel 的 PPB 才能進入 CSV 候選清單，避免使用者下載到沒有對應快照的資料。
+        await repository.UpsertExcelPpbHistoryAsync(
+            new ExcelPpbHistorySaveRequest(
+                startDate,
+                endDate,
+                rfId,
+                stdRawIds,
+                portRawIds,
+                rows.Where(row => row.RowType == Query2ExportRowType.Ppb).Select(row => row.Row).ToArray(),
+                DateTime.Now,
+                options.Value.CreateUser),
+            cancellationToken);
+
+        return Results.File(
+            content,
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            $"Cylinder_Qc[{exportDateText}].xlsx");
     });
 
     app.MapPost("/api/exports/port-ppb-csv", async (
@@ -266,6 +304,31 @@ static void MapDownloadEndpoints(WebApplication app)
         if (rows.Count == 0)
         {
             return Results.NotFound(new { message = "No PORT PPB rows found for selected export data." });
+        }
+
+        var batchDateText = batchDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
+        var download = exporter.ExportForDownload(rows, batchDateText);
+        return Results.File(
+            download.Content,
+            download.ContentType,
+            download.FileName);
+    });
+
+    app.MapPost("/api/exports/excel-ppb-csv", async (
+        ExportRequest request,
+        IDapperRepository repository,
+        IPortPpbCsvExporter exporter,
+        CancellationToken cancellationToken) =>
+    {
+        if (!TryValidateExportRequest(request, out var batchDate, out var selectedIds, out var validationMessage))
+        {
+            return Results.BadRequest(new { message = validationMessage });
+        }
+
+        var rows = await repository.GetExcelPpbRowsForCsvAsync(batchDate, selectedIds, cancellationToken);
+        if (rows.Count == 0)
+        {
+            return Results.NotFound(new { message = "No Excel PPB history rows found for selected export data." });
         }
 
         var batchDateText = batchDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
@@ -521,6 +584,23 @@ static PagedExportGroupResponse BuildPagedPortPpbGroupResponse(
         options.TotalCount);
 }
 
+static PagedExportGroupResponse BuildPagedExcelPpbGroupResponse(
+    DateTime batchDate,
+    PagedResponse<ExportOption> options)
+{
+    var groups = BuildExcelPpbGroups(options.Items);
+
+    var batchDateText = batchDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
+    return new PagedExportGroupResponse(
+        batchDateText,
+        batchDateText,
+        [],
+        groups,
+        options.Page,
+        options.PageSize,
+        options.TotalCount);
+}
+
 static ExportGroup[] BuildPortPpbGroups(IReadOnlyCollection<ExportOption> options) =>
     options
         .GroupBy(option => new
@@ -549,6 +629,41 @@ static ExportGroup[] BuildPortPpbGroups(IReadOnlyCollection<ExportOption> option
             var first = group.First();
             var groupId = string.Join("|", "Ppb", first.Port, first.LotNo, first.SampleName);
             return new ExportGroup(groupId, "Ppb", first.Port, first.LotNo, first.SampleName, rows);
+        })
+        .OrderBy(group => group.Port, StringComparer.OrdinalIgnoreCase)
+        .ThenBy(group => group.LotNo, StringComparer.OrdinalIgnoreCase)
+        .ThenBy(group => group.SampleName, StringComparer.OrdinalIgnoreCase)
+        .ToArray();
+
+static ExportGroup[] BuildExcelPpbGroups(IReadOnlyCollection<ExportOption> options) =>
+    options
+        .GroupBy(option => new
+        {
+            ExportKey = option.GroupKey ?? string.Empty,
+            Port = option.Port,
+            LotNo = option.LotNo,
+            SampleName = option.SampleName ?? string.Empty
+        })
+        .Select(group =>
+        {
+            var rows = group
+                .OrderBy(option => option.AnlzTime)
+                .ThenBy(option => option.SampleNo)
+                .ThenBy(option => option.SourceFolderName, StringComparer.OrdinalIgnoreCase)
+                .Select(option => new ExportRawOption(
+                    option.Id,
+                    option.SourceKind,
+                    option.SourceFolderName,
+                    option.Port,
+                    option.LotNo,
+                    option.SampleName,
+                    option.SampleNo,
+                    option.AnlzTime))
+                .ToArray();
+
+            var first = group.First();
+            var groupId = string.Join("|", "ExcelPpb", group.Key.ExportKey, first.Port, first.LotNo, first.SampleName);
+            return new ExportGroup(groupId, "ExcelPpb", first.Port, first.LotNo, first.SampleName, rows);
         })
         .OrderBy(group => group.Port, StringComparer.OrdinalIgnoreCase)
         .ThenBy(group => group.LotNo, StringComparer.OrdinalIgnoreCase)

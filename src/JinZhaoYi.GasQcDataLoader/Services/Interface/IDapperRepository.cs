@@ -75,6 +75,21 @@ public interface IDapperRepository
         IReadOnlyCollection<string> selectedIds,
         CancellationToken cancellationToken);
 
+    Task UpsertExcelPpbHistoryAsync(
+        ExcelPpbHistorySaveRequest request,
+        CancellationToken cancellationToken);
+
+    Task<PagedResponse<ExportOption>> GetExcelPpbExportOptionsAsync(
+        DateTime batchDate,
+        int page,
+        int pageSize,
+        CancellationToken cancellationToken);
+
+    Task<IReadOnlyList<QcDataRow>> GetExcelPpbRowsForCsvAsync(
+        DateTime batchDate,
+        IReadOnlyCollection<string> selectedIds,
+        CancellationToken cancellationToken);
+
     Task ExecuteImportAsync(ImportWriteSet writeSet, QcDataRow rf, DateTime importDate, CancellationToken cancellationToken);
 
     Task UpsertImportErrorLogsAsync(

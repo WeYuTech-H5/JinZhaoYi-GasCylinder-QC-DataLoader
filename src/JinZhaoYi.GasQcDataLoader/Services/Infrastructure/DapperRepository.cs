@@ -1,4 +1,5 @@
 using System.Data;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using Dapper;
@@ -135,6 +136,57 @@ public sealed class DapperRepository(
             rows.AnlzTime,
             rows.SampleNo,
             rows.SourceFolderName
+        """;
+
+    private const string ExcelPpbGroupCountSqlFormat = """
+        SELECT COUNT(1)
+        FROM (
+            SELECT ExcelExportKey, Port, LotNo, SampleName
+            FROM dbo.{0}
+            WHERE CAST(AnlzTime AS date) = @BatchDate
+              AND AnlzTime IS NOT NULL
+              AND ExcelPpbExportId IS NOT NULL
+            GROUP BY ExcelExportKey, Port, LotNo, SampleName
+        ) grouped
+        """;
+
+    private const string ExcelPpbPagedGroupsSqlFormat = """
+        WITH PageGroups AS (
+            SELECT ExcelExportKey, Port, LotNo, SampleName
+            FROM dbo.{0}
+            WHERE CAST(AnlzTime AS date) = @BatchDate
+              AND AnlzTime IS NOT NULL
+              AND ExcelPpbExportId IS NOT NULL
+            GROUP BY ExcelExportKey, Port, LotNo, SampleName
+            ORDER BY Port, LotNo, SampleName, ExcelExportKey
+            OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY
+        )
+        SELECT rows.*
+        FROM dbo.{0} rows
+        INNER JOIN PageGroups pageGroups
+            ON rows.ExcelExportKey = pageGroups.ExcelExportKey
+           AND ISNULL(rows.Port, '') = ISNULL(pageGroups.Port, '')
+           AND ISNULL(rows.LotNo, '') = ISNULL(pageGroups.LotNo, '')
+           AND ISNULL(rows.SampleName, '') = ISNULL(pageGroups.SampleName, '')
+        WHERE CAST(rows.AnlzTime AS date) = @BatchDate
+          AND rows.AnlzTime IS NOT NULL
+          AND rows.ExcelPpbExportId IS NOT NULL
+        ORDER BY
+            rows.Port,
+            rows.LotNo,
+            rows.SampleName,
+            rows.ExcelExportedAt DESC,
+            rows.AnlzTime,
+            rows.SampleNo,
+            rows.SourceFolderName
+        """;
+
+    private const string ExcelPpbRowsForCsvSqlFormat = """
+        SELECT *
+        FROM dbo.{0}
+        WHERE CAST(AnlzTime AS date) = @BatchDate
+          AND ExcelPpbExportId IN @SelectedIds
+        ORDER BY AnlzTime, SampleNo, SourceFolderName, SampleName
         """;
 
     private const string AllRfRowsSqlFormat = """
@@ -679,6 +731,130 @@ public sealed class DapperRepository(
             .ToArray();
     }
 
+    public async Task UpsertExcelPpbHistoryAsync(
+        ExcelPpbHistorySaveRequest request,
+        CancellationToken cancellationToken)
+    {
+        var excelExportKey = ComputeExcelExportKey(request);
+        await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
+        await connection.OpenAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
+
+        try
+        {
+            // 相同 ExcelExportKey 代表同一組 Excel 匯出條件；重匯出時覆蓋舊快照。
+            var deleteSql = $"DELETE FROM dbo.{Quote(_tables.ExcelPpbHistory)} WHERE ExcelExportKey = @ExcelExportKey";
+            await connection.ExecuteAsync(
+                new CommandDefinition(
+                    deleteSql,
+                    new { ExcelExportKey = excelExportKey },
+                    transaction,
+                    cancellationToken: cancellationToken));
+
+            if (request.PpbRows.Count > 0)
+            {
+                var sid = await GetMaxSidAsync(connection, transaction, _tables.ExcelPpbHistory, request.ExportedAt.Date, cancellationToken);
+                var normalizedStdRawIds = FormatSelectedIds(request.StdRawIds);
+                var normalizedPortRawIds = FormatSelectedIds(request.PortRawIds);
+
+                foreach (var row in request.PpbRows)
+                {
+                    var historyRow = row.DeepClone();
+                    historyRow.Sid = ++sid;
+                    historyRow.ExcelExportKey = excelExportKey;
+                    historyRow.ExcelPpbExportId = ComputeExcelPpbExportId(excelExportKey, historyRow);
+                    historyRow.ExcelExportedAt = request.ExportedAt;
+                    historyRow.ExcelExportUser = request.ExportUser;
+                    historyRow.ExcelStartDate = request.StartDate.Date;
+                    historyRow.ExcelEndDate = request.EndDate.Date;
+                    historyRow.ExcelRfId = request.RfId;
+                    historyRow.ExcelStdRawIds = normalizedStdRawIds;
+                    historyRow.ExcelPortRawIds = normalizedPortRawIds;
+                    historyRow.CreateUser = request.ExportUser;
+                    historyRow.CreateTime = request.ExportedAt;
+                    historyRow.EditUser = request.ExportUser;
+                    historyRow.EditTime = request.ExportedAt;
+
+                    await InsertExcelPpbHistoryRowAsync(connection, transaction, historyRow, cancellationToken);
+                }
+            }
+
+            await transaction.CommitAsync(cancellationToken);
+        }
+        catch
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            throw;
+        }
+    }
+
+    public async Task<PagedResponse<ExportOption>> GetExcelPpbExportOptionsAsync(
+        DateTime batchDate,
+        int page,
+        int pageSize,
+        CancellationToken cancellationToken)
+    {
+        var normalizedPage = Math.Max(1, page);
+        var normalizedPageSize = Math.Clamp(pageSize, 1, 500);
+        var parameters = new
+        {
+            BatchDate = batchDate.Date,
+            Offset = (normalizedPage - 1) * normalizedPageSize,
+            PageSize = normalizedPageSize
+        };
+
+        await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
+        var countSql = string.Format(ExcelPpbGroupCountSqlFormat, Quote(_tables.ExcelPpbHistory));
+        var totalCount = await connection.ExecuteScalarAsync<int>(
+            new CommandDefinition(countSql, parameters, cancellationToken: cancellationToken));
+
+        var pageSql = string.Format(ExcelPpbPagedGroupsSqlFormat, Quote(_tables.ExcelPpbHistory));
+        var rows = await connection.QueryAsync(
+            new CommandDefinition(pageSql, parameters, cancellationToken: cancellationToken));
+
+        var items = rows
+            .Select(DynamicToQcDataRow)
+            .Where(row => !string.IsNullOrWhiteSpace(row.ExcelPpbExportId))
+            .Select(ToExcelPpbExportOption)
+            .OrderBy(option => option.AnlzTime)
+            .ThenBy(option => option.Port, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(option => option.SourceFolderName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(option => option.DisplayName, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        return new PagedResponse<ExportOption>(normalizedPage, normalizedPageSize, totalCount, items);
+    }
+
+    public async Task<IReadOnlyList<QcDataRow>> GetExcelPpbRowsForCsvAsync(
+        DateTime batchDate,
+        IReadOnlyCollection<string> selectedIds,
+        CancellationToken cancellationToken)
+    {
+        var selectedSet = selectedIds
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (selectedSet.Count == 0)
+        {
+            return [];
+        }
+
+        await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
+        var sql = string.Format(ExcelPpbRowsForCsvSqlFormat, Quote(_tables.ExcelPpbHistory));
+        var rows = await connection.QueryAsync(
+            new CommandDefinition(
+                sql,
+                new { BatchDate = batchDate.Date, SelectedIds = selectedSet.ToArray() },
+                cancellationToken: cancellationToken));
+
+        return rows
+            .Select(DynamicToQcDataRow)
+            .OrderBy(row => row.AnlzTime)
+            .ThenBy(row => row.SampleNo)
+            .ThenBy(row => row.SourceFolderName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(row => row.SampleName, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
     public async Task UpsertImportErrorLogsAsync(
         IReadOnlyCollection<ImportErrorReportRow> rows,
         CancellationToken cancellationToken)
@@ -903,6 +1079,32 @@ public sealed class DapperRepository(
             row.DataFilename,
             row.DataFilepath,
             row.AnlzTime);
+    }
+
+    private static ExportOption ToExcelPpbExportOption(QcDataRow row)
+    {
+        var exportedAtText = row.ExcelExportedAt?.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) ?? "Excel";
+        var exportUserText = string.IsNullOrWhiteSpace(row.ExcelExportUser) ? string.Empty : $" / {row.ExcelExportUser}";
+        var displayName = !string.IsNullOrWhiteSpace(row.SampleName)
+            ? row.SampleName
+            : row.ExcelPpbExportId ?? RawDataIdentity.FromRow(row).ToStableId();
+
+        return new ExportOption(
+            row.ExcelPpbExportId ?? string.Empty,
+            displayName,
+            row.AnlzTime?.ToString("yyyyMMdd") ?? string.Empty,
+            "ExcelPpb",
+            $"{exportedAtText}{exportUserText}",
+            row.Port ?? string.Empty,
+            row.LotNo ?? string.Empty,
+            row.SampleName,
+            row.SampleNo,
+            row.DataFilename,
+            row.DataFilepath,
+            row.AnlzTime)
+        {
+            GroupKey = row.ExcelExportKey
+        };
     }
 
     private static int RowTypeOrder(Query2ExportRowType rowType) =>
@@ -1291,6 +1493,26 @@ public sealed class DapperRepository(
         await connection.ExecuteAsync(new CommandDefinition(sql, parametersBag, transaction, cancellationToken: cancellationToken));
     }
 
+    private async Task InsertExcelPpbHistoryRowAsync(
+        SqlConnection connection,
+        IDbTransaction transaction,
+        QcDataRow row,
+        CancellationToken cancellationToken)
+    {
+        var values = BuildExcelPpbHistoryValues(row);
+        var columns = string.Join(", ", values.Keys.Select(Quote));
+        var parameters = string.Join(", ", values.Keys.Select(key => "@" + ParameterName(key)));
+        var sql = $"INSERT INTO dbo.{Quote(_tables.ExcelPpbHistory)} ({columns}) VALUES ({parameters})";
+        var parametersBag = new DynamicParameters();
+
+        foreach (var (key, value) in values)
+        {
+            parametersBag.Add(ParameterName(key), value);
+        }
+
+        await connection.ExecuteAsync(new CommandDefinition(sql, parametersBag, transaction, cancellationToken: cancellationToken));
+    }
+
     private static Dictionary<string, object?> BuildValues(QcDataRow row, bool includePpb, bool includeRt, bool includeIdRefs)
     {
         var values = new Dictionary<string, object?>
@@ -1347,6 +1569,21 @@ public sealed class DapperRepository(
         values["CREATE_TIME"] = row.CreateTime;
         values["EDIT_USER"] = row.EditUser;
         values["EDIT_TIME"] = row.EditTime;
+        return values;
+    }
+
+    private static Dictionary<string, object?> BuildExcelPpbHistoryValues(QcDataRow row)
+    {
+        var values = BuildValues(row, includePpb: false, includeRt: false, includeIdRefs: true);
+        values["ExcelPpbExportId"] = row.ExcelPpbExportId;
+        values["ExcelExportKey"] = row.ExcelExportKey;
+        values["ExcelExportedAt"] = row.ExcelExportedAt;
+        values["ExcelExportUser"] = row.ExcelExportUser;
+        values["ExcelStartDate"] = row.ExcelStartDate;
+        values["ExcelEndDate"] = row.ExcelEndDate;
+        values["ExcelRfId"] = row.ExcelRfId;
+        values["ExcelStdRawIds"] = row.ExcelStdRawIds;
+        values["ExcelPortRawIds"] = row.ExcelPortRawIds;
         return values;
     }
 
@@ -1414,7 +1651,16 @@ public sealed class DapperRepository(
             CreateUser = ReadString(dictionary, "CREATE_USER"),
             CreateTime = ReadDateTime(dictionary, "CREATE_TIME"),
             EditUser = ReadString(dictionary, "EDIT_USER"),
-            EditTime = ReadDateTime(dictionary, "EDIT_TIME")
+            EditTime = ReadDateTime(dictionary, "EDIT_TIME"),
+            ExcelPpbExportId = ReadString(dictionary, "ExcelPpbExportId"),
+            ExcelExportKey = ReadString(dictionary, "ExcelExportKey"),
+            ExcelExportedAt = ReadDateTime(dictionary, "ExcelExportedAt"),
+            ExcelExportUser = ReadString(dictionary, "ExcelExportUser"),
+            ExcelStartDate = ReadDateTime(dictionary, "ExcelStartDate"),
+            ExcelEndDate = ReadDateTime(dictionary, "ExcelEndDate"),
+            ExcelRfId = ReadString(dictionary, "ExcelRfId"),
+            ExcelStdRawIds = ReadString(dictionary, "ExcelStdRawIds"),
+            ExcelPortRawIds = ReadString(dictionary, "ExcelPortRawIds")
         };
 
         foreach (var analyte in CompoundMap.Analytes)
@@ -1443,6 +1689,44 @@ public sealed class DapperRepository(
             RelativeEM = ReadString(dictionary, "RelativeEM")
         };
     }
+
+    private static string ComputeExcelExportKey(ExcelPpbHistorySaveRequest request)
+    {
+        var text = string.Join(
+            '\u001F',
+            request.StartDate.Date.ToString("yyyyMMdd", CultureInfo.InvariantCulture),
+            request.EndDate.Date.ToString("yyyyMMdd", CultureInfo.InvariantCulture),
+            NormalizeKeyPart(request.RfId),
+            FormatSelectedIds(request.StdRawIds),
+            FormatSelectedIds(request.PortRawIds));
+
+        return ComputeHashHex(text);
+    }
+
+    private static string ComputeExcelPpbExportId(string excelExportKey, QcDataRow row)
+    {
+        var text = string.Join(
+            '\u001F',
+            excelExportKey,
+            NormalizeKeyPart(row.Id),
+            RawDataIdentity.FromRow(row).ToStableId());
+
+        return ComputeHashHex(text);
+    }
+
+    private static string FormatSelectedIds(IEnumerable<string> ids) =>
+        string.Join(
+            "\n",
+            ids.Where(id => !string.IsNullOrWhiteSpace(id))
+                .Select(NormalizeKeyPart)
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(id => id, StringComparer.Ordinal));
+
+    private static string NormalizeKeyPart(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim().ToUpperInvariant();
+
+    private static string ComputeHashHex(string text) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text)));
 
     private static string Quote(string identifier) => $"[{identifier.Replace("]", "]]")}]";
 

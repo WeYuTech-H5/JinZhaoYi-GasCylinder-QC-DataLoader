@@ -249,6 +249,24 @@ public sealed class ImportOrchestratorCsvExportTests
             CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<QcDataRow>>([]);
 
+        public Task UpsertExcelPpbHistoryAsync(
+            ExcelPpbHistorySaveRequest request,
+            CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+
+        public Task<PagedResponse<ExportOption>> GetExcelPpbExportOptionsAsync(
+            DateTime batchDate,
+            int page,
+            int pageSize,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(new PagedResponse<ExportOption>(page, pageSize, 0, []));
+
+        public Task<IReadOnlyList<QcDataRow>> GetExcelPpbRowsForCsvAsync(
+            DateTime batchDate,
+            IReadOnlyCollection<string> selectedIds,
+            CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<QcDataRow>>([]);
+
         public Task UpsertImportErrorLogsAsync(
             IReadOnlyCollection<ImportErrorReportRow> rows,
             CancellationToken cancellationToken) =>

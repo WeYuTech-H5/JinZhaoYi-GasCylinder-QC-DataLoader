@@ -12,4 +12,7 @@ public sealed record ExportOption(
     int? SampleNo,
     string? DataFilename,
     string? DataFilepath,
-    DateTime? AnlzTime);
+    DateTime? AnlzTime)
+{
+    public string? GroupKey { get; init; }
+}
