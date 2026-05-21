@@ -40,6 +40,7 @@ try
     builder.Services.AddSingleton<IQuery2SelectionExportBuilder, Query2SelectionExportBuilder>();
     builder.Services.AddSingleton<IQuery2WorkbookExporter, Query2WorkbookExporter>();
     builder.Services.AddSingleton<IPortPpbCsvExporter, PortPpbCsvExporter>();
+    builder.Services.AddSingleton<ICoaWorkbookExporter, CoaWorkbookExporter>();
     builder.Services.AddSingleton<IImportErrorReportExporter, ImportErrorReportExporter>();
     builder.Services.AddSingleton<IQcDownloadFileResolver, QcDownloadFileResolver>();
     builder.Services.AddSingleton<IImportOrchestrator, ImportOrchestrator>();
@@ -339,6 +340,57 @@ static void MapDownloadEndpoints(WebApplication app)
             download.FileName);
     });
 
+    app.MapPost("/api/exports/excel-ppb-coa-large", async (
+        CoaLargeExportRequest request,
+        IDapperRepository repository,
+        ICoaWorkbookExporter exporter,
+        CancellationToken cancellationToken) =>
+    {
+        if (!TryValidateCoaLargeExportRequest(request, out var batchDate, out var selectedIds, out var templateType, out var validationMessage))
+        {
+            return Results.BadRequest(new { message = validationMessage });
+        }
+
+        var rows = await repository.GetExcelPpbRowsForCsvAsync(batchDate, selectedIds, cancellationToken);
+        if (rows.Count == 0)
+        {
+            return Results.NotFound(new { message = "No Excel PPB history rows found for selected COA export data." });
+        }
+
+        var batchDateText = batchDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
+        var download = exporter.ExportLargeForDownload(rows, batchDateText, templateType);
+        return Results.File(
+            download.Content,
+            download.ContentType,
+            download.FileName);
+    });
+
+    app.MapPost("/api/exports/excel-ppb-coa-small", async (
+        CoaSmallExportRequest request,
+        IDapperRepository repository,
+        ICoaWorkbookExporter exporter,
+        IOptions<SchedulerOptions> options,
+        CancellationToken cancellationToken) =>
+    {
+        if (!TryValidateCoaSmallExportRequest(request, options.Value.CoaExport.DefaultSmallCardsPerPage, out var batchDate, out var selectedIds, out var cardsPerPage, out var validationMessage))
+        {
+            return Results.BadRequest(new { message = validationMessage });
+        }
+
+        var rows = await repository.GetExcelPpbRowsForCsvAsync(batchDate, selectedIds, cancellationToken);
+        if (rows.Count == 0)
+        {
+            return Results.NotFound(new { message = "No Excel PPB history rows found for selected COA export data." });
+        }
+
+        var batchDateText = batchDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
+        var download = exporter.ExportSmallForDownload(rows, batchDateText, cardsPerPage);
+        return Results.File(
+            download.Content,
+            download.ContentType,
+            download.FileName);
+    });
+
     app.MapGet("/api/downloads/cylinder-qc/{batchDate}", (
         string batchDate,
         IQcDownloadFileResolver resolver) =>
@@ -378,14 +430,22 @@ static bool TryValidateExportRequest(
     ExportRequest request,
     out DateTime batchDate,
     out string[] selectedIds,
+    out string message) =>
+    TryValidateExportRequestParts(request.BatchDate, request.SelectedIds, out batchDate, out selectedIds, out message);
+
+static bool TryValidateExportRequestParts(
+    string? batchDateText,
+    IReadOnlyList<string> requestSelectedIds,
+    out DateTime batchDate,
+    out string[] selectedIds,
     out string message)
 {
-    selectedIds = request.SelectedIds
+    selectedIds = requestSelectedIds
         .Where(id => !string.IsNullOrWhiteSpace(id))
         .Distinct(StringComparer.OrdinalIgnoreCase)
         .ToArray();
 
-    if (!TryParseBatchDate(request.BatchDate, out batchDate))
+    if (!TryParseBatchDate(batchDateText, out batchDate))
     {
         message = "batchDate must use yyyyMMdd format.";
         return false;
@@ -394,6 +454,63 @@ static bool TryValidateExportRequest(
     if (selectedIds.Length == 0)
     {
         message = "selectedIds must contain at least one export option id.";
+        return false;
+    }
+
+    message = string.Empty;
+    return true;
+}
+
+static bool TryValidateCoaLargeExportRequest(
+    CoaLargeExportRequest request,
+    out DateTime batchDate,
+    out string[] selectedIds,
+    out CoaLargeTemplateType templateType,
+    out string message)
+{
+    templateType = CoaLargeTemplateType.Standard;
+    if (!TryValidateExportRequestParts(request.BatchDate, request.SelectedIds, out batchDate, out selectedIds, out message))
+    {
+        return false;
+    }
+
+    var templateTypeText = string.IsNullOrWhiteSpace(request.TemplateType)
+        ? "standard"
+        : request.TemplateType.Trim();
+
+    if (string.Equals(templateTypeText, "standard", StringComparison.OrdinalIgnoreCase))
+    {
+        templateType = CoaLargeTemplateType.Standard;
+        return true;
+    }
+
+    if (string.Equals(templateTypeText, "yadong", StringComparison.OrdinalIgnoreCase))
+    {
+        templateType = CoaLargeTemplateType.Yadong;
+        return true;
+    }
+
+    message = "templateType must be 'standard' or 'yadong'.";
+    return false;
+}
+
+static bool TryValidateCoaSmallExportRequest(
+    CoaSmallExportRequest request,
+    int defaultCardsPerPage,
+    out DateTime batchDate,
+    out string[] selectedIds,
+    out int cardsPerPage,
+    out string message)
+{
+    cardsPerPage = request.CardsPerPage ?? defaultCardsPerPage;
+    if (!TryValidateExportRequestParts(request.BatchDate, request.SelectedIds, out batchDate, out selectedIds, out message))
+    {
+        return false;
+    }
+
+    if (cardsPerPage is < 1 or > 9)
+    {
+        message = "cardsPerPage must be between 1 and 9.";
         return false;
     }
 

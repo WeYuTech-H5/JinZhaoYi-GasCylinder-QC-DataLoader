@@ -67,6 +67,9 @@ public sealed class SchedulerOptions
     // TO14C PPB CSV 匯出設定。
     public SchedulerCsvExportOptions CsvExport { get; init; } = new();
 
+    // COA 大卡 / 小卡匯出設定；資料來源固定為 Excel PPB history。
+    public SchedulerCoaExportOptions CoaExport { get; init; } = new();
+
     // QC 檔案下載 API 設定。
     public SchedulerDownloadApiOptions DownloadApi { get; init; } = new();
 
@@ -146,6 +149,15 @@ public sealed class SchedulerCsvExportOptions
     public string OxygenValue { get; init; } = "0.01";
 
     public string NitrogenValue { get; init; } = "99.9995";
+}
+
+public sealed class SchedulerCoaExportOptions
+{
+    public string? LargeTemplatePath { get; init; }
+
+    public string? SmallTemplatePath { get; init; }
+
+    public int DefaultSmallCardsPerPage { get; init; } = 9;
 }
 
 public sealed class SchedulerDownloadApiOptions
