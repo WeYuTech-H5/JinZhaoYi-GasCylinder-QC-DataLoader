@@ -31,7 +31,7 @@ public sealed class CoaWorkbookExporterTests
         workbook.Worksheet("COA_STD-N050").Cell("B10").GetString().Should().Be("STD Gas PC for Semiconductor");
         workbook.Worksheet("COA_STD-L100").Cell("B10").GetString().Should().Be("NF-SEMI STD");
         workbook.Worksheet("COA_STD-N050").Cell("B11").GetString().Should().Be("PG000-0006");
-        workbook.Worksheet("COA_STD-L100").Cell("B11").GetString().Should().Be("PG000-0010");
+        workbook.Worksheet("COA_STD-L100").Cell("B11").GetString().Should().Be("PG000-0100");
         workbook.Worksheet("COA_STD-N050").Cell("B14").GetString().Should().Be("5 cm*35cm");
         workbook.Worksheet("COA_STD-L100").Cell("B14").GetString().Should().Be("8.87 cm*27.7 cm");
         workbook.Worksheet("COA_STD-N050").Cell("B16").GetString().Should().Be("950 psi");
@@ -52,7 +52,7 @@ public sealed class CoaWorkbookExporterTests
     [InlineData("AZ-001", "PG000-0006")]
     [InlineData("TSMC-012", "PG000-0016")]
     [InlineData("VSMC-001", "PG000-0010")]
-    [InlineData("STD-L007", "PG000-0010")]
+    [InlineData("STD-L007", "PG000-0100")]
     public void ExportLargeForDownload_uses_sample_name_prefix_for_product_number(string sampleName, string expectedProductNumber)
     {
         var exporter = CreateExporter();
