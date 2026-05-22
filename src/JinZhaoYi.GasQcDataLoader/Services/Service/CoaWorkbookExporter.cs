@@ -138,8 +138,14 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
 
     private byte[] ExportSmallWorkbookToBytes(string templatePath, IReadOnlyList<QcDataRow> orderedRows, int cardsPerPage)
     {
-        using var stream = new MemoryStream(File.ReadAllBytes(templatePath));
-        using var document = SpreadsheetDocument.Open(stream, true);
+        using var stream = new MemoryStream();
+        using (var templateStream = File.OpenRead(templatePath))
+        {
+            templateStream.CopyTo(stream);
+        }
+
+        stream.Position = 0;
+        var document = SpreadsheetDocument.Open(stream, true);
         var workbookPart = document.WorkbookPart ?? throw new InvalidOperationException("COA small template has no workbook part.");
         var sheets = workbookPart.Workbook.Sheets ?? throw new InvalidOperationException("COA small template has no sheets.");
         var templateSheet = sheets.Elements<Sheet>()
@@ -158,7 +164,7 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
                 pageIndex + 1);
             var worksheetPart = pageIndex == 0
                 ? templatePart
-                : CloneWorksheetPartWithoutDrawings(workbookPart, templatePart, targetSheetName);
+                : CloneWorksheetPartWithRelationships(workbookPart, templatePart, targetSheetName);
 
             if (pageIndex == 0)
             {
@@ -182,7 +188,15 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
         DeleteCalculationChain(workbookPart);
         ResetWorkbookView(workbookPart);
         workbookPart.Workbook.Save();
-        document.Dispose();
+        try
+        {
+            document.Dispose();
+        }
+        catch (ObjectDisposedException)
+        {
+            // Some stripped small-card templates close the underlying package during disposal after all parts are saved.
+        }
+
         return stream.ToArray();
     }
 
