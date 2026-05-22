@@ -269,7 +269,8 @@ public sealed class DapperRepository(
     private const string ExcelPpbRowsForCsvSqlFormat = """
         SELECT
             rows.*,
-            mfg.Prod_Bomb1_LotNo AS ProdBomb1LotNo
+            mfg.Prod_Bomb1_LotNo AS ProdBomb1LotNo,
+            parent.ExpirationDate AS ParentExpirationDate
         FROM dbo.{0} rows
         OUTER APPLY
         (
@@ -283,6 +284,17 @@ public sealed class DapperRepository(
                 lot.CREATE_TIME DESC,
                 lot.ID DESC
         ) mfg
+        OUTER APPLY
+        (
+            SELECT TOP (1)
+                parentLot.ExpirationDate
+            FROM dbo.{2} parentLot
+            WHERE parentLot.LotNo = mfg.Prod_Bomb1_LotNo
+            ORDER BY
+                parentLot.EDIT_TIME DESC,
+                parentLot.CREATE_TIME DESC,
+                parentLot.ID DESC
+        ) parent
         WHERE CAST(rows.AnlzTime AS date) = @BatchDate
           AND rows.ExcelPpbExportId IN @SelectedIds
         ORDER BY rows.AnlzTime, rows.SampleNo, rows.SourceFolderName, rows.SampleName
@@ -1050,7 +1062,11 @@ public sealed class DapperRepository(
         }
 
         await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
-        var sql = string.Format(ExcelPpbRowsForCsvSqlFormat, Quote(_tables.ExcelPpbHistory), Quote(_tables.MfgLot));
+        var sql = string.Format(
+            ExcelPpbRowsForCsvSqlFormat,
+            Quote(_tables.ExcelPpbHistory),
+            Quote(_tables.MfgLot),
+            Quote(_tables.MfgLotParent));
         var rows = await connection.QueryAsync(
             new CommandDefinition(
                 sql,
@@ -1872,7 +1888,8 @@ public sealed class DapperRepository(
             ExcelRfId = ReadString(dictionary, "ExcelRfId"),
             ExcelStdRawIds = ReadString(dictionary, "ExcelStdRawIds"),
             ExcelPortRawIds = ReadString(dictionary, "ExcelPortRawIds"),
-            ProdBomb1LotNo = ReadString(dictionary, "ProdBomb1LotNo")
+            ProdBomb1LotNo = ReadString(dictionary, "ProdBomb1LotNo"),
+            ParentExpirationDate = ReadDateTime(dictionary, "ParentExpirationDate")
         };
 
         foreach (var analyte in CompoundMap.Analytes)

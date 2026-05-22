@@ -17,8 +17,10 @@ public sealed class CoaWorkbookExporterTests
     {
         var exporter = CreateExporter();
         var halfLiter = CreateRow("STD-N050", "0.5L_Cylinder");
+        halfLiter.ParentExpirationDate = new DateTime(2026, 9, 15);
         halfLiter.Areas["Acetone"] = 101.2m;
         var oneLiter = CreateRow("STD-L100", "1L_Cylinder");
+        oneLiter.ParentExpirationDate = new DateTime(2026, 9, 15);
         oneLiter.Areas["Acetone"] = 98.6m;
 
         var download = exporter.ExportLargeForDownload([halfLiter, oneLiter], "20260521", CoaLargeTemplateType.Standard);
@@ -32,6 +34,8 @@ public sealed class CoaWorkbookExporterTests
         workbook.Worksheet("COA_STD-L100").Cell("B10").GetString().Should().Be("NF-SEMI STD");
         workbook.Worksheet("COA_STD-N050").Cell("B11").GetString().Should().Be("PG000-0006");
         workbook.Worksheet("COA_STD-L100").Cell("B11").GetString().Should().Be("PG000-0100");
+        workbook.Worksheet("COA_STD-N050").Cell("B13").GetString().Should().Be("2026/9/15");
+        workbook.Worksheet("COA_STD-L100").Cell("B13").GetString().Should().Be("2027/5/20");
         workbook.Worksheet("COA_STD-N050").Cell("B14").GetString().Should().Be("5 cm*35cm");
         workbook.Worksheet("COA_STD-L100").Cell("B14").GetString().Should().Be("8.87 cm*27.7 cm");
         workbook.Worksheet("COA_STD-N050").Cell("B16").GetString().Should().Be("950 psi");

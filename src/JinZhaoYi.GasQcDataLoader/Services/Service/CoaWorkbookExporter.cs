@@ -461,8 +461,17 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
         return path;
     }
 
-    private static DateTime? ResolveExpirationDate(QcDataRow row) =>
-        row.AnlzTime?.Date.AddDays(364);
+    private static DateTime? ResolveExpirationDate(QcDataRow row)
+    {
+        // 0.5L_Cylinder 的效期依母瓶效期表 ZZ_NF_GAS_MFG_LOT_PARENT；
+        // 舊資料或未建母瓶資料時才回到原本的 AnlzTime + 364 天規則。
+        if (IsHalfLiterContainer(row) && row.ParentExpirationDate.HasValue)
+        {
+            return row.ParentExpirationDate.Value.Date;
+        }
+
+        return row.AnlzTime?.Date.AddDays(364);
+    }
 
     private static string FormatDate(DateTime? value) =>
         value?.ToString("yyyy/M/d", CultureInfo.InvariantCulture) ?? string.Empty;
