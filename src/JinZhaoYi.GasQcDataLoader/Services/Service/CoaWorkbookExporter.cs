@@ -263,6 +263,7 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
     {
         var fields = ResolveLargeContainerFields(row);
         worksheet.Cell("B10").Value = fields.ProductName;
+        worksheet.Cell("B11").Value = ResolveLargeProductNumber(row.SampleName);
         worksheet.Cell("B14").Value = fields.CylinderSize;
         worksheet.Cell("B16").Value = fields.CylinderPressure;
         worksheet.Cell("E10").Value = "1/4\"VCR Female";
@@ -280,6 +281,7 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
         // 下載版 COA(大卡) 的「欄位註解」定義這些欄位要依 Container 計算，
         // 因此匯出時明確覆寫，避免模板工作表中的舊靜態文字造成 0.5L/1L 對應相反。
         SetStringCell(worksheetPart, "B10", fields.ProductName);
+        SetStringCell(worksheetPart, "B11", ResolveLargeProductNumber(row.SampleName));
         SetStringCell(worksheetPart, "B14", fields.CylinderSize);
         SetStringCell(worksheetPart, "B16", fields.CylinderPressure);
         SetStringCell(worksheetPart, "E10", "1/4\"VCR Female");
@@ -293,6 +295,32 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
 
     private static LargeContainerFields ResolveLargeContainerFields(QcDataRow row) =>
         IsHalfLiterContainer(row) ? LargeHalfLiterFields : LargeOneLiterFields;
+
+    private static string ResolveLargeProductNumber(string? sampleName)
+    {
+        var value = sampleName?.Trim() ?? string.Empty;
+        // Product Number follows the mapping provided by the COA rule image:
+        // STD-N/STD-T/AZ => PG000-0006, TSMC => PG000-0016, VSMC/STD-L => PG000-0010.
+        if (StartsWithAny(value, "STD-N", "STD-T", "AZ"))
+        {
+            return "PG000-0006";
+        }
+
+        if (StartsWithAny(value, "TSMC"))
+        {
+            return "PG000-0016";
+        }
+
+        if (StartsWithAny(value, "VSMC", "STD-L"))
+        {
+            return "PG000-0010";
+        }
+
+        return string.Empty;
+    }
+
+    private static bool StartsWithAny(string value, params string[] prefixes) =>
+        prefixes.Any(prefix => value.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
 
     private static bool IsHalfLiterContainer(QcDataRow row) =>
         row.Container?.Contains("0.5", StringComparison.OrdinalIgnoreCase) == true;

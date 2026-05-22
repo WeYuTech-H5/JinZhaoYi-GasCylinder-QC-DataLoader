@@ -28,7 +28,7 @@ COA 大卡與小卡都不直接讀匯入計算表 `ZZ_NF_GAS_QC_LOT_PORT_PPB`，
 | Excel 欄位 | 顯示內容 | 來源 |
 | --- | --- | --- |
 | `B10` | Product Name | 一般版依 `Container` 覆寫：`1L_Cylinder` = `NF-SEMI STD`、`0.5L_Cylinder` = `STD Gas PC for Semiconductor`。亞東版維持 `COA(亞東)` 模板值。 |
-| `B11` | Product Number | 目前維持模板值；下載版 `欄位註解` 只註明依 `SamplName` 判定，未提供明確公式。 |
+| `B11` | Product Number | 依 `SampleName` 前綴覆寫：`STD-N` / `STD-T` / `AZ` = `PG000-0006`、`TSMC` = `PG000-0016`、`VSMC` / `STD-L` = `PG000-0010`。 |
 | `B12` | Certification Date | `ZZ_NF_GAS_QC_EXCEL_PPB_HISTORY.AnlzTime`，格式 `yyyy/M/d` |
 | `B13` | Expiration Date / Cylinder 到期日 | 目前用 `AnlzTime + 364 天`，格式 `yyyy/M/d`。下載版 `欄位註解` 註明 `0.5L_Cylinder` 要跟母瓶日期，但同註解也註明母瓶日期目前未有資料表紀錄。 |
 | `B14` | Cylinder Size | 一般版依 `Container` 覆寫：`1L_Cylinder` = `8.87 cm*27.7 cm`、`0.5L_Cylinder` = `5 cm*35cm`。 |
@@ -94,7 +94,7 @@ COA 大卡與小卡都不直接讀匯入計算表 `ZZ_NF_GAS_QC_LOT_PORT_PPB`，
 
 ### 大卡模板保留欄位
 
-下列內容目前不由程式覆寫，維持模板原值：頁首 logo、公司資訊、Product Number、CAS Number、Requested Conc.、簽核欄、頁尾等。
+下列內容目前不由程式覆寫，維持模板原值：頁首 logo、公司資訊、CAS Number、Requested Conc.、簽核欄、頁尾等。
 
 ## COA 小卡
 

@@ -16,34 +16,52 @@ public sealed class CoaWorkbookExporterTests
     public void ExportLargeForDownload_uses_container_sheet_for_standard_template()
     {
         var exporter = CreateExporter();
-        var halfLiter = CreateRow("STD-050", "0.5L_Cylinder");
+        var halfLiter = CreateRow("STD-N050", "0.5L_Cylinder");
         halfLiter.Areas["Acetone"] = 101.2m;
-        var oneLiter = CreateRow("STD-100", "1L_Cylinder");
+        var oneLiter = CreateRow("STD-L100", "1L_Cylinder");
         oneLiter.Areas["Acetone"] = 98.6m;
 
         var download = exporter.ExportLargeForDownload([halfLiter, oneLiter], "20260521", CoaLargeTemplateType.Standard);
 
         download.FileName.Should().Be("COA(大卡)_20260521.xlsx");
         using var workbook = Open(download);
-        workbook.Worksheets.Select(sheet => sheet.Name).Should().BeEquivalentTo("COA_STD-050", "COA_STD-100");
-        workbook.Worksheet("COA_STD-050").Cell("E52").GetDouble().Should().BeApproximately(101.2, 0.0001);
-        workbook.Worksheet("COA_STD-100").Cell("E52").GetDouble().Should().BeApproximately(98.6, 0.0001);
-        workbook.Worksheet("COA_STD-050").Cell("B10").GetString().Should().Be("STD Gas PC for Semiconductor");
-        workbook.Worksheet("COA_STD-100").Cell("B10").GetString().Should().Be("NF-SEMI STD");
-        workbook.Worksheet("COA_STD-050").Cell("B11").GetString().Should().Be("PG000-0006 / PG000-0016");
-        workbook.Worksheet("COA_STD-100").Cell("B11").GetString().Should().Be("PG000-0010");
-        workbook.Worksheet("COA_STD-050").Cell("B14").GetString().Should().Be("5 cm*35cm");
-        workbook.Worksheet("COA_STD-100").Cell("B14").GetString().Should().Be("8.87 cm*27.7 cm");
-        workbook.Worksheet("COA_STD-050").Cell("B16").GetString().Should().Be("950 psi");
-        workbook.Worksheet("COA_STD-100").Cell("B16").GetString().Should().Be("1000 psi");
-        workbook.Worksheet("COA_STD-050").Cell("E11").GetString().Should().Be("500 mL");
-        workbook.Worksheet("COA_STD-100").Cell("E11").GetString().Should().Be("1000 mL");
-        workbook.Worksheet("COA_STD-050").Cell("E13").GetString().Should().Be("41 L");
-        workbook.Worksheet("COA_STD-100").Cell("E13").GetString().Should().Be("70 L");
-        workbook.Worksheet("COA_STD-050").Cell("E16").GetString().Should().Be("±10%");
-        workbook.Worksheet("COA_STD-100").Cell("E16").GetString().Should().Be("±15%");
-        HasWorksheetDrawing(download, "COA_STD-050").Should().BeTrue();
-        HasWorksheetDrawing(download, "COA_STD-100").Should().BeTrue();
+        workbook.Worksheets.Select(sheet => sheet.Name).Should().BeEquivalentTo("COA_STD-N050", "COA_STD-L100");
+        workbook.Worksheet("COA_STD-N050").Cell("E52").GetDouble().Should().BeApproximately(101.2, 0.0001);
+        workbook.Worksheet("COA_STD-L100").Cell("E52").GetDouble().Should().BeApproximately(98.6, 0.0001);
+        workbook.Worksheet("COA_STD-N050").Cell("B10").GetString().Should().Be("STD Gas PC for Semiconductor");
+        workbook.Worksheet("COA_STD-L100").Cell("B10").GetString().Should().Be("NF-SEMI STD");
+        workbook.Worksheet("COA_STD-N050").Cell("B11").GetString().Should().Be("PG000-0006");
+        workbook.Worksheet("COA_STD-L100").Cell("B11").GetString().Should().Be("PG000-0010");
+        workbook.Worksheet("COA_STD-N050").Cell("B14").GetString().Should().Be("5 cm*35cm");
+        workbook.Worksheet("COA_STD-L100").Cell("B14").GetString().Should().Be("8.87 cm*27.7 cm");
+        workbook.Worksheet("COA_STD-N050").Cell("B16").GetString().Should().Be("950 psi");
+        workbook.Worksheet("COA_STD-L100").Cell("B16").GetString().Should().Be("1000 psi");
+        workbook.Worksheet("COA_STD-N050").Cell("E11").GetString().Should().Be("500 mL");
+        workbook.Worksheet("COA_STD-L100").Cell("E11").GetString().Should().Be("1000 mL");
+        workbook.Worksheet("COA_STD-N050").Cell("E13").GetString().Should().Be("41 L");
+        workbook.Worksheet("COA_STD-L100").Cell("E13").GetString().Should().Be("70 L");
+        workbook.Worksheet("COA_STD-N050").Cell("E16").GetString().Should().Be("±10%");
+        workbook.Worksheet("COA_STD-L100").Cell("E16").GetString().Should().Be("±15%");
+        HasWorksheetDrawing(download, "COA_STD-N050").Should().BeTrue();
+        HasWorksheetDrawing(download, "COA_STD-L100").Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData("STD-N088", "PG000-0006")]
+    [InlineData("STD-T003", "PG000-0006")]
+    [InlineData("AZ-001", "PG000-0006")]
+    [InlineData("TSMC-012", "PG000-0016")]
+    [InlineData("VSMC-001", "PG000-0010")]
+    [InlineData("STD-L007", "PG000-0010")]
+    public void ExportLargeForDownload_uses_sample_name_prefix_for_product_number(string sampleName, string expectedProductNumber)
+    {
+        var exporter = CreateExporter();
+        var row = CreateRow(sampleName, "0.5L_Cylinder");
+
+        var download = exporter.ExportLargeForDownload([row], "20260521", CoaLargeTemplateType.Standard);
+
+        using var workbook = Open(download);
+        workbook.Worksheets.Single().Cell("B11").GetString().Should().Be(expectedProductNumber);
     }
 
     [Fact]
