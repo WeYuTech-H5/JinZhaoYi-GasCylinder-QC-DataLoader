@@ -7,7 +7,7 @@
 COA 大卡與小卡都不直接讀匯入計算表 `ZZ_NF_GAS_QC_LOT_PORT_PPB`，而是讀使用者成功匯出 Query2 Excel 後保存的 PPB history：
 
 | 用途 | 資料表 | 查詢條件 |
-| --- | --- | --- | --- | --- |
+| --- | --- | --- |
 | COA 大卡 | `dbo.ZZ_NF_GAS_QC_EXCEL_PPB_HISTORY` | `CAST(AnlzTime AS date) = batchDate` 且 `ExcelPpbExportId IN selectedIds` |
 | COA 小卡 | `dbo.ZZ_NF_GAS_QC_EXCEL_PPB_HISTORY` | `CAST(AnlzTime AS date) = batchDate` 且 `ExcelPpbExportId IN selectedIds` |
 
@@ -23,13 +23,24 @@ COA 大卡與小卡都不直接讀匯入計算表 `ZZ_NF_GAS_QC_LOT_PORT_PPB`，
 | 一般 | `Container` 不含 `0.5` 或空值 | `COA(1 L)` |
 | 亞東 | 不判斷 `Container` | `COA(亞東)` |
 
-### 大卡固定欄位
+### 大卡欄位
 
 | Excel 欄位 | 顯示內容 | 來源 |
 | --- | --- | --- |
+| `B10` | Product Name | 一般版依 `Container` 覆寫：`1L_Cylinder` = `NF-SEMI STD`、`0.5L_Cylinder` = `STD Gas PC for Semiconductor`。亞東版維持 `COA(亞東)` 模板值。 |
+| `B11` | Product Number | 目前維持模板值；下載版 `欄位註解` 只註明依 `SamplName` 判定，未提供明確公式。 |
 | `B12` | Certification Date | `ZZ_NF_GAS_QC_EXCEL_PPB_HISTORY.AnlzTime`，格式 `yyyy/M/d` |
-| `B13` | Expiration Date / Cylinder 到期日 | `AnlzTime + 364 天`，格式 `yyyy/M/d` |
+| `B13` | Expiration Date / Cylinder 到期日 | 目前用 `AnlzTime + 364 天`，格式 `yyyy/M/d`。下載版 `欄位註解` 註明 `0.5L_Cylinder` 要跟母瓶日期，但同註解也註明母瓶日期目前未有資料表紀錄。 |
+| `B14` | Cylinder Size | 一般版依 `Container` 覆寫：`1L_Cylinder` = `8.87 cm*27.7 cm`、`0.5L_Cylinder` = `5 cm*35cm`。 |
 | `B15` | Cylinder# | `ZZ_NF_GAS_QC_EXCEL_PPB_HISTORY.SampleName` |
+| `B16` | Cylinder Pressure | 一般版依 `Container` 覆寫：`1L_Cylinder` = `1000 psi`、`0.5L_Cylinder` = `950 psi`。 |
+| `E10` | Cylinder Valve | 固定 `1/4"VCR Female` |
+| `E11` | Cylinder Volume | 一般版依 `Container` 覆寫：`1L_Cylinder` = `1000 mL`、`0.5L_Cylinder` = `500 mL`。 |
+| `E12` | Cylinder Material | 固定 `Stainless` |
+| `E13` | Gas Volume | 一般版依 `Container` 覆寫：`1L_Cylinder` = `70 L`、`0.5L_Cylinder` = `41 L`。 |
+| `E14` | Balance Gas | 固定 `Nitrogen` |
+| `E15` | Analytical Accuracy | 固定 `±10%` |
+| `E16` | Specification | 一般版依 `Container` 覆寫：`1L_Cylinder` = `±15%`、`0.5L_Cylinder` = `±10%`。 |
 | sheet 名稱 | `COA_{SampleName}` | `ZZ_NF_GAS_QC_EXCEL_PPB_HISTORY.SampleName` |
 
 目前沒有獨立讀取資料表欄位作為鋼瓶到期日；到期日是由 `AnlzTime` 計算。
@@ -41,7 +52,7 @@ COA 大卡與小卡都不直接讀匯入計算表 `ZZ_NF_GAS_QC_LOT_PORT_PPB`，
 例如：`76-14-2` 會轉成 `76142`，對應附件三的 `Freon114`，因此讀取 `ZZ_NF_GAS_QC_EXCEL_PPB_HISTORY.Area_Freon114` 後寫入同列 Result Conc.。
 
 | 大卡 CAS Number | 附件三 ID | 大卡 Component 名稱 | Excel 結果欄 | 來源資料表欄位 |
-| --- | --- | --- |
+| --- | --- | --- | --- | --- |
 | `76-14-2` | `76142` | Dichlorotetrafluoroethane (FC-114) | 同列 `E` 欄 | `ZZ_NF_GAS_QC_EXCEL_PPB_HISTORY.Area_Freon114` |
 | `75-35-4` | `75354` | 1,1-Dichloroethylene | 同列 `E` 欄 | `ZZ_NF_GAS_QC_EXCEL_PPB_HISTORY.Area_1,1-Dichloroethene` |
 | `76-13-1` | `76131` | 1,1,2-Trichlorotrifluoroethane(FC-113) | 同列 `E` 欄 | `ZZ_NF_GAS_QC_EXCEL_PPB_HISTORY.Area_Freon113` |
@@ -83,7 +94,7 @@ COA 大卡與小卡都不直接讀匯入計算表 `ZZ_NF_GAS_QC_LOT_PORT_PPB`，
 
 ### 大卡模板保留欄位
 
-下列內容目前不由程式覆寫，維持模板原值：頁首 logo、公司資訊、Product Name、Product Number、Cylinder Volume、Cylinder Material、Gas Volume、Balance Gas、Specification、CAS Number、Requested Conc.、簽核欄、頁尾等。
+下列內容目前不由程式覆寫，維持模板原值：頁首 logo、公司資訊、Product Number、CAS Number、Requested Conc.、簽核欄、頁尾等。
 
 ## COA 小卡
 
@@ -116,7 +127,7 @@ COA 大卡與小卡都不直接讀匯入計算表 `ZZ_NF_GAS_QC_LOT_PORT_PPB`，
 | 小卡欄位 | 顯示內容 | 來源 |
 | --- | --- | --- |
 | SampleName cell | 樣品名稱 / 鋼瓶編號 | `ZZ_NF_GAS_QC_EXCEL_PPB_HISTORY.SampleName` |
-| 母瓶 NO cell | `母瓶 NO.  {RawLotId}` | `Scheduler:CsvExport:RawLotId` 設定值，不是資料表欄位 |
+| 母瓶 NO cell | `母瓶 NO.  {Prod_Bomb1_LotNo}` | `ZZ_NF_GAS_MFG_LOT.Prod_Bomb1_LotNo`，由 Excel PPB history row 的 `LotNo` / `si0_id` join MFG LOT 取得；舊資料查不到時才 fallback 到 `Scheduler:CsvExport:RawLotId` |
 | QC 日期 cell | `QC: yyyy/M/d` | `ZZ_NF_GAS_QC_EXCEL_PPB_HISTORY.AnlzTime` |
 | 有效期限 cell | `{SampleName}有效期限 : yyyy/M/d` | `SampleName` + `AnlzTime + 364 天` |
 

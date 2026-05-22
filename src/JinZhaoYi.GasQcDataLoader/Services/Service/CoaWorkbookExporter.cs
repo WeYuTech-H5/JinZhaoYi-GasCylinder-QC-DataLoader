@@ -20,6 +20,22 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
     private const string LargeYadongSheetName = "COA(亞東)";
     private const string SmallBlankSheetName = "Report(空白)";
 
+    private static readonly LargeContainerFields LargeHalfLiterFields = new(
+        ProductName: "STD Gas PC for Semiconductor",
+        CylinderSize: "5 cm*35cm",
+        CylinderPressure: "950 psi",
+        CylinderVolume: "500 mL",
+        GasVolume: "41 L",
+        Specification: "±10%");
+
+    private static readonly LargeContainerFields LargeOneLiterFields = new(
+        ProductName: "NF-SEMI STD",
+        CylinderSize: "8.87 cm*27.7 cm",
+        CylinderPressure: "1000 psi",
+        CylinderVolume: "1000 mL",
+        GasVolume: "70 L",
+        Specification: "±15%");
+
     private static readonly IReadOnlyDictionary<string, string> LargeCasIdSuffixes =
         To14cCsvAnalyteMap.Items
             .Where(item => !string.IsNullOrWhiteSpace(item.ReptId) && !string.IsNullOrWhiteSpace(item.CompoundSuffix))
@@ -109,7 +125,7 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
             var sourcePart = (WorksheetPart)workbookPart.GetPartById(sourceSheet.Id!);
             var targetSheetName = BuildUniqueOpenXmlSheetName(workbookPart, $"COA_{row.SampleName}", index + 1);
             var targetPart = CloneWorksheetPartWithRelationships(workbookPart, sourcePart, targetSheetName);
-            WriteLargeRow(targetPart, row);
+            WriteLargeRow(targetPart, row, templateType);
         }
 
         DeleteOpenXmlSheets(workbookPart, Large500MlSheetName, Large1LSheetName, LargeYadongSheetName, "欄位註解");
@@ -177,13 +193,18 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
             return LargeYadongSheetName;
         }
 
-        return row.Container?.Contains("0.5", StringComparison.OrdinalIgnoreCase) == true
+        return IsHalfLiterContainer(row)
             ? Large500MlSheetName
             : Large1LSheetName;
     }
 
-    private void WriteLargeRow(IXLWorksheet worksheet, QcDataRow row)
+    private void WriteLargeRow(IXLWorksheet worksheet, QcDataRow row, CoaLargeTemplateType templateType)
     {
+        if (templateType == CoaLargeTemplateType.Standard)
+        {
+            ApplyLargeContainerFields(worksheet, row);
+        }
+
         worksheet.Cell("B12").Value = FormatDate(row.AnlzTime);
         worksheet.Cell("B13").Value = FormatDate(ResolveExpirationDate(row));
         worksheet.Cell("B15").Value = row.SampleName ?? string.Empty;
@@ -200,8 +221,13 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
         }
     }
 
-    private void WriteLargeRow(WorksheetPart worksheetPart, QcDataRow row)
+    private void WriteLargeRow(WorksheetPart worksheetPart, QcDataRow row, CoaLargeTemplateType templateType)
     {
+        if (templateType == CoaLargeTemplateType.Standard)
+        {
+            ApplyLargeContainerFields(worksheetPart, row);
+        }
+
         SetStringCell(worksheetPart, "B12", FormatDate(row.AnlzTime));
         // 目前來源資料沒有獨立的鋼瓶到期日欄位，先依既有規則用分析時間 AnlzTime + 364 天計算。
         SetStringCell(worksheetPart, "B13", FormatDate(ResolveExpirationDate(row)));
@@ -218,6 +244,44 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
             SetDecimalCell(worksheetPart, $"E{rowNumber}", row.Areas.GetValueOrDefault(suffix));
         }
     }
+
+    private static void ApplyLargeContainerFields(IXLWorksheet worksheet, QcDataRow row)
+    {
+        var fields = ResolveLargeContainerFields(row);
+        worksheet.Cell("B10").Value = fields.ProductName;
+        worksheet.Cell("B14").Value = fields.CylinderSize;
+        worksheet.Cell("B16").Value = fields.CylinderPressure;
+        worksheet.Cell("E10").Value = "1/4\"VCR Female";
+        worksheet.Cell("E11").Value = fields.CylinderVolume;
+        worksheet.Cell("E12").Value = "Stainless";
+        worksheet.Cell("E13").Value = fields.GasVolume;
+        worksheet.Cell("E14").Value = "Nitrogen";
+        worksheet.Cell("E15").Value = "±10%";
+        worksheet.Cell("E16").Value = fields.Specification;
+    }
+
+    private static void ApplyLargeContainerFields(WorksheetPart worksheetPart, QcDataRow row)
+    {
+        var fields = ResolveLargeContainerFields(row);
+        // 下載版 COA(大卡) 的「欄位註解」定義這些欄位要依 Container 計算，
+        // 因此匯出時明確覆寫，避免模板工作表中的舊靜態文字造成 0.5L/1L 對應相反。
+        SetStringCell(worksheetPart, "B10", fields.ProductName);
+        SetStringCell(worksheetPart, "B14", fields.CylinderSize);
+        SetStringCell(worksheetPart, "B16", fields.CylinderPressure);
+        SetStringCell(worksheetPart, "E10", "1/4\"VCR Female");
+        SetStringCell(worksheetPart, "E11", fields.CylinderVolume);
+        SetStringCell(worksheetPart, "E12", "Stainless");
+        SetStringCell(worksheetPart, "E13", fields.GasVolume);
+        SetStringCell(worksheetPart, "E14", "Nitrogen");
+        SetStringCell(worksheetPart, "E15", "±10%");
+        SetStringCell(worksheetPart, "E16", fields.Specification);
+    }
+
+    private static LargeContainerFields ResolveLargeContainerFields(QcDataRow row) =>
+        IsHalfLiterContainer(row) ? LargeHalfLiterFields : LargeOneLiterFields;
+
+    private static bool IsHalfLiterContainer(QcDataRow row) =>
+        row.Container?.Contains("0.5", StringComparison.OrdinalIgnoreCase) == true;
 
     private static bool TryResolveLargeSuffixFromCas(string? casNumber, out string suffix)
     {
@@ -254,7 +318,7 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
     private void WriteSmallCard(IXLWorksheet worksheet, SmallCardLayout layout, QcDataRow row)
     {
         worksheet.Cell(layout.SampleCell).Value = row.SampleName ?? string.Empty;
-        worksheet.Cell(layout.MotherLotCell).Value = $"母瓶 NO.  {_options.CsvExport.RawLotId}";
+        worksheet.Cell(layout.MotherLotCell).Value = $"母瓶 NO.  {ResolveMotherLotId(row)}";
         worksheet.Cell(layout.QcDateCell).Value = $"QC: {FormatDate(row.AnlzTime)}";
         worksheet.Cell(layout.ExpirationCell).Value = $"{row.SampleName}有效期限：{FormatDate(ResolveExpirationDate(row))}";
 
@@ -268,7 +332,7 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
     private void WriteSmallCard(WorksheetPart worksheetPart, SmallCardLayout layout, QcDataRow row)
     {
         SetStringCell(worksheetPart, layout.SampleCell, row.SampleName ?? string.Empty);
-        SetStringCell(worksheetPart, layout.MotherLotCell, $"母瓶 NO.  {_options.CsvExport.RawLotId}");
+        SetStringCell(worksheetPart, layout.MotherLotCell, $"母瓶 NO.  {ResolveMotherLotId(row)}");
         SetStringCell(worksheetPart, layout.QcDateCell, $"QC: {FormatDate(row.AnlzTime)}");
         SetStringCell(worksheetPart, layout.ExpirationCell, $"{row.SampleName}有效期限：{FormatDate(ResolveExpirationDate(row))}");
 
@@ -323,6 +387,14 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
             .ThenBy(row => row.SourceFolderName, StringComparer.OrdinalIgnoreCase)
             .ThenBy(row => row.SampleName, StringComparer.OrdinalIgnoreCase)
             .ToArray();
+
+    private string ResolveMotherLotId(QcDataRow row)
+    {
+        // 母瓶號以 MFG LOT 的 Prod_Bomb1_LotNo 為準；設定值只在舊資料尚未補齊時當 fallback。
+        return string.IsNullOrWhiteSpace(row.ProdBomb1LotNo)
+            ? _options.CsvExport.RawLotId
+            : row.ProdBomb1LotNo.Trim();
+    }
 
     private string ResolveTemplatePath(string? configuredPath, string defaultTemplateFileName)
     {
@@ -734,4 +806,12 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
         string MotherLotCell,
         string QcDateCell,
         string ExpirationCell);
+
+    private sealed record LargeContainerFields(
+        string ProductName,
+        string CylinderSize,
+        string CylinderPressure,
+        string CylinderVolume,
+        string GasVolume,
+        string Specification);
 }

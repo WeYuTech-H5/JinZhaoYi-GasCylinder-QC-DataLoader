@@ -33,7 +33,7 @@ public sealed class PortPpbCsvExporter(
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var outputPath = ResolveOutputPath(Path.Combine(outputDirectory, BuildFileName(row, _options.CsvExport.RawLotId)));
+            var outputPath = ResolveOutputPath(Path.Combine(outputDirectory, BuildFileName(row, ResolveRawLotId(row))));
             await File.WriteAllTextAsync(outputPath, BuildContent(row), new UTF8Encoding(encoderShouldEmitUTF8Identifier: true), cancellationToken);
             outputPaths.Add(outputPath);
         }
@@ -66,7 +66,7 @@ public sealed class PortPpbCsvExporter(
             return new CsvDownload(
                 ExportToBytes(orderedRows),
                 "text/csv; charset=utf-8",
-                BuildFileName(orderedRows[0], _options.CsvExport.RawLotId));
+                BuildFileName(orderedRows[0], ResolveRawLotId(orderedRows[0])));
         }
 
         return new CsvDownload(
@@ -110,7 +110,7 @@ public sealed class PortPpbCsvExporter(
             new string?[] { "SpecNo", _options.CsvExport.SpecNo },
             new string?[] { "SpecVersion", _options.CsvExport.SpecVersion },
             new string?[] { "ShelfLifeTime", _options.CsvExport.ShelfLifeTime.ToString(CultureInfo.InvariantCulture) },
-            new string?[] { "RawLotId", _options.CsvExport.RawLotId },
+            new string?[] { "RawLotId", ResolveRawLotId(row) },
             new string?[] { "MaterialName", _options.CsvExport.MaterialName },
             new string?[] { "SYMBOLIC", "VALUE" },
             Array.Empty<string?>(),
@@ -193,7 +193,7 @@ public sealed class PortPpbCsvExporter(
             var usedFileNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var row in orderedRows)
             {
-                var fileName = ResolveUniqueFileName(BuildFileName(row, _options.CsvExport.RawLotId), usedFileNames);
+                var fileName = ResolveUniqueFileName(BuildFileName(row, ResolveRawLotId(row)), usedFileNames);
                 var entry = archive.CreateEntry(fileName, CompressionLevel.Optimal);
                 using var entryStream = entry.Open();
                 var bytes = EncodeContent(BuildContent(row));
@@ -208,6 +208,14 @@ public sealed class PortPpbCsvExporter(
     {
         var encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: true);
         return encoding.GetPreamble().Concat(encoding.GetBytes(content)).ToArray();
+    }
+
+    private string ResolveRawLotId(QcDataRow row)
+    {
+        // 母瓶號以 MFG LOT 的 Prod_Bomb1_LotNo 為準；設定值只在舊資料尚未補齊時當 fallback。
+        return string.IsNullOrWhiteSpace(row.ProdBomb1LotNo)
+            ? _options.CsvExport.RawLotId
+            : row.ProdBomb1LotNo.Trim();
     }
 
     private static string FormatCsvLine(IReadOnlyList<string?> fields) =>

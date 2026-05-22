@@ -76,12 +76,15 @@ public sealed class PortPpbCsvExporterTests : IDisposable
             Enabled = true,
             RawLotId = "CC-706988"
         });
+        var row = CreatePpbRow();
+        row.ProdBomb1LotNo = "BOMB1-202605";
 
-        var download = exporter.ExportForDownload([CreatePpbRow()], "20251118");
+        var download = exporter.ExportForDownload([row], "20251118");
 
         download.ContentType.Should().Be("text/csv; charset=utf-8");
-        download.FileName.Should().Be("2026-04-20_TSMC-024_CC-706988_pass.csv");
+        download.FileName.Should().Be("2026-04-20_TSMC-024_BOMB1-202605_pass.csv");
         download.Content.Take(3).Should().Equal(0xEF, 0xBB, 0xBF);
+        System.Text.Encoding.UTF8.GetString(download.Content).Should().Contain("RawLotId,BOMB1-202605");
     }
 
     [Fact]
@@ -93,9 +96,11 @@ public sealed class PortPpbCsvExporterTests : IDisposable
             RawLotId = "CC-706988"
         });
         var firstRow = CreatePpbRow();
+        firstRow.ProdBomb1LotNo = "BOMB1-A";
         var secondRow = CreatePpbRow();
         secondRow.SampleName = "TSMC-025";
         secondRow.LotNo = "20260421004";
+        secondRow.ProdBomb1LotNo = "BOMB1-B";
 
         var download = exporter.ExportForDownload([secondRow, firstRow], "20251118");
 
@@ -104,8 +109,8 @@ public sealed class PortPpbCsvExporterTests : IDisposable
 
         using var archive = new ZipArchive(new MemoryStream(download.Content), ZipArchiveMode.Read);
         archive.Entries.Select(entry => entry.FullName).Should().Equal(
-            "2026-04-20_TSMC-024_CC-706988_pass.csv",
-            "2026-04-21_TSMC-025_CC-706988_pass.csv");
+            "2026-04-20_TSMC-024_BOMB1-A_pass.csv",
+            "2026-04-21_TSMC-025_BOMB1-B_pass.csv");
 
         foreach (var entry in archive.Entries)
         {

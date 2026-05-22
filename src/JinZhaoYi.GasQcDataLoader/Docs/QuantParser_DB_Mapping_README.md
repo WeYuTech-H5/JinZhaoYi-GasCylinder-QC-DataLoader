@@ -373,4 +373,10 @@ Insert into dbo.ZZ_NF_GAS_QC_LOT_PORT
 - `RT_*` 來自 Quant `R.T.`。
 - PORT 的 `ppb_*` 由 RF、PORT raw、active STD AVG 計算。
 - 找不到 LOT 或 RF 時，整批停止，避免部分寫入造成資料不一致。
+## 15. MFG LOT 資料來源補充
 
+`Quant.txt` 匯入流程會依 `LotNo` 查詢 `ZZ_NF_GAS_MFG_LOT`，取得 `si0_id`、`SamplName`、`SampleNo`、`SampleType`、`Container` 等 LOT 主檔資料。若查不到 LOT，Quant 匯入會停止該批寫入並記錄錯誤。
+
+正式區在製造端資料來源完成前，新增 `MfgJsonImportWorker` 作為暫時同步機制：背景服務會掃描 `C:\temp\data\MFGJSON` 底下的 `MFGExport_*.json`，將舊 DB 匯出的 MFG 生產紀錄 upsert 到 `ZZ_NF_GAS_MFG_LOT`。因此 `ZZ_NF_GAS_MFG_LOT` 仍是 Quant 匯入時唯一查詢的 LOT 主檔，只是主檔資料可由 MFG JSON 背景服務補齊。
+
+詳細欄位 mapping、狀態檔與 log 位置請看 `MFG_JSON_IMPORT_README.md`。

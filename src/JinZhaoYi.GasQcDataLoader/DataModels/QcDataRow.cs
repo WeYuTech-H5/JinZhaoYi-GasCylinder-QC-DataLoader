@@ -72,6 +72,8 @@ public sealed class QcDataRow
 
     public string? ExcelPortRawIds { get; set; }
 
+    public string? ProdBomb1LotNo { get; set; }
+
     public Dictionary<string, decimal?> Areas { get; } = new(StringComparer.OrdinalIgnoreCase);
 
     public Dictionary<string, decimal?> Ppbs { get; } = new(StringComparer.OrdinalIgnoreCase);
@@ -116,7 +118,8 @@ public sealed class QcDataRow
             ExcelEndDate = ExcelEndDate,
             ExcelRfId = ExcelRfId,
             ExcelStdRawIds = ExcelStdRawIds,
-            ExcelPortRawIds = ExcelPortRawIds
+            ExcelPortRawIds = ExcelPortRawIds,
+            ProdBomb1LotNo = ProdBomb1LotNo
         };
     }
 

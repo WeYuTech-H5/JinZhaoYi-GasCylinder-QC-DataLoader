@@ -267,11 +267,25 @@ public sealed class DapperRepository(
         """;
 
     private const string ExcelPpbRowsForCsvSqlFormat = """
-        SELECT *
-        FROM dbo.{0}
-        WHERE CAST(AnlzTime AS date) = @BatchDate
-          AND ExcelPpbExportId IN @SelectedIds
-        ORDER BY AnlzTime, SampleNo, SourceFolderName, SampleName
+        SELECT
+            rows.*,
+            mfg.Prod_Bomb1_LotNo AS ProdBomb1LotNo
+        FROM dbo.{0} rows
+        OUTER APPLY
+        (
+            SELECT TOP (1)
+                lot.Prod_Bomb1_LotNo
+            FROM dbo.{1} lot
+            WHERE lot.LotNo = rows.LotNo
+               OR TRY_CONVERT(int, lot.si0_id) = rows.si0_id
+            ORDER BY
+                CASE WHEN lot.LotNo = rows.LotNo THEN 0 ELSE 1 END,
+                lot.CREATE_TIME DESC,
+                lot.ID DESC
+        ) mfg
+        WHERE CAST(rows.AnlzTime AS date) = @BatchDate
+          AND rows.ExcelPpbExportId IN @SelectedIds
+        ORDER BY rows.AnlzTime, rows.SampleNo, rows.SourceFolderName, rows.SampleName
         """;
 
     private const string AllRfRowsSqlFormat = """
@@ -1036,7 +1050,7 @@ public sealed class DapperRepository(
         }
 
         await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
-        var sql = string.Format(ExcelPpbRowsForCsvSqlFormat, Quote(_tables.ExcelPpbHistory));
+        var sql = string.Format(ExcelPpbRowsForCsvSqlFormat, Quote(_tables.ExcelPpbHistory), Quote(_tables.MfgLot));
         var rows = await connection.QueryAsync(
             new CommandDefinition(
                 sql,
@@ -1857,7 +1871,8 @@ public sealed class DapperRepository(
             ExcelEndDate = ReadDateTime(dictionary, "ExcelEndDate"),
             ExcelRfId = ReadString(dictionary, "ExcelRfId"),
             ExcelStdRawIds = ReadString(dictionary, "ExcelStdRawIds"),
-            ExcelPortRawIds = ReadString(dictionary, "ExcelPortRawIds")
+            ExcelPortRawIds = ReadString(dictionary, "ExcelPortRawIds"),
+            ProdBomb1LotNo = ReadString(dictionary, "ProdBomb1LotNo")
         };
 
         foreach (var analyte in CompoundMap.Analytes)

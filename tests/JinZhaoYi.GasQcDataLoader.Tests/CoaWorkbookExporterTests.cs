@@ -28,8 +28,20 @@ public sealed class CoaWorkbookExporterTests
         workbook.Worksheets.Select(sheet => sheet.Name).Should().BeEquivalentTo("COA_STD-050", "COA_STD-100");
         workbook.Worksheet("COA_STD-050").Cell("E52").GetDouble().Should().BeApproximately(101.2, 0.0001);
         workbook.Worksheet("COA_STD-100").Cell("E52").GetDouble().Should().BeApproximately(98.6, 0.0001);
+        workbook.Worksheet("COA_STD-050").Cell("B10").GetString().Should().Be("STD Gas PC for Semiconductor");
+        workbook.Worksheet("COA_STD-100").Cell("B10").GetString().Should().Be("NF-SEMI STD");
         workbook.Worksheet("COA_STD-050").Cell("B11").GetString().Should().Be("PG000-0006 / PG000-0016");
         workbook.Worksheet("COA_STD-100").Cell("B11").GetString().Should().Be("PG000-0010");
+        workbook.Worksheet("COA_STD-050").Cell("B14").GetString().Should().Be("5 cm*35cm");
+        workbook.Worksheet("COA_STD-100").Cell("B14").GetString().Should().Be("8.87 cm*27.7 cm");
+        workbook.Worksheet("COA_STD-050").Cell("B16").GetString().Should().Be("950 psi");
+        workbook.Worksheet("COA_STD-100").Cell("B16").GetString().Should().Be("1000 psi");
+        workbook.Worksheet("COA_STD-050").Cell("E11").GetString().Should().Be("500 mL");
+        workbook.Worksheet("COA_STD-100").Cell("E11").GetString().Should().Be("1000 mL");
+        workbook.Worksheet("COA_STD-050").Cell("E13").GetString().Should().Be("41 L");
+        workbook.Worksheet("COA_STD-100").Cell("E13").GetString().Should().Be("70 L");
+        workbook.Worksheet("COA_STD-050").Cell("E16").GetString().Should().Be("±10%");
+        workbook.Worksheet("COA_STD-100").Cell("E16").GetString().Should().Be("±15%");
         HasWorksheetDrawing(download, "COA_STD-050").Should().BeTrue();
         HasWorksheetDrawing(download, "COA_STD-100").Should().BeTrue();
     }
@@ -94,6 +106,7 @@ public sealed class CoaWorkbookExporterTests
             .Select(index =>
             {
                 var row = CreateRow($"STD-N{index:000}", "1L_Cylinder", index);
+                row.ProdBomb1LotNo = $"BOMB1-{index:000}";
                 row.Areas["Acetone"] = 90 + index;
                 row.Areas["IPA"] = 100 + index;
                 return row;
@@ -117,12 +130,13 @@ public sealed class CoaWorkbookExporterTests
         firstSheet.Cell("X50").GetString().Should().Be("STD-N001");
         firstSheet.Cell("F8").GetDouble().Should().Be(91);
         firstSheet.Cell("O8").GetDouble().Should().Be(91);
-        firstSheet.Cell("B19").GetString().Should().Be("母瓶 NO.  CC-706988");
+        firstSheet.Cell("B19").GetString().Should().Be("母瓶 NO.  BOMB1-001");
 
         var secondSheet = workbook.Worksheet("COA小卡_STD-N002");
         secondSheet.Cell("F6").GetString().Should().Be("STD-N002");
         secondSheet.Cell("X50").GetString().Should().Be("STD-N002");
         secondSheet.Cell("F8").GetDouble().Should().Be(92);
+        secondSheet.Cell("B19").GetString().Should().Be("母瓶 NO.  BOMB1-002");
     }
 
     [Fact]
