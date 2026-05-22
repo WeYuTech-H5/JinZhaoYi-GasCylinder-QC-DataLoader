@@ -20,48 +20,10 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
     private const string LargeYadongSheetName = "COA(亞東)";
     private const string SmallBlankSheetName = "Report(空白)";
 
-    private static readonly IReadOnlyDictionary<string, string> LargeComponentSuffixes =
-        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["Dichlorotetrafluoroethane (FC-114)"] = "Freon114",
-            ["1,1-Dichloroethylene"] = "1,1-Dichloroethene",
-            ["1,1,2-Trichlorotrifluoroethane(FC-113)"] = "Freon113",
-            ["Methylene Chloride"] = "Methlene",
-            ["1,1-Dichloroethane"] = "1,1-Dichloroethane",
-            ["cis-1,2-Dichloroethylene"] = "cis-1,2-Dichloroethene",
-            ["Trichloromethane (HC-20)"] = "Freon20",
-            ["1,1,1-Trichloroethane"] = "1,1,1-Trichloroethane",
-            ["1,2-Dichloroethane"] = "1,2-Dichloroethane",
-            ["Benzene"] = "Benzene",
-            ["Carbon Tetrachloride"] = "Carbon Tetrachloride",
-            ["Trichloroethylene"] = "Trichloroethylene",
-            ["1,2-Dichloropropane"] = "1,2-Dichloropropane",
-            ["cis-1,3-Dichloropropylene"] = "cis-1,3-Dichloropropene",
-            ["trans-1,3-Dichloropropylene"] = "trans-1,3-Dichloropropene",
-            ["Toluene"] = "Toluene",
-            ["1,1,2-Trichloroethane"] = "1,1,2-Trichloroethane",
-            ["Tetrachloroethylene"] = "Tetrachloroethylene",
-            ["1,2-Dibromoethane"] = "1,2-Dibromoethane",
-            ["Chlorobenzene"] = "ChloroBenzene",
-            ["Ethyl Benzene"] = "Ethylbenzene",
-            ["p&m Xylenes(mixed)"] = "p-Xylene",
-            ["Styrene"] = "Styrene",
-            ["o-Xylene"] = "o-Xylene",
-            ["1,1,2,2-Tetrachloroethane"] = "1,1,2,2-Tetrachloroethane",
-            ["1,3,5-Trimethylbenzene"] = "1,3,5-TMB",
-            ["1,2,4-Trimethylbenzene"] = "1,2,4-TMB",
-            ["1,3-Dichlorobenzene"] = "1,3-Dichlorobenzene",
-            ["1,4-Dichlorobenzene"] = "1,4-Dichlorobenzene",
-            ["1,2-Dichlorobenzene"] = "1,2-Dichlorobenzene",
-            ["1,2,4-Trichlorobenzene"] = "1,2,4-TCB",
-            ["Hexachloro-1,3-Butadiene"] = "HCBD",
-            ["Isopropanol"] = "IPA",
-            ["Acetone"] = "Acetone",
-            ["Perfluorotributylamine (HC-43)"] = "CNF",
-            ["2-Butanone (MEK)"] = "2-Butanone",
-            ["Ethyl Acetate"] = "Ethyl Acetate",
-            ["Cyclopentane"] = "Cyclopentane"
-        };
+    private static readonly IReadOnlyDictionary<string, string> LargeCasIdSuffixes =
+        To14cCsvAnalyteMap.Items
+            .Where(item => !string.IsNullOrWhiteSpace(item.ReptId) && !string.IsNullOrWhiteSpace(item.CompoundSuffix))
+            .ToDictionary(item => item.ReptId!, item => item.CompoundSuffix!, StringComparer.OrdinalIgnoreCase);
 
     private static readonly IReadOnlyList<string> SmallCardSuffixes =
     [
@@ -228,9 +190,8 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
 
         for (var rowNumber = 19; rowNumber <= 57; rowNumber++)
         {
-            var componentName = worksheet.Cell(rowNumber, 1).GetString().Trim();
-            if (string.IsNullOrWhiteSpace(componentName) ||
-                !LargeComponentSuffixes.TryGetValue(componentName, out var suffix))
+            var casNumber = worksheet.Cell(rowNumber, 3).GetString().Trim();
+            if (!TryResolveLargeSuffixFromCas(casNumber, out var suffix))
             {
                 continue;
             }
@@ -248,14 +209,45 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
 
         for (uint rowNumber = 19; rowNumber <= 57; rowNumber++)
         {
-            var componentName = GetCellText(worksheetPart, $"A{rowNumber}").Trim();
-            if (string.IsNullOrWhiteSpace(componentName) ||
-                !LargeComponentSuffixes.TryGetValue(componentName, out var suffix))
+            var casNumber = GetCellText(worksheetPart, $"C{rowNumber}").Trim();
+            if (!TryResolveLargeSuffixFromCas(casNumber, out var suffix))
             {
                 continue;
             }
 
             SetDecimalCell(worksheetPart, $"E{rowNumber}", row.Areas.GetValueOrDefault(suffix));
+        }
+    }
+
+    private static bool TryResolveLargeSuffixFromCas(string? casNumber, out string suffix)
+    {
+        // 大卡 Result Conc. 依會議規則改用 CAS Number 對附件三 TO14C reptID；例如 76-14-2 -> 76142 -> Freon114。
+        foreach (var casId in EnumerateCasIds(casNumber))
+        {
+            if (LargeCasIdSuffixes.TryGetValue(casId, out suffix!))
+            {
+                return true;
+            }
+        }
+
+        suffix = string.Empty;
+        return false;
+    }
+
+    private static IEnumerable<string> EnumerateCasIds(string? casNumber)
+    {
+        if (string.IsNullOrWhiteSpace(casNumber))
+        {
+            yield break;
+        }
+
+        foreach (var token in casNumber.Split(['/', ',', ';', '\r', '\n', '\t', ' '], StringSplitOptions.RemoveEmptyEntries))
+        {
+            var casId = new string(token.Where(char.IsDigit).ToArray());
+            if (!string.IsNullOrWhiteSpace(casId))
+            {
+                yield return casId;
+            }
         }
     }
 

@@ -51,6 +51,42 @@ public sealed class CoaWorkbookExporterTests
     }
 
     [Fact]
+    public void ExportLargeForDownload_uses_cas_number_to_resolve_result_columns()
+    {
+        var templatePath = Path.Combine(Path.GetTempPath(), $"COA-large-cas-{Guid.NewGuid():N}.xlsx");
+        File.Copy(ResolveTemplatePath("COA(大卡).xlsx"), templatePath);
+
+        try
+        {
+            using (var template = new XLWorkbook(templatePath))
+            {
+                var sheet = template.Worksheet("COA(1 L)");
+                sheet.Cell("A19").Value = "Changed component text";
+                sheet.Cell("A40").Value = "Changed xylene text";
+                template.Save();
+            }
+
+            var exporter = CreateExporter(templatePath);
+            var row = CreateRow("STD-CAS", "1L_Cylinder");
+            row.Areas["Freon114"] = 321m;
+            row.Areas["p-Xylene"] = 654m;
+
+            var download = exporter.ExportLargeForDownload([row], "20260521", CoaLargeTemplateType.Standard);
+
+            using var workbook = Open(download);
+            var output = workbook.Worksheet("COA_STD-CAS");
+            output.Cell("A19").GetString().Should().Be("Changed component text");
+            output.Cell("E19").GetDouble().Should().Be(321);
+            output.Cell("A40").GetString().Should().Be("Changed xylene text");
+            output.Cell("E40").GetDouble().Should().Be(654);
+        }
+        finally
+        {
+            File.Delete(templatePath);
+        }
+    }
+
+    [Fact]
     public void ExportSmallForDownload_repeats_each_selected_row_across_requested_card_count()
     {
         var exporter = CreateExporter();
@@ -100,13 +136,13 @@ public sealed class CoaWorkbookExporterTests
             .WithMessage("*cardsPerPage*");
     }
 
-    private static CoaWorkbookExporter CreateExporter() =>
+    private static CoaWorkbookExporter CreateExporter(string? largeTemplatePath = null) =>
         new(Options.Create(new SchedulerOptions
         {
             CsvExport = new SchedulerCsvExportOptions { RawLotId = "CC-706988" },
             CoaExport = new SchedulerCoaExportOptions
             {
-                LargeTemplatePath = ResolveTemplatePath("COA(大卡).xlsx"),
+                LargeTemplatePath = largeTemplatePath ?? ResolveTemplatePath("COA(大卡).xlsx"),
                 SmallTemplatePath = ResolveTemplatePath("COA(小卡).xlsx")
             }
         }));
