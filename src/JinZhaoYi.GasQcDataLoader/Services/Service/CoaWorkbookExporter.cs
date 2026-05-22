@@ -10,6 +10,7 @@ using JinZhaoYi.GasQcDataLoader.Configuration;
 using JinZhaoYi.GasQcDataLoader.DataModels;
 using JinZhaoYi.GasQcDataLoader.Services.Interface;
 using Microsoft.Extensions.Options;
+using Xdr = DocumentFormat.OpenXml.Drawing.Spreadsheet;
 
 namespace JinZhaoYi.GasQcDataLoader.Services.Service;
 
@@ -443,6 +444,7 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
     {
         var range = ParseCellRange(layout.RangeReference);
         RemoveMergedCellsInRange(worksheetPart, range);
+        RemoveDrawingsInRange(worksheetPart, range);
         var sheetData = worksheetPart.Worksheet.GetFirstChild<SheetData>();
         if (sheetData is null)
         {
@@ -472,6 +474,66 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
                 cell.StyleIndex = null;
             }
         }
+    }
+
+    private static void RemoveDrawingsInRange(WorksheetPart worksheetPart, CellRange range)
+    {
+        var drawingPart = worksheetPart.DrawingsPart;
+        var worksheetDrawing = drawingPart?.WorksheetDrawing;
+        if (worksheetDrawing is null)
+        {
+            return;
+        }
+
+        foreach (var anchor in worksheetDrawing.ChildElements.ToArray())
+        {
+            if (TryGetDrawingAnchorRange(anchor, out var anchorRange) && RangesIntersect(anchorRange, range))
+            {
+                anchor.Remove();
+            }
+        }
+
+        worksheetDrawing.Save();
+    }
+
+    private static bool TryGetDrawingAnchorRange(OpenXmlElement anchor, out CellRange range)
+    {
+        var fromMarker = anchor.GetFirstChild<Xdr.FromMarker>();
+        if (fromMarker is null || !TryGetMarkerCell(fromMarker, out var fromColumn, out var fromRow))
+        {
+            range = default;
+            return false;
+        }
+
+        var toMarker = anchor.GetFirstChild<Xdr.ToMarker>();
+        if (toMarker is null || !TryGetMarkerCell(toMarker, out var toColumn, out var toRow))
+        {
+            toColumn = fromColumn;
+            toRow = fromRow;
+        }
+
+        range = new CellRange(
+            Math.Min(fromColumn, toColumn),
+            Math.Max(fromColumn, toColumn),
+            Math.Min(fromRow, toRow),
+            Math.Max(fromRow, toRow));
+        return true;
+    }
+
+    private static bool TryGetMarkerCell(OpenXmlCompositeElement marker, out int column, out uint row)
+    {
+        column = 0;
+        row = 0;
+
+        if (!int.TryParse(marker.GetFirstChild<Xdr.ColumnId>()?.Text, CultureInfo.InvariantCulture, out var zeroBasedColumn) ||
+            !uint.TryParse(marker.GetFirstChild<Xdr.RowId>()?.Text, CultureInfo.InvariantCulture, out var zeroBasedRow))
+        {
+            return false;
+        }
+
+        column = zeroBasedColumn + 1;
+        row = zeroBasedRow + 1;
+        return true;
     }
 
     private static void RemoveMergedCellsInRange(WorksheetPart worksheetPart, CellRange range)

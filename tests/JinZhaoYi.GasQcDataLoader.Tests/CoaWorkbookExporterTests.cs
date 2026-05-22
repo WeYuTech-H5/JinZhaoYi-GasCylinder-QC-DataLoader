@@ -1,4 +1,5 @@
 using ClosedXML.Excel;
+using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Spreadsheet;
 using FluentAssertions;
@@ -7,6 +8,7 @@ using JinZhaoYi.GasQcDataLoader.DataModels;
 using JinZhaoYi.GasQcDataLoader.Services.Interface;
 using JinZhaoYi.GasQcDataLoader.Services.Service;
 using Microsoft.Extensions.Options;
+using Xdr = DocumentFormat.OpenXml.Drawing.Spreadsheet;
 
 namespace JinZhaoYi.GasQcDataLoader.Tests;
 
@@ -191,6 +193,8 @@ public sealed class CoaWorkbookExporterTests
         sheet.Cell("K24").Style.Border.TopBorder.Should().Be(XLBorderStyleValues.None);
         sheet.Cell("X50").GetString().Should().BeEmpty();
         sheet.Cell("T46").Style.Border.TopBorder.Should().Be(XLBorderStyleValues.None);
+        HasDrawingInRange(download, "COA小卡_STD-N004", "K24:R42").Should().BeFalse();
+        HasDrawingInRange(download, "COA小卡_STD-N004", "T46:AA64").Should().BeFalse();
     }
 
     [Fact]
@@ -210,6 +214,7 @@ public sealed class CoaWorkbookExporterTests
         secondSheet.Cell("F6").GetString().Should().Be("STD-N010");
         secondSheet.Cell("O6").GetString().Should().BeEmpty();
         secondSheet.Cell("K2").Style.Border.TopBorder.Should().Be(XLBorderStyleValues.None);
+        HasDrawingInRange(download, "COA小卡_STD-N010_2", "K2:R20").Should().BeFalse();
     }
 
     private static CoaWorkbookExporter CreateExporter(string? largeTemplatePath = null) =>
@@ -247,6 +252,104 @@ public sealed class CoaWorkbookExporterTests
         return worksheetPart.DrawingsPart is not null &&
             worksheetPart.Worksheet.Descendants<Drawing>().Any();
     }
+
+    private static bool HasDrawingInRange(CoaWorkbookDownload download, string sheetName, string rangeReference)
+    {
+        using var stream = new MemoryStream(download.Content);
+        using var document = SpreadsheetDocument.Open(stream, false);
+        var workbookPart = document.WorkbookPart!;
+        var sheet = workbookPart.Workbook.Sheets!.Elements<Sheet>()
+            .First(item => string.Equals(item.Name?.Value, sheetName, StringComparison.OrdinalIgnoreCase));
+        var worksheetPart = (WorksheetPart)workbookPart.GetPartById(sheet.Id!);
+        var drawingPart = worksheetPart.DrawingsPart;
+        if (drawingPart?.WorksheetDrawing is null)
+        {
+            return false;
+        }
+
+        var targetRange = ParseCellRange(rangeReference);
+        return drawingPart.WorksheetDrawing.ChildElements
+            .Any(anchor => TryGetDrawingAnchorRange(anchor, out var anchorRange) && RangesIntersect(anchorRange, targetRange));
+    }
+
+    private static bool TryGetDrawingAnchorRange(OpenXmlElement anchor, out CellRange range)
+    {
+        var fromMarker = anchor.GetFirstChild<Xdr.FromMarker>();
+        if (fromMarker is null || !TryGetMarkerCell(fromMarker, out var fromColumn, out var fromRow))
+        {
+            range = default;
+            return false;
+        }
+
+        var toMarker = anchor.GetFirstChild<Xdr.ToMarker>();
+        if (toMarker is null || !TryGetMarkerCell(toMarker, out var toColumn, out var toRow))
+        {
+            toColumn = fromColumn;
+            toRow = fromRow;
+        }
+
+        range = new CellRange(
+            Math.Min(fromColumn, toColumn),
+            Math.Max(fromColumn, toColumn),
+            Math.Min(fromRow, toRow),
+            Math.Max(fromRow, toRow));
+        return true;
+    }
+
+    private static bool TryGetMarkerCell(OpenXmlCompositeElement marker, out int column, out uint row)
+    {
+        column = 0;
+        row = 0;
+        if (!int.TryParse(marker.GetFirstChild<Xdr.ColumnId>()?.Text, out var zeroBasedColumn) ||
+            !uint.TryParse(marker.GetFirstChild<Xdr.RowId>()?.Text, out var zeroBasedRow))
+        {
+            return false;
+        }
+
+        column = zeroBasedColumn + 1;
+        row = zeroBasedRow + 1;
+        return true;
+    }
+
+    private static CellRange ParseCellRange(string rangeReference)
+    {
+        var parts = rangeReference.Split(':', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var start = SplitCellReference(parts[0]);
+        var end = parts.Length == 1 ? start : SplitCellReference(parts[1]);
+        var startColumn = ColumnIndex(start.Column);
+        var endColumn = ColumnIndex(end.Column);
+        return new CellRange(
+            Math.Min(startColumn, endColumn),
+            Math.Max(startColumn, endColumn),
+            Math.Min(start.Row, end.Row),
+            Math.Max(start.Row, end.Row));
+    }
+
+    private static (string Column, uint Row) SplitCellReference(string cellReference)
+    {
+        var column = new string(cellReference.Where(char.IsLetter).ToArray()).ToUpperInvariant();
+        var row = new string(cellReference.Where(char.IsDigit).ToArray());
+        return (column, uint.Parse(row));
+    }
+
+    private static int ColumnIndex(string column)
+    {
+        var index = 0;
+        foreach (var character in column)
+        {
+            index = index * 26 + (character - 'A' + 1);
+        }
+
+        return index;
+    }
+
+    private static bool RangesIntersect(CellRange left, CellRange right) =>
+        left.StartColumn <= right.EndColumn &&
+        left.EndColumn >= right.StartColumn &&
+        left.StartRow <= right.EndRow &&
+        left.EndRow >= right.StartRow;
+
+    private readonly record struct CellRange(int StartColumn, int EndColumn, uint StartRow, uint EndRow);
 
     private static string ResolveTemplatePath(string fileName)
     {
