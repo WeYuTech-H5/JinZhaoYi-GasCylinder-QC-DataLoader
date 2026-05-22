@@ -123,7 +123,7 @@ public sealed class CoaWorkbookExporterTests
     }
 
     [Fact]
-    public void ExportSmallForDownload_repeats_each_selected_row_across_requested_card_count()
+    public void ExportSmallForDownload_places_each_selected_row_once_on_same_sheet()
     {
         var exporter = CreateExporter();
         var rows = Enumerable.Range(1, 2)
@@ -141,26 +141,15 @@ public sealed class CoaWorkbookExporterTests
 
         download.FileName.Should().Be("COA(小卡)_20260521.xlsx");
         using var workbook = Open(download);
-        workbook.Worksheets.Count.Should().Be(2);
-        var firstSheet = workbook.Worksheet("COA小卡_STD-N001");
+        workbook.Worksheets.Count.Should().Be(1);
+        var firstSheet = workbook.Worksheet("COA小卡1");
         firstSheet.Cell("F6").GetString().Should().Be("STD-N001");
-        firstSheet.Cell("O6").GetString().Should().Be("STD-N001");
-        firstSheet.Cell("X6").GetString().Should().Be("STD-N001");
-        firstSheet.Cell("F28").GetString().Should().Be("STD-N001");
-        firstSheet.Cell("O28").GetString().Should().Be("STD-N001");
-        firstSheet.Cell("X28").GetString().Should().Be("STD-N001");
-        firstSheet.Cell("F50").GetString().Should().Be("STD-N001");
-        firstSheet.Cell("O50").GetString().Should().Be("STD-N001");
-        firstSheet.Cell("X50").GetString().Should().Be("STD-N001");
+        firstSheet.Cell("O6").GetString().Should().Be("STD-N002");
+        firstSheet.Cell("X6").GetString().Should().BeEmpty();
         firstSheet.Cell("F8").GetDouble().Should().Be(91);
-        firstSheet.Cell("O8").GetDouble().Should().Be(91);
+        firstSheet.Cell("O8").GetDouble().Should().Be(92);
         firstSheet.Cell("B19").GetString().Should().Be("母瓶 NO.  BOMB1-001");
-
-        var secondSheet = workbook.Worksheet("COA小卡_STD-N002");
-        secondSheet.Cell("F6").GetString().Should().Be("STD-N002");
-        secondSheet.Cell("X50").GetString().Should().Be("STD-N002");
-        secondSheet.Cell("F8").GetDouble().Should().Be(92);
-        secondSheet.Cell("B19").GetString().Should().Be("母瓶 NO.  BOMB1-002");
+        firstSheet.Cell("K19").GetString().Should().Be("母瓶 NO.  BOMB1-002");
     }
 
     [Fact]
@@ -181,40 +170,46 @@ public sealed class CoaWorkbookExporterTests
         var row = CreateRow("STD-N004", "1L_Cylinder");
         row.Areas["Acetone"] = 94m;
 
-        var download = exporter.ExportSmallForDownload([row], "20260521", 4);
+        var download = exporter.ExportSmallForDownload([row], "20260521", 9);
 
         using var workbook = Open(download);
-        var sheet = workbook.Worksheet("COA小卡_STD-N004");
+        var sheet = workbook.Worksheet("COA小卡1");
         sheet.Cell("F6").GetString().Should().Be("STD-N004");
-        sheet.Cell("O6").GetString().Should().Be("STD-N004");
-        sheet.Cell("X6").GetString().Should().Be("STD-N004");
-        sheet.Cell("F28").GetString().Should().Be("STD-N004");
+        sheet.Cell("O6").GetString().Should().BeEmpty();
+        sheet.Cell("K2").Style.Border.TopBorder.Should().Be(XLBorderStyleValues.None);
         sheet.Cell("O28").GetString().Should().BeEmpty();
         sheet.Cell("K24").Style.Border.TopBorder.Should().Be(XLBorderStyleValues.None);
         sheet.Cell("X50").GetString().Should().BeEmpty();
         sheet.Cell("T46").Style.Border.TopBorder.Should().Be(XLBorderStyleValues.None);
-        HasDrawingInRange(download, "COA小卡_STD-N004", "K24:R42").Should().BeFalse();
-        HasDrawingInRange(download, "COA小卡_STD-N004", "T46:AA64").Should().BeFalse();
+        HasDrawingInRange(download, "COA小卡1", "K2:R20").Should().BeFalse();
+        HasDrawingInRange(download, "COA小卡1", "K24:R42").Should().BeFalse();
+        HasDrawingInRange(download, "COA小卡1", "T46:AA64").Should().BeFalse();
     }
 
     [Fact]
-    public void ExportSmallForDownload_splits_more_than_nine_cards_to_next_sheet()
+    public void ExportSmallForDownload_splits_more_than_nine_selected_rows_to_next_sheet()
     {
         var exporter = CreateExporter();
-        var row = CreateRow("STD-N010", "1L_Cylinder");
-        row.Areas["Acetone"] = 100m;
+        var rows = Enumerable.Range(1, 10)
+            .Select(index =>
+            {
+                var row = CreateRow($"STD-N{index:000}", "1L_Cylinder", index);
+                row.Areas["Acetone"] = 90 + index;
+                return row;
+            })
+            .ToArray();
 
-        var download = exporter.ExportSmallForDownload([row], "20260521", 10);
+        var download = exporter.ExportSmallForDownload(rows, "20260521", 9);
 
         using var workbook = Open(download);
         workbook.Worksheets.Count.Should().Be(2);
-        workbook.Worksheet("COA小卡_STD-N010").Cell("X50").GetString().Should().Be("STD-N010");
+        workbook.Worksheet("COA小卡1").Cell("X50").GetString().Should().Be("STD-N009");
 
-        var secondSheet = workbook.Worksheet("COA小卡_STD-N010_2");
+        var secondSheet = workbook.Worksheet("COA小卡2");
         secondSheet.Cell("F6").GetString().Should().Be("STD-N010");
         secondSheet.Cell("O6").GetString().Should().BeEmpty();
         secondSheet.Cell("K2").Style.Border.TopBorder.Should().Be(XLBorderStyleValues.None);
-        HasDrawingInRange(download, "COA小卡_STD-N010_2", "K2:R20").Should().BeFalse();
+        HasDrawingInRange(download, "COA小卡2", "K2:R20").Should().BeFalse();
     }
 
     private static CoaWorkbookExporter CreateExporter(string? largeTemplatePath = null) =>

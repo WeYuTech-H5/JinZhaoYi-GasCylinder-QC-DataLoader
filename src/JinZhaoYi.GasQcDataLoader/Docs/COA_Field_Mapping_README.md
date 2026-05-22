@@ -103,10 +103,10 @@ COA 大卡與小卡都不直接讀匯入計算表 `ZZ_NF_GAS_QC_LOT_PORT_PPB`，
 | 項目 | 規則 |
 | --- | --- |
 | 模板 sheet | `COA(小卡).xlsx` 的 `Report(空白)` |
-| sheet 名稱 | `COA小卡_{SampleName}`；同一筆超過 9 張時續頁為 `COA小卡_{SampleName}_2`、`_3`... |
-| 小卡張數 | 前端 `cardsPerPage`，可輸入 1 以上整數；每張 sheet 最多 9 格，超過 9 會自動換頁 |
-| 多筆資料 | 每筆 Excel PPB history row 依小卡張數產生 1 張或多張 sheet |
-| 同一張 sheet 內容 | 每格都填同一筆資料；尾頁未使用的格子會移除內容與框線 |
+| sheet 名稱 | `COA小卡1`、`COA小卡2`... |
+| 小卡張數 | 每筆 Excel PPB history row / 每支鋼瓶只產生 1 張小卡 |
+| 多筆資料 | 多筆鋼瓶資料依序放入同一張 A4；每張 sheet 最多 9 格，超過 9 支自動換頁 |
+| 同一張 sheet 內容 | 每格依序填入一支鋼瓶資料；尾頁未使用的格子會移除內容與框線 |
 
 ### 小卡 9 格位置
 

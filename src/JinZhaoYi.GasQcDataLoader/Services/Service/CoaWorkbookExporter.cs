@@ -98,7 +98,8 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
         var orderedRows = OrderRows(rows);
         var templatePath = ResolveTemplatePath(_options.CoaExport.SmallTemplatePath, "COA(小卡).xlsx");
 
-        var content = ExportSmallWorkbookToBytes(templatePath, orderedRows, cardsPerPage);
+        // The old cardsPerPage request value is kept for API compatibility; the A4 template has 9 fixed slots.
+        var content = ExportSmallWorkbookToBytes(templatePath, orderedRows, SmallCardLayouts.Count);
         return new CoaWorkbookDownload(
             content,
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -154,17 +155,14 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
             ?? throw new InvalidOperationException($"COA small template does not contain worksheet '{SmallBlankSheetName}'.");
         var templatePart = (WorksheetPart)workbookPart.GetPartById(templateSheet.Id!);
 
-        // 小卡張數可以超過 9；每張 sheet 最多 9 格，尾頁未使用的格子會移除框線與內容。
+        // Each selected cylinder produces one small card. A worksheet contains up to 9 cards.
         var pages = BuildSmallCardPages(orderedRows, cardsPerPage);
         for (var pageIndex = 0; pageIndex < pages.Count; pageIndex++)
         {
             var page = pages[pageIndex];
-            var row = page.Row;
             var targetSheetName = BuildUniqueOpenXmlSheetName(
                 workbookPart,
-                row is null
-                    ? $"COA小卡{pageIndex + 1}"
-                    : page.RowPage == 1 ? $"COA小卡_{row.SampleName}" : $"COA小卡_{row.SampleName}_{page.RowPage}",
+                $"COA\u5c0f\u5361{pageIndex + 1}",
                 pageIndex + 1);
             var worksheetPart = pageIndex == 0
                 ? templatePart
@@ -176,16 +174,11 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
             }
 
             ClearSmallDynamicCells(worksheetPart);
-            ClearUnusedSmallCardSlots(worksheetPart, page.CardsOnPage);
+            ClearUnusedSmallCardSlots(worksheetPart, page.Rows.Count);
 
-            if (row is null)
+            for (var cardIndex = 0; cardIndex < page.Rows.Count; cardIndex++)
             {
-                continue;
-            }
-
-            for (var cardIndex = 0; cardIndex < page.CardsOnPage; cardIndex++)
-            {
-                WriteSmallCard(worksheetPart, SmallCardLayouts[cardIndex], row);
+                WriteSmallCard(worksheetPart, SmallCardLayouts[cardIndex], page.Rows[cardIndex]);
             }
         }
 
@@ -560,20 +553,14 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
     {
         if (rows.Count == 0)
         {
-            return [new SmallCardPage(null, 1, 0)];
+            return [new SmallCardPage([])];
         }
 
+        var maxCardsPerPage = Math.Min(cardsPerPage, SmallCardLayouts.Count);
         var pages = new List<SmallCardPage>();
-        foreach (var row in rows)
+        for (var index = 0; index < rows.Count; index += maxCardsPerPage)
         {
-            var remaining = cardsPerPage;
-            var rowPage = 1;
-            while (remaining > 0)
-            {
-                var cardsOnPage = Math.Min(SmallCardLayouts.Count, remaining);
-                pages.Add(new SmallCardPage(row, rowPage++, cardsOnPage));
-                remaining -= cardsOnPage;
-            }
+            pages.Add(new SmallCardPage(rows.Skip(index).Take(maxCardsPerPage).ToArray()));
         }
 
         return pages;
@@ -1036,7 +1023,7 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
         string ExpirationCell,
         string RangeReference);
 
-    private sealed record SmallCardPage(QcDataRow? Row, int RowPage, int CardsOnPage);
+    private sealed record SmallCardPage(IReadOnlyList<QcDataRow> Rows);
 
     private readonly record struct CellRange(int StartColumn, int EndColumn, uint StartRow, uint EndRow);
 
