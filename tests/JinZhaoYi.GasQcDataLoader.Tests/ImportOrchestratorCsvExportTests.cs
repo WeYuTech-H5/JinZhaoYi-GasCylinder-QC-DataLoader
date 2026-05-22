@@ -174,6 +174,12 @@ public sealed class ImportOrchestratorCsvExportTests
                     [lotNo] = new() { LotNo = lotNo, SampleName = "TSMC-024" }
                 });
 
+        public Task<MfgJsonImportResult> UpsertMfgJsonLotsAsync(
+            IReadOnlyCollection<MfgJsonLotRecord> records,
+            string sourceFileName,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(new MfgJsonImportResult());
+
         public Task<QcDataRow?> GetLatestRfAsync(DateTime asOf, CancellationToken cancellationToken) =>
             Task.FromResult<QcDataRow?>(new QcDataRow { Id = "RF,ppb(5841)" });
 

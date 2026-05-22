@@ -41,6 +41,9 @@ try
     builder.Services.AddSingleton<IQuery2WorkbookExporter, Query2WorkbookExporter>();
     builder.Services.AddSingleton<IPortPpbCsvExporter, PortPpbCsvExporter>();
     builder.Services.AddSingleton<ICoaWorkbookExporter, CoaWorkbookExporter>();
+    builder.Services.AddSingleton<IMfgJsonParser, MfgJsonParser>();
+    builder.Services.AddSingleton<IMfgJsonImportStateStore, MfgJsonImportStateStore>();
+    builder.Services.AddSingleton<IMfgJsonImportService, MfgJsonImportService>();
     builder.Services.AddSingleton<IImportErrorReportExporter, ImportErrorReportExporter>();
     builder.Services.AddSingleton<IQcDownloadFileResolver, QcDownloadFileResolver>();
     builder.Services.AddSingleton<IImportOrchestrator, ImportOrchestrator>();
@@ -60,6 +63,7 @@ try
     });
 
     builder.Services.AddHostedService<Worker>();
+    builder.Services.AddHostedService<MfgJsonImportWorker>();
 
     var app = builder.Build();
 

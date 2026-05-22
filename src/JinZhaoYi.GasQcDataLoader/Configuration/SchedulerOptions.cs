@@ -70,6 +70,9 @@ public sealed class SchedulerOptions
     // COA 大卡 / 小卡匯出設定；資料來源固定為 Excel PPB history。
     public SchedulerCoaExportOptions CoaExport { get; init; } = new();
 
+    // 正式區暫時透過舊 DB 匯出的 MFG JSON 同步製造 LOT 主檔。
+    public SchedulerMfgJsonImportOptions MfgJsonImport { get; init; } = new();
+
     // QC 檔案下載 API 設定。
     public SchedulerDownloadApiOptions DownloadApi { get; init; } = new();
 
@@ -158,6 +161,23 @@ public sealed class SchedulerCoaExportOptions
     public string? SmallTemplatePath { get; init; }
 
     public int DefaultSmallCardsPerPage { get; init; } = 9;
+}
+
+public sealed class SchedulerMfgJsonImportOptions
+{
+    public bool Enabled { get; init; }
+
+    public string WatchDirectory { get; init; } = @"C:\temp\data\MFGJSON";
+
+    public string FilePattern { get; init; } = "MFGExport_*.json";
+
+    public int PollIntervalSeconds { get; init; } = 30;
+
+    public int StableFileSeconds { get; init; } = 10;
+
+    public string StateFilePath { get; init; } = @"C:\temp\data\MFGJSON\MfgJsonImportState.json";
+
+    public string CreateUserPrefix { get; init; } = "MFGJSON";
 }
 
 public sealed class SchedulerDownloadApiOptions

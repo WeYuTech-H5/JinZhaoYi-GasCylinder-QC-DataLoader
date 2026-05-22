@@ -31,6 +31,91 @@ public sealed class DapperRepository(
         WHERE LotNo IN @LotNos
         """;
 
+    private const string MfgJsonExistingLotSqlFormat = """
+        SELECT ID
+        FROM dbo.{0}
+        WHERE ID = @Id
+           OR LotNo = @LotNo
+           OR TRY_CONVERT(decimal(18, 0), si0_id) = @Id
+        """;
+
+    private const string MfgJsonInsertSqlFormat = """
+        INSERT INTO dbo.{0}
+        (
+            [ID], [LotNo], [SamplName], [ProdDate], [ProdType], [Prod_Operator], [Prod_IniPrs], [Prod_LeakTest1], [Prod_vacumPrs],
+            [Prod_Can1_FillingPrs], [Prod_Can2_FillingPrs], [Prod_Bomb2_FillingPrs], [Prod_Bomb1_FillingPrs], [Prod_Bomb3_FillingPrs], [Prod_LeakTest2],
+            [Prod_Can1_LotNo], [Prod_Can1_Flow], [Prod_Can1_Sec], [Prod_Can1_Prs], [Prod_Can2_LotNo], [Prod_Can2_Flow], [Prod_Can2_Sec], [Prod_Can2_Prs],
+            [Prod_Bomb2_LotNo], [Prod_Bomb2_Flow], [Prod_Bomb2_Sec], [Prod_Bomb2_Prs], [Prod_Bomb1_LotNo], [Prod_Bomb1_SetFillingPrs], [Prod_Bomb1_Prs],
+            [Prod_Bomb3_LotNo], [Prod_Bomb3_SetFillingPrs], [Prod_Bomb3_Prs], [SampleNo], [SampleType], [Container], [ProdOrder], [CalType], [Cal_id], [IniPrs],
+            [QCComplete], [QCInst], [QCPort], [QCTime], [Result], [RF_ID], [FnlPrs], [CREATE_USER], [CREATE_TIME], [si0_id]
+        )
+        VALUES
+        (
+            @Id, @LotNo, @SampleName, @ProdDate, @ProdType, @ProdOperator, @ProdIniPrs, @ProdLeakTest1, @ProdVacuumPrs,
+            @ProdCan1FillingPrs, @ProdCan2FillingPrs, @ProdBomb2FillingPrs, @ProdBomb1FillingPrs, @ProdBomb3FillingPrs, @ProdLeakTest2,
+            @ProdCan1LotNo, @ProdCan1Flow, @ProdCan1Sec, @ProdCan1Prs, @ProdCan2LotNo, @ProdCan2Flow, @ProdCan2Sec, @ProdCan2Prs,
+            @ProdBomb2LotNo, @ProdBomb2Flow, @ProdBomb2Sec, @ProdBomb2Prs, @ProdBomb1LotNo, @ProdBomb1SetFillingPrs, @ProdBomb1Prs,
+            @ProdBomb3LotNo, @ProdBomb3SetFillingPrs, @ProdBomb3Prs, @SampleNo, @SampleType, @Container, @ProdOrder, @CalType, @CalId, @IniPrs,
+            @QcComplete, @QcInst, @QcPort, @QcTime, @Result, @RfId, @FnlPrs, @AuditUser, @Now, @Si0Id
+        )
+        """;
+
+    private const string MfgJsonUpdateSqlFormat = """
+        UPDATE dbo.{0}
+        SET
+            [ID] = @Id,
+            [LotNo] = @LotNo,
+            [SamplName] = @SampleName,
+            [ProdDate] = @ProdDate,
+            [ProdType] = @ProdType,
+            [Prod_Operator] = @ProdOperator,
+            [Prod_IniPrs] = @ProdIniPrs,
+            [Prod_LeakTest1] = @ProdLeakTest1,
+            [Prod_vacumPrs] = @ProdVacuumPrs,
+            [Prod_Can1_FillingPrs] = @ProdCan1FillingPrs,
+            [Prod_Can2_FillingPrs] = @ProdCan2FillingPrs,
+            [Prod_Bomb2_FillingPrs] = @ProdBomb2FillingPrs,
+            [Prod_Bomb1_FillingPrs] = @ProdBomb1FillingPrs,
+            [Prod_Bomb3_FillingPrs] = @ProdBomb3FillingPrs,
+            [Prod_LeakTest2] = @ProdLeakTest2,
+            [Prod_Can1_LotNo] = @ProdCan1LotNo,
+            [Prod_Can1_Flow] = @ProdCan1Flow,
+            [Prod_Can1_Sec] = @ProdCan1Sec,
+            [Prod_Can1_Prs] = @ProdCan1Prs,
+            [Prod_Can2_LotNo] = @ProdCan2LotNo,
+            [Prod_Can2_Flow] = @ProdCan2Flow,
+            [Prod_Can2_Sec] = @ProdCan2Sec,
+            [Prod_Can2_Prs] = @ProdCan2Prs,
+            [Prod_Bomb2_LotNo] = @ProdBomb2LotNo,
+            [Prod_Bomb2_Flow] = @ProdBomb2Flow,
+            [Prod_Bomb2_Sec] = @ProdBomb2Sec,
+            [Prod_Bomb2_Prs] = @ProdBomb2Prs,
+            [Prod_Bomb1_LotNo] = @ProdBomb1LotNo,
+            [Prod_Bomb1_SetFillingPrs] = @ProdBomb1SetFillingPrs,
+            [Prod_Bomb1_Prs] = @ProdBomb1Prs,
+            [Prod_Bomb3_LotNo] = @ProdBomb3LotNo,
+            [Prod_Bomb3_SetFillingPrs] = @ProdBomb3SetFillingPrs,
+            [Prod_Bomb3_Prs] = @ProdBomb3Prs,
+            [SampleNo] = @SampleNo,
+            [SampleType] = @SampleType,
+            [Container] = @Container,
+            [ProdOrder] = @ProdOrder,
+            [CalType] = @CalType,
+            [Cal_id] = @CalId,
+            [IniPrs] = @IniPrs,
+            [QCComplete] = @QcComplete,
+            [QCInst] = @QcInst,
+            [QCPort] = @QcPort,
+            [QCTime] = @QcTime,
+            [Result] = @Result,
+            [RF_ID] = @RfId,
+            [FnlPrs] = @FnlPrs,
+            [EDIT_USER] = @AuditUser,
+            [EDIT_TIME] = @Now,
+            [si0_id] = @Si0Id
+        WHERE [ID] = @ExistingId
+        """;
+
     private const string LatestRfSqlFormat = """
         SELECT TOP (1) *
         FROM dbo.{0}
@@ -283,6 +368,92 @@ public sealed class DapperRepository(
 
     private readonly SchedulerOptions _options = options.Value;
     private readonly SchedulerTableOptions _tables = options.Value.Tables;
+
+    public async Task<MfgJsonImportResult> UpsertMfgJsonLotsAsync(
+        IReadOnlyCollection<MfgJsonLotRecord> records,
+        string sourceFileName,
+        CancellationToken cancellationToken)
+    {
+        if (records.Count == 0)
+        {
+            return new MfgJsonImportResult();
+        }
+
+        await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
+        await connection.OpenAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
+
+        var inserted = 0;
+        var updated = 0;
+        var importedLots = new List<MfgJsonImportedLot>();
+        var tableName = Quote(_tables.MfgLot);
+        var existingSql = string.Format(MfgJsonExistingLotSqlFormat, tableName);
+        var insertSql = string.Format(MfgJsonInsertSqlFormat, tableName);
+        var updateSql = string.Format(MfgJsonUpdateSqlFormat, tableName);
+        var now = DateTime.Now;
+        var auditUser = BuildMfgJsonAuditUser(sourceFileName);
+
+        try
+        {
+            foreach (var record in records)
+            {
+                var parameters = CreateMfgJsonParameters(record, auditUser, now);
+                var existingIds = (await connection.QueryAsync<decimal>(
+                        new CommandDefinition(
+                            existingSql,
+                            parameters,
+                            transaction,
+                            cancellationToken: cancellationToken)))
+                    .Distinct()
+                    .ToArray();
+
+                // 同一筆 JSON 如果用 si0_id / ID / LotNo 對到多筆 DB row，代表正式資料已不唯一，不能猜要覆蓋哪一筆。
+                if (existingIds.Length > 1)
+                {
+                    throw new InvalidOperationException(
+                        $"MFG JSON record maps to multiple { _tables.MfgLot } rows. LotNo={record.LotNo}, si0_id={record.Si0Id}.");
+                }
+
+                if (existingIds.Length == 0)
+                {
+                    await connection.ExecuteAsync(
+                        new CommandDefinition(
+                            insertSql,
+                            parameters,
+                            transaction,
+                            cancellationToken: cancellationToken));
+
+                    inserted++;
+                    importedLots.Add(new MfgJsonImportedLot { LotNo = record.LotNo, Si0Id = record.Si0Id, Action = "Inserted" });
+                    continue;
+                }
+
+                parameters.Add("ExistingId", existingIds[0]);
+                await connection.ExecuteAsync(
+                    new CommandDefinition(
+                        updateSql,
+                        parameters,
+                        transaction,
+                        cancellationToken: cancellationToken));
+
+                updated++;
+                importedLots.Add(new MfgJsonImportedLot { LotNo = record.LotNo, Si0Id = record.Si0Id, Action = "Updated" });
+            }
+
+            await transaction.CommitAsync(cancellationToken);
+            return new MfgJsonImportResult
+            {
+                InsertedCount = inserted,
+                UpdatedCount = updated,
+                Lots = importedLots
+            };
+        }
+        catch
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            throw;
+        }
+    }
 
     public async Task<IReadOnlyDictionary<string, MfgLot>> GetLotsByLotNoAsync(IEnumerable<string> lotNos, CancellationToken cancellationToken)
     {
@@ -1753,6 +1924,24 @@ public sealed class DapperRepository(
 
     private static string ComputeHashHex(string text) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text)));
+
+    private static DynamicParameters CreateMfgJsonParameters(MfgJsonLotRecord record, string auditUser, DateTime now)
+    {
+        var parameters = new DynamicParameters(record);
+        parameters.Add("AuditUser", auditUser);
+        parameters.Add("Now", now);
+        return parameters;
+    }
+
+    private string BuildMfgJsonAuditUser(string sourceFileName)
+    {
+        var prefix = string.IsNullOrWhiteSpace(_options.MfgJsonImport.CreateUserPrefix)
+            ? "MFGJSON"
+            : _options.MfgJsonImport.CreateUserPrefix.Trim();
+
+        // CREATE_USER 直接標示來源 JSON 檔名，方便正式區回查是哪一份 C:\temp\data\MFGJSON 檔案寫入。
+        return $"{prefix}({Path.GetFileName(sourceFileName)})";
+    }
 
     private static string Quote(string identifier) => $"[{identifier.Replace("]", "]]")}]";
 

@@ -10,7 +10,11 @@ namespace JinZhaoYi.GasQcDataLoader.Logging;
 internal static class SerilogConfigurator
 {
     private const string LogDirectoryName = "Logs";
+    private const string ApplicationLogDirectoryName = "Application";
+    private const string MfgJsonLogDirectoryName = "MFGJSON";
     private const string LogFilePattern = "app-.log";
+    private const string MfgJsonLogFilePattern = "scan-.log";
+    private const string MfgJsonSourceContextPrefix = "JinZhaoYi.GasQcDataLoader.Services.";
 
     public static Logger CreateBootstrapLogger()
     {
@@ -36,14 +40,33 @@ internal static class SerilogConfigurator
 
         if (options.File.Enabled)
         {
-            loggerConfiguration.WriteTo.File(
-                path: Path.Combine(logDirectory, LogFilePattern),
-                rollingInterval: RollingInterval.Day,
-                retainedFileCountLimit: options.File.RetainDays,
-                encoding: Encoding.UTF8,
-                fileSizeLimitBytes: options.File.FileSizeLimitMB * 1024L * 1024L,
-                rollOnFileSizeLimit: true,
-                shared: true);
+            var applicationLogDirectory = Path.Combine(logDirectory, ApplicationLogDirectoryName);
+            var mfgJsonLogDirectory = Path.Combine(logDirectory, MfgJsonLogDirectoryName);
+            Directory.CreateDirectory(applicationLogDirectory);
+            Directory.CreateDirectory(mfgJsonLogDirectory);
+
+            // 程式執行 log 與 MFG JSON 掃描 log 分資料夾保存，正式區查問題時不用混在同一份 app log。
+            loggerConfiguration.WriteTo.Logger(config => config
+                .Filter.ByExcluding(IsMfgJsonScanEvent)
+                .WriteTo.File(
+                    path: Path.Combine(applicationLogDirectory, LogFilePattern),
+                    rollingInterval: RollingInterval.Day,
+                    retainedFileCountLimit: options.File.RetainDays,
+                    encoding: Encoding.UTF8,
+                    fileSizeLimitBytes: options.File.FileSizeLimitMB * 1024L * 1024L,
+                    rollOnFileSizeLimit: true,
+                    shared: true));
+
+            loggerConfiguration.WriteTo.Logger(config => config
+                .Filter.ByIncludingOnly(IsMfgJsonScanEvent)
+                .WriteTo.File(
+                    path: Path.Combine(mfgJsonLogDirectory, MfgJsonLogFilePattern),
+                    rollingInterval: RollingInterval.Day,
+                    retainedFileCountLimit: options.File.RetainDays,
+                    encoding: Encoding.UTF8,
+                    fileSizeLimitBytes: options.File.FileSizeLimitMB * 1024L * 1024L,
+                    rollOnFileSizeLimit: true,
+                    shared: true));
         }
 
         if (options.Seq.Enabled)
@@ -114,5 +137,17 @@ internal static class SerilogConfigurator
             "fatal" => LogEventLevel.Fatal,
             _ => LogEventLevel.Information
         });
+    }
+
+    private static bool IsMfgJsonScanEvent(LogEvent logEvent)
+    {
+        if (!logEvent.Properties.TryGetValue("SourceContext", out var sourceContextValue))
+        {
+            return false;
+        }
+
+        var sourceContext = sourceContextValue.ToString().Trim('"');
+        return sourceContext.StartsWith(MfgJsonSourceContextPrefix, StringComparison.Ordinal) &&
+               sourceContext.Contains("MfgJson", StringComparison.Ordinal);
     }
 }

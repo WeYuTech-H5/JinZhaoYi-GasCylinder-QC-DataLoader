@@ -173,6 +173,12 @@ public sealed class RfExtractorImportServiceTests : IDisposable
         public Task<IReadOnlyDictionary<string, MfgLot>> GetLotsByLotNoAsync(IEnumerable<string> lotNos, CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyDictionary<string, MfgLot>>(new Dictionary<string, MfgLot>(StringComparer.OrdinalIgnoreCase));
 
+        public Task<MfgJsonImportResult> UpsertMfgJsonLotsAsync(
+            IReadOnlyCollection<MfgJsonLotRecord> records,
+            string sourceFileName,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(new MfgJsonImportResult());
+
         public Task<QcDataRow?> GetLatestRfAsync(DateTime asOf, CancellationToken cancellationToken) =>
             Task.FromResult<QcDataRow?>(null);
 

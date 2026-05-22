@@ -6,6 +6,11 @@ public interface IDapperRepository
 {
     Task<IReadOnlyDictionary<string, MfgLot>> GetLotsByLotNoAsync(IEnumerable<string> lotNos, CancellationToken cancellationToken);
 
+    Task<MfgJsonImportResult> UpsertMfgJsonLotsAsync(
+        IReadOnlyCollection<MfgJsonLotRecord> records,
+        string sourceFileName,
+        CancellationToken cancellationToken);
+
     Task<QcDataRow?> GetLatestRfAsync(DateTime asOf, CancellationToken cancellationToken);
 
     Task<IReadOnlyList<QcDataRow>> GetPortPpbRowsAsync(
