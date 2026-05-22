@@ -512,9 +512,9 @@ static bool TryValidateCoaSmallExportRequest(
         return false;
     }
 
-    if (cardsPerPage is < 1 or > 9)
+    if (cardsPerPage < 1)
     {
-        message = "cardsPerPage must be between 1 and 9.";
+        message = "cardsPerPage must be greater than or equal to 1.";
         return false;
     }
 

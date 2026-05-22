@@ -166,10 +166,50 @@ public sealed class CoaWorkbookExporterTests
     {
         var exporter = CreateExporter();
 
-        var act = () => exporter.ExportSmallForDownload([CreateRow("STD-001", "1L_Cylinder")], "20260521", 10);
+        var act = () => exporter.ExportSmallForDownload([CreateRow("STD-001", "1L_Cylinder")], "20260521", 0);
 
         act.Should().Throw<ArgumentOutOfRangeException>()
             .WithMessage("*cardsPerPage*");
+    }
+
+    [Fact]
+    public void ExportSmallForDownload_removes_unused_card_slots()
+    {
+        var exporter = CreateExporter();
+        var row = CreateRow("STD-N004", "1L_Cylinder");
+        row.Areas["Acetone"] = 94m;
+
+        var download = exporter.ExportSmallForDownload([row], "20260521", 4);
+
+        using var workbook = Open(download);
+        var sheet = workbook.Worksheet("COA小卡_STD-N004");
+        sheet.Cell("F6").GetString().Should().Be("STD-N004");
+        sheet.Cell("O6").GetString().Should().Be("STD-N004");
+        sheet.Cell("X6").GetString().Should().Be("STD-N004");
+        sheet.Cell("F28").GetString().Should().Be("STD-N004");
+        sheet.Cell("O28").GetString().Should().BeEmpty();
+        sheet.Cell("K24").Style.Border.TopBorder.Should().Be(XLBorderStyleValues.None);
+        sheet.Cell("X50").GetString().Should().BeEmpty();
+        sheet.Cell("T46").Style.Border.TopBorder.Should().Be(XLBorderStyleValues.None);
+    }
+
+    [Fact]
+    public void ExportSmallForDownload_splits_more_than_nine_cards_to_next_sheet()
+    {
+        var exporter = CreateExporter();
+        var row = CreateRow("STD-N010", "1L_Cylinder");
+        row.Areas["Acetone"] = 100m;
+
+        var download = exporter.ExportSmallForDownload([row], "20260521", 10);
+
+        using var workbook = Open(download);
+        workbook.Worksheets.Count.Should().Be(2);
+        workbook.Worksheet("COA小卡_STD-N010").Cell("X50").GetString().Should().Be("STD-N010");
+
+        var secondSheet = workbook.Worksheet("COA小卡_STD-N010_2");
+        secondSheet.Cell("F6").GetString().Should().Be("STD-N010");
+        secondSheet.Cell("O6").GetString().Should().BeEmpty();
+        secondSheet.Cell("K2").Style.Border.TopBorder.Should().Be(XLBorderStyleValues.None);
     }
 
     private static CoaWorkbookExporter CreateExporter(string? largeTemplatePath = null) =>

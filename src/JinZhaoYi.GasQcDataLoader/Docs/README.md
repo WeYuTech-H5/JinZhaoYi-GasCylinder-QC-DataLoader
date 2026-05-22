@@ -90,7 +90,7 @@ Log 會放在執行目錄底下的 `Logs`，並依用途分資料夾：
 | `GET /api/excel-ppb-options?batchDate=yyyyMMdd&page=1&pageSize=50` | 讀取 Query2 Excel 成功產生後保存的 PPB history，供 CSV/COA 勾選。 |
 | `POST /api/exports/excel-ppb-csv` | 依 Excel PPB history 匯出 TO14C CSV。 |
 | `POST /api/exports/excel-ppb-coa-large` | 依 Excel PPB history 匯出 COA 大卡，支援一般/亞東 template。 |
-| `POST /api/exports/excel-ppb-coa-small` | 依 Excel PPB history 匯出 COA 小卡，支援每頁 1 到 9 格。 |
+| `POST /api/exports/excel-ppb-coa-small` | 依 Excel PPB history 匯出 COA 小卡，支援 1 張以上；每頁最多 9 格，超過自動換頁。 |
 | `GET /api/downloads/cylinder-qc/{batchDate}` | 下載既有 `Cylinder_Qc[{batchDate}].xlsx`。 |
 | `GET /api/downloads/to14c-csv/{sampleName}` | 下載指定 sample 的 TO14C CSV。 |
 

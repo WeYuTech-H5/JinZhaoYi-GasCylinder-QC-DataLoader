@@ -103,10 +103,10 @@ COA 大卡與小卡都不直接讀匯入計算表 `ZZ_NF_GAS_QC_LOT_PORT_PPB`，
 | 項目 | 規則 |
 | --- | --- |
 | 模板 sheet | `COA(小卡).xlsx` 的 `Report(空白)` |
-| sheet 名稱 | `COA小卡_{SampleName}` |
-| 每頁格數 | 前端 `cardsPerPage`，限制 1 到 9 |
-| 多筆資料 | 每筆 Excel PPB history row 產生一張 sheet |
-| 同一張 sheet 內容 | 依 `cardsPerPage`，每格都填同一筆資料 |
+| sheet 名稱 | `COA小卡_{SampleName}`；同一筆超過 9 張時續頁為 `COA小卡_{SampleName}_2`、`_3`... |
+| 小卡張數 | 前端 `cardsPerPage`，可輸入 1 以上整數；每張 sheet 最多 9 格，超過 9 會自動換頁 |
+| 多筆資料 | 每筆 Excel PPB history row 依小卡張數產生 1 張或多張 sheet |
+| 同一張 sheet 內容 | 每格都填同一筆資料；尾頁未使用的格子會移除內容與框線 |
 
 ### 小卡 9 格位置
 
@@ -149,4 +149,4 @@ COA 大卡與小卡都不直接讀匯入計算表 `ZZ_NF_GAS_QC_LOT_PORT_PPB`，
 
 ### 小卡模板保留欄位
 
-小卡的 logo、公司名、欄位標題、框線、簽名欄等都由模板保留，程式只覆寫上表列出的 SampleName、分析結果、母瓶 NO、QC 日期、有效期限。
+小卡的 logo、公司名、欄位標題、簽名欄等都由模板保留，程式只覆寫上表列出的 SampleName、分析結果、母瓶 NO、QC 日期、有效期限；尾頁未使用的小卡格會移除內容與框線。

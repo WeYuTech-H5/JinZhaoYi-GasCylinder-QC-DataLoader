@@ -56,15 +56,15 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
 
     private static readonly IReadOnlyList<SmallCardLayout> SmallCardLayouts =
     [
-        new("F6", "F8", "B19", "F19", "B20"),
-        new("O6", "O8", "K19", "O19", "K20"),
-        new("X6", "X8", "T19", "X19", "T20"),
-        new("F28", "F30", "B41", "F41", "B42"),
-        new("O28", "O30", "K41", "O41", "K42"),
-        new("X28", "X30", "T41", "X41", "T42"),
-        new("F50", "F52", "B63", "F63", "B64"),
-        new("O50", "O52", "K63", "O63", "K64"),
-        new("X50", "X52", "T63", "X63", "T64")
+        new("F6", "F8", "B19", "F19", "B20", "B2:I20"),
+        new("O6", "O8", "K19", "O19", "K20", "K2:R20"),
+        new("X6", "X8", "T19", "X19", "T20", "T2:AA20"),
+        new("F28", "F30", "B41", "F41", "B42", "B24:I42"),
+        new("O28", "O30", "K41", "O41", "K42", "K24:R42"),
+        new("X28", "X30", "T41", "X41", "T42", "T24:AA42"),
+        new("F50", "F52", "B63", "F63", "B64", "B46:I64"),
+        new("O50", "O52", "K63", "O63", "K64", "K46:R64"),
+        new("X50", "X52", "T63", "X63", "T64", "T46:AA64")
     ];
 
     private readonly SchedulerOptions _options = options.Value;
@@ -89,9 +89,9 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
         string batchDateText,
         int cardsPerPage)
     {
-        if (cardsPerPage is < 1 or > 9)
+        if (cardsPerPage < 1)
         {
-            throw new ArgumentOutOfRangeException(nameof(cardsPerPage), "cardsPerPage must be between 1 and 9.");
+            throw new ArgumentOutOfRangeException(nameof(cardsPerPage), "cardsPerPage must be greater than or equal to 1.");
         }
 
         var orderedRows = OrderRows(rows);
@@ -153,14 +153,17 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
             ?? throw new InvalidOperationException($"COA small template does not contain worksheet '{SmallBlankSheetName}'.");
         var templatePart = (WorksheetPart)workbookPart.GetPartById(templateSheet.Id!);
 
-        // 小卡的「格數」代表同一筆 Excel PPB history 要印幾張貼紙；例如 9 格就是 9 格都填同一筆資料。
-        var sheetCount = Math.Max(1, orderedRows.Count);
-        for (var pageIndex = 0; pageIndex < sheetCount; pageIndex++)
+        // 小卡張數可以超過 9；每張 sheet 最多 9 格，尾頁未使用的格子會移除框線與內容。
+        var pages = BuildSmallCardPages(orderedRows, cardsPerPage);
+        for (var pageIndex = 0; pageIndex < pages.Count; pageIndex++)
         {
-            var row = orderedRows.ElementAtOrDefault(pageIndex);
+            var page = pages[pageIndex];
+            var row = page.Row;
             var targetSheetName = BuildUniqueOpenXmlSheetName(
                 workbookPart,
-                row is null ? $"COA小卡{pageIndex + 1}" : $"COA小卡_{row.SampleName}",
+                row is null
+                    ? $"COA小卡{pageIndex + 1}"
+                    : page.RowPage == 1 ? $"COA小卡_{row.SampleName}" : $"COA小卡_{row.SampleName}_{page.RowPage}",
                 pageIndex + 1);
             var worksheetPart = pageIndex == 0
                 ? templatePart
@@ -172,13 +175,14 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
             }
 
             ClearSmallDynamicCells(worksheetPart);
+            ClearUnusedSmallCardSlots(worksheetPart, page.CardsOnPage);
 
             if (row is null)
             {
                 continue;
             }
 
-            for (var cardIndex = 0; cardIndex < cardsPerPage; cardIndex++)
+            for (var cardIndex = 0; cardIndex < page.CardsOnPage; cardIndex++)
             {
                 WriteSmallCard(worksheetPart, SmallCardLayouts[cardIndex], row);
             }
@@ -425,6 +429,92 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
                 SetStringCell(worksheetPart, $"{firstResult.Column}{firstResult.Row + index}", string.Empty);
             }
         }
+    }
+
+    private static void ClearUnusedSmallCardSlots(WorksheetPart worksheetPart, int cardsOnPage)
+    {
+        for (var index = cardsOnPage; index < SmallCardLayouts.Count; index++)
+        {
+            ClearSmallCardSlot(worksheetPart, SmallCardLayouts[index]);
+        }
+    }
+
+    private static void ClearSmallCardSlot(WorksheetPart worksheetPart, SmallCardLayout layout)
+    {
+        var range = ParseCellRange(layout.RangeReference);
+        RemoveMergedCellsInRange(worksheetPart, range);
+        var sheetData = worksheetPart.Worksheet.GetFirstChild<SheetData>();
+        if (sheetData is null)
+        {
+            return;
+        }
+
+        foreach (var row in sheetData.Elements<Row>())
+        {
+            var rowIndex = row.RowIndex?.Value ?? 0U;
+            if (rowIndex < range.StartRow || rowIndex > range.EndRow)
+            {
+                continue;
+            }
+
+            foreach (var cell in row.Elements<Cell>())
+            {
+                var reference = SplitCellReference(cell.CellReference?.Value ?? "A1");
+                var columnIndex = ColumnIndex(reference.Column);
+                if (columnIndex < range.StartColumn || columnIndex > range.EndColumn)
+                {
+                    continue;
+                }
+
+                cell.CellFormula?.Remove();
+                cell.CellValue = null;
+                cell.DataType = null;
+                cell.StyleIndex = null;
+            }
+        }
+    }
+
+    private static void RemoveMergedCellsInRange(WorksheetPart worksheetPart, CellRange range)
+    {
+        foreach (var mergeCells in worksheetPart.Worksheet.Elements<MergeCells>().ToArray())
+        {
+            foreach (var mergeCell in mergeCells.Elements<MergeCell>().ToArray())
+            {
+                var reference = mergeCell.Reference?.Value;
+                if (!string.IsNullOrWhiteSpace(reference) && RangesIntersect(ParseCellRange(reference), range))
+                {
+                    mergeCell.Remove();
+                }
+            }
+
+            if (!mergeCells.Elements<MergeCell>().Any())
+            {
+                mergeCells.Remove();
+            }
+        }
+    }
+
+    private static IReadOnlyList<SmallCardPage> BuildSmallCardPages(IReadOnlyList<QcDataRow> rows, int cardsPerPage)
+    {
+        if (rows.Count == 0)
+        {
+            return [new SmallCardPage(null, 1, 0)];
+        }
+
+        var pages = new List<SmallCardPage>();
+        foreach (var row in rows)
+        {
+            var remaining = cardsPerPage;
+            var rowPage = 1;
+            while (remaining > 0)
+            {
+                var cardsOnPage = Math.Min(SmallCardLayouts.Count, remaining);
+                pages.Add(new SmallCardPage(row, rowPage++, cardsOnPage));
+                remaining -= cardsOnPage;
+            }
+        }
+
+        return pages;
     }
 
     private static IReadOnlyList<QcDataRow> OrderRows(IReadOnlyCollection<QcDataRow> rows) =>
@@ -762,6 +852,26 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
         return (column.ToString().ToUpperInvariant(), uint.Parse(row.ToString(), CultureInfo.InvariantCulture));
     }
 
+    private static CellRange ParseCellRange(string rangeReference)
+    {
+        var parts = rangeReference.Split(':', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var start = SplitCellReference(parts[0]);
+        var end = parts.Length == 1 ? start : SplitCellReference(parts[1]);
+        var startColumn = ColumnIndex(start.Column);
+        var endColumn = ColumnIndex(end.Column);
+        return new CellRange(
+            Math.Min(startColumn, endColumn),
+            Math.Max(startColumn, endColumn),
+            Math.Min(start.Row, end.Row),
+            Math.Max(start.Row, end.Row));
+    }
+
+    private static bool RangesIntersect(CellRange left, CellRange right) =>
+        left.StartColumn <= right.EndColumn &&
+        left.EndColumn >= right.StartColumn &&
+        left.StartRow <= right.EndRow &&
+        left.EndRow >= right.StartRow;
+
     private static int ColumnIndex(string column)
     {
         var index = 0;
@@ -861,7 +971,12 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
         string FirstResultCell,
         string MotherLotCell,
         string QcDateCell,
-        string ExpirationCell);
+        string ExpirationCell,
+        string RangeReference);
+
+    private sealed record SmallCardPage(QcDataRow? Row, int RowPage, int CardsOnPage);
+
+    private readonly record struct CellRange(int StartColumn, int EndColumn, uint StartRow, uint EndRow);
 
     private sealed record LargeContainerFields(
         string ProductName,
