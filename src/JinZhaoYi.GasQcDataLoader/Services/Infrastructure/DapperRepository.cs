@@ -959,26 +959,41 @@ public sealed class DapperRepository(
         CancellationToken cancellationToken)
     {
         var excelExportKey = ComputeExcelExportKey(request);
+        var normalizedRfId = NormalizeKeyPart(request.RfId);
+        var normalizedStdRawIds = FormatSelectedIds(request.StdRawIds);
+        var normalizedPortRawIds = FormatSelectedIds(request.PortRawIds);
         await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
         await connection.OpenAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
 
         try
         {
-            // 相同 ExcelExportKey 代表同一組 Excel 匯出條件；重匯出時覆蓋舊快照。
-            var deleteSql = $"DELETE FROM dbo.{Quote(_tables.ExcelPpbHistory)} WHERE ExcelExportKey = @ExcelExportKey";
+            // ExcelExportKey now identifies calculation inputs. Source columns also match legacy date-based keys.
+            var deleteSql = $"""
+                DELETE FROM dbo.{Quote(_tables.ExcelPpbHistory)}
+                WHERE ExcelExportKey = @ExcelExportKey
+                   OR (
+                        UPPER(LTRIM(RTRIM(ISNULL(ExcelRfId, N'')))) = @NormalizedRfId
+                    AND ISNULL(ExcelStdRawIds, N'') = @NormalizedStdRawIds
+                    AND ISNULL(ExcelPortRawIds, N'') = @NormalizedPortRawIds
+                   )
+                """;
             await connection.ExecuteAsync(
                 new CommandDefinition(
                     deleteSql,
-                    new { ExcelExportKey = excelExportKey },
+                    new
+                    {
+                        ExcelExportKey = excelExportKey,
+                        NormalizedRfId = normalizedRfId,
+                        NormalizedStdRawIds = normalizedStdRawIds,
+                        NormalizedPortRawIds = normalizedPortRawIds
+                    },
                     transaction,
                     cancellationToken: cancellationToken));
 
             if (request.PpbRows.Count > 0)
             {
                 var sid = await GetMaxSidAsync(connection, transaction, _tables.ExcelPpbHistory, request.ExportedAt.Date, cancellationToken);
-                var normalizedStdRawIds = FormatSelectedIds(request.StdRawIds);
-                var normalizedPortRawIds = FormatSelectedIds(request.PortRawIds);
 
                 foreach (var row in request.PpbRows)
                 {
@@ -1919,12 +1934,10 @@ public sealed class DapperRepository(
         };
     }
 
-    private static string ComputeExcelExportKey(ExcelPpbHistorySaveRequest request)
+    internal static string ComputeExcelExportKey(ExcelPpbHistorySaveRequest request)
     {
         var text = string.Join(
             '\u001F',
-            request.StartDate.Date.ToString("yyyyMMdd", CultureInfo.InvariantCulture),
-            request.EndDate.Date.ToString("yyyyMMdd", CultureInfo.InvariantCulture),
             NormalizeKeyPart(request.RfId),
             FormatSelectedIds(request.StdRawIds),
             FormatSelectedIds(request.PortRawIds));
