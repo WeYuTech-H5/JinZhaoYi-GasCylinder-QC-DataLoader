@@ -70,6 +70,21 @@ public sealed class CoaWorkbookExporterTests
         workbook.Worksheets.Single().Cell("B11").GetString().Should().Be(expectedProductNumber);
     }
 
+    [Theory]
+    [InlineData("STD-N088", "PG000-0006")]
+    [InlineData("TSMC-012", "PG000-0016")]
+    public void ExportLargeForDownload_renders_corrected_product_numbers_in_default_black(string sampleName, string expectedProductNumber)
+    {
+        var exporter = CreateExporter();
+        var row = CreateRow(sampleName, "0.5L_Cylinder");
+
+        var download = exporter.ExportLargeForDownload([row], "20260521", CoaLargeTemplateType.Standard);
+
+        using var workbook = Open(download);
+        workbook.Worksheets.Single().Cell("B11").GetString().Should().Be(expectedProductNumber);
+        GetCellFontRgb(download, $"COA_{sampleName}", "B11").Should().BeNull();
+    }
+
     [Fact]
     public void ExportLargeForDownload_uses_yadong_sheet_when_requested()
     {
@@ -246,6 +261,22 @@ public sealed class CoaWorkbookExporterTests
         var worksheetPart = (WorksheetPart)workbookPart.GetPartById(sheet.Id!);
         return worksheetPart.DrawingsPart is not null &&
             worksheetPart.Worksheet.Descendants<Drawing>().Any();
+    }
+
+    private static string? GetCellFontRgb(CoaWorkbookDownload download, string sheetName, string cellReference)
+    {
+        using var stream = new MemoryStream(download.Content);
+        using var document = SpreadsheetDocument.Open(stream, false);
+        var workbookPart = document.WorkbookPart!;
+        var sheet = workbookPart.Workbook.Sheets!.Elements<Sheet>()
+            .First(item => string.Equals(item.Name?.Value, sheetName, StringComparison.OrdinalIgnoreCase));
+        var worksheetPart = (WorksheetPart)workbookPart.GetPartById(sheet.Id!);
+        var cell = worksheetPart.Worksheet.Descendants<Cell>()
+            .First(item => string.Equals(item.CellReference?.Value, cellReference, StringComparison.OrdinalIgnoreCase));
+        var styleIndex = (int)(cell.StyleIndex?.Value ?? 0U);
+        var styles = workbookPart.WorkbookStylesPart!.Stylesheet;
+        var fontIndex = (int)(styles.CellFormats!.Elements<CellFormat>().ElementAt(styleIndex).FontId?.Value ?? 0U);
+        return styles.Fonts!.Elements<Font>().ElementAt(fontIndex).Color?.Rgb?.Value;
     }
 
     private static bool HasDrawingInRange(CoaWorkbookDownload download, string sheetName, string rangeReference)
