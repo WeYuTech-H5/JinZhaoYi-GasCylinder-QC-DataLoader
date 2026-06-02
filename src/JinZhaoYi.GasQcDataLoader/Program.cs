@@ -41,6 +41,8 @@ try
     builder.Services.AddSingleton<IQuery2WorkbookExporter, Query2WorkbookExporter>();
     builder.Services.AddSingleton<IPortPpbCsvExporter, PortPpbCsvExporter>();
     builder.Services.AddSingleton<ICoaWorkbookExporter, CoaWorkbookExporter>();
+    builder.Services.AddSingleton<ISpreadsheetPdfConverter, SpreadsheetPdfConverter>();
+    builder.Services.AddSingleton<ICoaPackageExporter, CoaPackageExporter>();
     builder.Services.AddSingleton<IMfgJsonParser, MfgJsonParser>();
     builder.Services.AddSingleton<IMfgJsonImportStateStore, MfgJsonImportStateStore>();
     builder.Services.AddSingleton<IMfgJsonImportService, MfgJsonImportService>();
@@ -347,7 +349,7 @@ static void MapDownloadEndpoints(WebApplication app)
     app.MapPost("/api/exports/excel-ppb-coa-large", async (
         CoaLargeExportRequest request,
         IDapperRepository repository,
-        ICoaWorkbookExporter exporter,
+        ICoaPackageExporter exporter,
         CancellationToken cancellationToken) =>
     {
         if (!TryValidateCoaLargeExportRequest(request, out var batchDate, out var selectedIds, out var templateType, out var validationMessage))
@@ -362,7 +364,7 @@ static void MapDownloadEndpoints(WebApplication app)
         }
 
         var batchDateText = batchDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
-        var download = exporter.ExportLargeForDownload(rows, batchDateText, templateType);
+        var download = await exporter.ExportLargePackageForDownloadAsync(rows, batchDateText, templateType, cancellationToken);
         return Results.File(
             download.Content,
             download.ContentType,
@@ -372,7 +374,7 @@ static void MapDownloadEndpoints(WebApplication app)
     app.MapPost("/api/exports/excel-ppb-coa-small", async (
         CoaSmallExportRequest request,
         IDapperRepository repository,
-        ICoaWorkbookExporter exporter,
+        ICoaPackageExporter exporter,
         IOptions<SchedulerOptions> options,
         CancellationToken cancellationToken) =>
     {
@@ -388,7 +390,7 @@ static void MapDownloadEndpoints(WebApplication app)
         }
 
         var batchDateText = batchDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
-        var download = exporter.ExportSmallForDownload(rows, batchDateText, cardsPerPage);
+        var download = await exporter.ExportSmallPackageForDownloadAsync(rows, batchDateText, cardsPerPage, cancellationToken);
         return Results.File(
             download.Content,
             download.ContentType,

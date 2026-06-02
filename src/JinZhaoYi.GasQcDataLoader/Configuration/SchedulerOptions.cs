@@ -160,7 +160,15 @@ public sealed class SchedulerCoaExportOptions
 
     public string? SmallTemplatePath { get; init; }
 
+    public string? LargeHeaderImagePath { get; init; }
+
     public int DefaultSmallCardsPerPage { get; init; } = 9;
+
+    public string? LibreOfficePath { get; init; }
+
+    public int PdfConversionTimeoutSeconds { get; init; } = 60;
+
+    public bool UseBasicPdfFallback { get; init; } = true;
 }
 
 public sealed class SchedulerMfgJsonImportOptions

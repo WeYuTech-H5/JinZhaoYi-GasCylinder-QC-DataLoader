@@ -102,6 +102,45 @@ public sealed class CoaWorkbookExporterTests
     }
 
     [Fact]
+    public void ExportLargeForDownload_inserts_configured_header_image()
+    {
+        var headerImagePath = Path.Combine(Path.GetTempPath(), $"COA-header-{Guid.NewGuid():N}.png");
+        File.WriteAllBytes(headerImagePath, Convert.FromBase64String(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lJqGygAAAABJRU5ErkJggg=="));
+
+        try
+        {
+            var exporter = CreateExporter(largeHeaderImagePath: headerImagePath);
+            var row = CreateRow("STD-IMG", "0.5L_Cylinder");
+
+            var download = exporter.ExportLargeForDownload([row], "20260521", CoaLargeTemplateType.Standard);
+
+            HasWorksheetDrawing(download, "COA_STD-IMG").Should().BeTrue();
+        }
+        finally
+        {
+            File.Delete(headerImagePath);
+        }
+    }
+
+    [Fact]
+    public void ExportLargeForDownload_inserts_real_header_image_when_available()
+    {
+        var headerImagePath = @"C:\Users\Administrator\Desktop\codex image\金兆益圖片.png";
+        if (!File.Exists(headerImagePath))
+        {
+            return;
+        }
+
+        var exporter = CreateExporter(largeHeaderImagePath: headerImagePath);
+        var row = CreateRow("STD-REALIMG", "0.5L_Cylinder");
+
+        var download = exporter.ExportLargeForDownload([row], "20260521", CoaLargeTemplateType.Standard);
+
+        HasWorksheetDrawing(download, "COA_STD-REALIMG").Should().BeTrue();
+    }
+
+    [Fact]
     public void ExportLargeForDownload_uses_cas_number_to_resolve_result_columns()
     {
         var templatePath = Path.Combine(Path.GetTempPath(), $"COA-large-cas-{Guid.NewGuid():N}.xlsx");
@@ -227,13 +266,14 @@ public sealed class CoaWorkbookExporterTests
         HasDrawingInRange(download, "COA小卡2", "K2:R20").Should().BeFalse();
     }
 
-    private static CoaWorkbookExporter CreateExporter(string? largeTemplatePath = null) =>
+    private static CoaWorkbookExporter CreateExporter(string? largeTemplatePath = null, string? largeHeaderImagePath = null) =>
         new(Options.Create(new SchedulerOptions
         {
             CsvExport = new SchedulerCsvExportOptions { RawLotId = "CC-706988" },
             CoaExport = new SchedulerCoaExportOptions
             {
                 LargeTemplatePath = largeTemplatePath ?? ResolveTemplatePath("COA(大卡).xlsx"),
+                LargeHeaderImagePath = largeHeaderImagePath,
                 SmallTemplatePath = ResolveTemplatePath("COA(小卡).xlsx")
             }
         }));
