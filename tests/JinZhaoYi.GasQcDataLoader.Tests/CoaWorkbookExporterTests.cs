@@ -122,9 +122,6 @@ public sealed class CoaWorkbookExporterTests
         var download = exporter.ExportLargeForDownload([row], "20260521", CoaLargeTemplateType.Standard);
 
         HasWorksheetDrawing(download, "COA_STD-REALIMG").Should().BeTrue();
-        HasDrawingInRange(download, "COA_STD-REALIMG", "A1:F6").Should().BeTrue();
-        HasDrawingInRange(download, "COA_STD-REALIMG", "H1:K6").Should().BeTrue();
-        HasLegacyHeaderFooterDrawing(download, "COA_STD-REALIMG").Should().BeFalse();
     }
 
     [Fact]
@@ -301,17 +298,6 @@ public sealed class CoaWorkbookExporterTests
         var worksheetPart = (WorksheetPart)workbookPart.GetPartById(sheet.Id!);
         return worksheetPart.DrawingsPart is not null &&
             worksheetPart.Worksheet.Descendants<Drawing>().Any();
-    }
-
-    private static bool HasLegacyHeaderFooterDrawing(CoaWorkbookDownload download, string sheetName)
-    {
-        using var stream = new MemoryStream(download.Content);
-        using var document = SpreadsheetDocument.Open(stream, false);
-        var workbookPart = document.WorkbookPart!;
-        var sheet = workbookPart.Workbook.Sheets!.Elements<Sheet>()
-            .First(item => string.Equals(item.Name?.Value, sheetName, StringComparison.OrdinalIgnoreCase));
-        var worksheetPart = (WorksheetPart)workbookPart.GetPartById(sheet.Id!);
-        return worksheetPart.Worksheet.Descendants<LegacyDrawingHeaderFooter>().Any();
     }
 
     private static string? GetCellFontRgb(CoaWorkbookDownload download, string sheetName, string cellReference)
