@@ -10,6 +10,7 @@ using JinZhaoYi.GasQcDataLoader.Configuration;
 using JinZhaoYi.GasQcDataLoader.DataModels;
 using JinZhaoYi.GasQcDataLoader.Services.Interface;
 using Microsoft.Extensions.Options;
+using A = DocumentFormat.OpenXml.Drawing;
 using Xdr = DocumentFormat.OpenXml.Drawing.Spreadsheet;
 
 namespace JinZhaoYi.GasQcDataLoader.Services.Service;
@@ -134,6 +135,7 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
             var targetSheetName = BuildUniqueOpenXmlSheetName(workbookPart, $"COA_{row.SampleName}", index + 1);
             var targetPart = CloneWorksheetPartWithRelationships(workbookPart, sourcePart, targetSheetName);
             WriteLargeRow(targetPart, row, templateType);
+            PromoteLargeHeaderFooterImages(targetPart);
         }
 
         DeleteOpenXmlSheets(workbookPart, Large500MlSheetName, Large1LSheetName, LargeYadongSheetName, "欄位註解");
@@ -210,6 +212,185 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
         }
 
         return stream.ToArray();
+    }
+
+    private static void PromoteLargeHeaderFooterImages(WorksheetPart worksheetPart)
+    {
+        var vmlPart = worksheetPart.VmlDrawingParts.FirstOrDefault();
+        if (vmlPart is null)
+        {
+            return;
+        }
+
+        var headerImages = ResolveHeaderFooterImages(vmlPart);
+        foreach (var image in headerImages)
+        {
+            AddWorksheetImage(worksheetPart, image);
+        }
+
+        if (headerImages.Count > 0)
+        {
+            EnsureWorksheetDimensionStartsAtA1(worksheetPart);
+            RemoveHeaderFooterImageReferences(worksheetPart, vmlPart);
+        }
+    }
+
+    private static IReadOnlyList<HeaderFooterImage> ResolveHeaderFooterImages(VmlDrawingPart vmlPart)
+    {
+        XNamespace v = "urn:schemas-microsoft-com:vml";
+        XNamespace o = "urn:schemas-microsoft-com:office:office";
+        using var vmlStream = vmlPart.GetStream(FileMode.Open, FileAccess.Read);
+        var document = XDocument.Load(vmlStream);
+
+        var images = new List<HeaderFooterImage>();
+        foreach (var shape in document.Descendants(v + "shape"))
+        {
+            var shapeId = shape.Attribute("id")?.Value;
+            HeaderFooterImagePlacement? placement = shapeId switch
+            {
+                "LH" => HeaderFooterImagePlacement.Left,
+                "RH" => HeaderFooterImagePlacement.Right,
+                _ => null
+            };
+
+            if (placement is null)
+            {
+                continue;
+            }
+
+            var relationshipId = shape.Element(v + "imagedata")?.Attribute(o + "relid")?.Value;
+            if (string.IsNullOrWhiteSpace(relationshipId) ||
+                vmlPart.GetPartById(relationshipId) is not ImagePart imagePart)
+            {
+                continue;
+            }
+
+            var size = ParseVmlImageSize(shape.Attribute("style")?.Value);
+            images.Add(new HeaderFooterImage(placement.Value, imagePart, size.WidthEmus, size.HeightEmus));
+        }
+
+        return images;
+    }
+
+    private static (long WidthEmus, long HeightEmus) ParseVmlImageSize(string? style)
+    {
+        const long emusPerPoint = 12700;
+        var widthPoints = TryParseVmlPointValue(style, "width") ?? 0m;
+        var heightPoints = TryParseVmlPointValue(style, "height") ?? 0m;
+        return ((long)(widthPoints * emusPerPoint), (long)(heightPoints * emusPerPoint));
+    }
+
+    private static decimal? TryParseVmlPointValue(string? style, string propertyName)
+    {
+        if (string.IsNullOrWhiteSpace(style))
+        {
+            return null;
+        }
+
+        var match = System.Text.RegularExpressions.Regex.Match(
+            style,
+            $@"(?:^|;)\s*{propertyName}\s*:\s*(?<value>[0-9.]+)pt",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        return match.Success &&
+            decimal.TryParse(match.Groups["value"].Value, NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out var value)
+                ? value
+                : null;
+    }
+
+    private static void AddWorksheetImage(WorksheetPart worksheetPart, HeaderFooterImage image)
+    {
+        var drawingsPart = worksheetPart.DrawingsPart;
+        if (drawingsPart?.WorksheetDrawing is null)
+        {
+            drawingsPart = worksheetPart.AddNewPart<DrawingsPart>();
+            drawingsPart.WorksheetDrawing = new Xdr.WorksheetDrawing();
+            worksheetPart.Worksheet.Append(new Drawing { Id = worksheetPart.GetIdOfPart(drawingsPart) });
+        }
+
+        var targetImagePart = drawingsPart.AddImagePart(image.ImagePart.ContentType);
+        using (var sourceStream = image.ImagePart.GetStream(FileMode.Open, FileAccess.Read))
+        using (var targetStream = targetImagePart.GetStream(FileMode.Create, FileAccess.Write))
+        {
+            sourceStream.CopyTo(targetStream);
+        }
+
+        var relationshipId = drawingsPart.GetIdOfPart(targetImagePart);
+        var anchor = CreateHeaderImageAnchor(drawingsPart.WorksheetDrawing, image, relationshipId);
+        drawingsPart.WorksheetDrawing.Append(anchor);
+        drawingsPart.WorksheetDrawing.Save();
+        worksheetPart.Worksheet.Save();
+    }
+
+    private static Xdr.OneCellAnchor CreateHeaderImageAnchor(
+        Xdr.WorksheetDrawing worksheetDrawing,
+        HeaderFooterImage image,
+        string relationshipId)
+    {
+        var drawingId = ResolveNextDrawingId(worksheetDrawing);
+        var columnId = image.Placement == HeaderFooterImagePlacement.Left ? "0" : "7";
+        var widthEmus = image.WidthEmus > 0 ? image.WidthEmus : 348L * 12700L;
+        var heightEmus = image.HeightEmus > 0 ? image.HeightEmus : 102L * 12700L;
+
+        var picture = new Xdr.Picture(
+            new Xdr.NonVisualPictureProperties(
+                new Xdr.NonVisualDrawingProperties
+                {
+                    Id = drawingId,
+                    Name = image.Placement == HeaderFooterImagePlacement.Left ? "COA Header Left" : "COA Header Right"
+                },
+                new Xdr.NonVisualPictureDrawingProperties(new A.PictureLocks { NoChangeAspect = true })),
+            new Xdr.BlipFill(
+                new A.Blip { Embed = relationshipId },
+                new A.Stretch(new A.FillRectangle())),
+            new Xdr.ShapeProperties(
+                new A.Transform2D(
+                    new A.Offset { X = 0, Y = 0 },
+                    new A.Extents { Cx = widthEmus, Cy = heightEmus }),
+                new A.PresetGeometry(new A.AdjustValueList()) { Preset = A.ShapeTypeValues.Rectangle }));
+
+        return new Xdr.OneCellAnchor(
+            new Xdr.FromMarker(
+                new Xdr.ColumnId(columnId),
+                new Xdr.ColumnOffset("0"),
+                new Xdr.RowId("0"),
+                new Xdr.RowOffset("0")),
+            new Xdr.Extent { Cx = widthEmus, Cy = heightEmus },
+            picture,
+            new Xdr.ClientData());
+    }
+
+    private static uint ResolveNextDrawingId(Xdr.WorksheetDrawing worksheetDrawing)
+    {
+        var maxId = worksheetDrawing
+            .Descendants<Xdr.NonVisualDrawingProperties>()
+            .Select(properties => properties.Id?.Value ?? 0U)
+            .DefaultIfEmpty(0U)
+            .Max();
+
+        return maxId + 1;
+    }
+
+    private static void EnsureWorksheetDimensionStartsAtA1(WorksheetPart worksheetPart)
+    {
+        var dimension = worksheetPart.Worksheet.GetFirstChild<SheetDimension>();
+        if (dimension?.Reference?.Value is null)
+        {
+            return;
+        }
+
+        var reference = dimension.Reference.Value;
+        var separatorIndex = reference.IndexOf(':', StringComparison.Ordinal);
+        dimension.Reference = separatorIndex < 0
+            ? "A1"
+            : $"A1{reference[separatorIndex..]}";
+    }
+
+    private static void RemoveHeaderFooterImageReferences(WorksheetPart worksheetPart, VmlDrawingPart vmlPart)
+    {
+        worksheetPart.Worksheet.Elements<HeaderFooter>().ToList().ForEach(element => element.Remove());
+        worksheetPart.Worksheet.Elements<LegacyDrawingHeaderFooter>().ToList().ForEach(element => element.Remove());
+        worksheetPart.DeletePart(vmlPart);
+        worksheetPart.Worksheet.Save();
     }
 
     private string ResolveLargeSourceSheetName(QcDataRow row, CoaLargeTemplateType templateType)
@@ -1043,6 +1224,18 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
     private sealed record SmallCardPage(IReadOnlyList<QcDataRow> Rows);
 
     private readonly record struct CellRange(int StartColumn, int EndColumn, uint StartRow, uint EndRow);
+
+    private sealed record HeaderFooterImage(
+        HeaderFooterImagePlacement Placement,
+        ImagePart ImagePart,
+        long WidthEmus,
+        long HeightEmus);
+
+    private enum HeaderFooterImagePlacement
+    {
+        Left,
+        Right
+    }
 
     private sealed record LargeContainerFields(
         string ProductName,
