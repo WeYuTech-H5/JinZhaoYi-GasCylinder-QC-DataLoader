@@ -102,42 +102,39 @@ public sealed class CoaWorkbookExporterTests
     }
 
     [Fact]
-    public void ExportLargeForDownload_inserts_configured_header_image()
+    public void ExportLargeForDownload_ignores_missing_configured_header_image()
     {
-        var headerImagePath = Path.Combine(Path.GetTempPath(), $"COA-header-{Guid.NewGuid():N}.png");
-        File.WriteAllBytes(headerImagePath, Convert.FromBase64String(
-            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lJqGygAAAABJRU5ErkJggg=="));
+        var headerImagePath = Path.Combine(Path.GetTempPath(), $"missing-COA-header-{Guid.NewGuid():N}.png");
+        var exporter = CreateExporter(largeHeaderImagePath: headerImagePath);
+        var row = CreateRow("STD-IMG", "0.5L_Cylinder");
 
-        try
-        {
-            var exporter = CreateExporter(largeHeaderImagePath: headerImagePath);
-            var row = CreateRow("STD-IMG", "0.5L_Cylinder");
+        var download = exporter.ExportLargeForDownload([row], "20260521", CoaLargeTemplateType.Standard);
 
-            var download = exporter.ExportLargeForDownload([row], "20260521", CoaLargeTemplateType.Standard);
-
-            HasWorksheetDrawing(download, "COA_STD-IMG").Should().BeTrue();
-        }
-        finally
-        {
-            File.Delete(headerImagePath);
-        }
+        HasWorksheetDrawing(download, "COA_STD-IMG").Should().BeTrue();
     }
 
     [Fact]
-    public void ExportLargeForDownload_inserts_real_header_image_when_available()
+    public void ExportLargeForDownload_preserves_template_header_image_without_external_image()
     {
-        var headerImagePath = @"C:\Users\Administrator\Desktop\codex image\金兆益圖片.png";
-        if (!File.Exists(headerImagePath))
-        {
-            return;
-        }
-
-        var exporter = CreateExporter(largeHeaderImagePath: headerImagePath);
+        var exporter = CreateExporter();
         var row = CreateRow("STD-REALIMG", "0.5L_Cylinder");
 
         var download = exporter.ExportLargeForDownload([row], "20260521", CoaLargeTemplateType.Standard);
 
         HasWorksheetDrawing(download, "COA_STD-REALIMG").Should().BeTrue();
+    }
+
+    [Fact]
+    public void ExportLargeForDownload_reports_missing_template_path()
+    {
+        var templatePath = Path.Combine(Path.GetTempPath(), $"missing-COA-large-{Guid.NewGuid():N}.xlsx");
+        var exporter = CreateExporter(templatePath);
+        var row = CreateRow("STD-MISSING", "0.5L_Cylinder");
+
+        var act = () => exporter.ExportLargeForDownload([row], "20260521", CoaLargeTemplateType.Standard);
+
+        act.Should().Throw<FileNotFoundException>()
+            .WithMessage($"COA template not found: {templatePath}");
     }
 
     [Fact]

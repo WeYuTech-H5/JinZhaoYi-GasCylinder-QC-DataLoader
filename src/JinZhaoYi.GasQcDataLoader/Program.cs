@@ -364,11 +364,22 @@ static void MapDownloadEndpoints(WebApplication app)
         }
 
         var batchDateText = batchDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
-        var download = await exporter.ExportLargePackageForDownloadAsync(rows, batchDateText, templateType, cancellationToken);
-        return Results.File(
-            download.Content,
-            download.ContentType,
-            download.FileName);
+        try
+        {
+            var download = await exporter.ExportLargePackageForDownloadAsync(rows, batchDateText, templateType, cancellationToken);
+            return Results.File(
+                download.Content,
+                download.ContentType,
+                download.FileName);
+        }
+        catch (FileNotFoundException ex)
+        {
+            return Results.BadRequest(new { message = ex.Message });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new { message = ex.Message });
+        }
     });
 
     app.MapPost("/api/exports/excel-ppb-coa-small", async (
@@ -390,11 +401,22 @@ static void MapDownloadEndpoints(WebApplication app)
         }
 
         var batchDateText = batchDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
-        var download = await exporter.ExportSmallPackageForDownloadAsync(rows, batchDateText, cardsPerPage, cancellationToken);
-        return Results.File(
-            download.Content,
-            download.ContentType,
-            download.FileName);
+        try
+        {
+            var download = await exporter.ExportSmallPackageForDownloadAsync(rows, batchDateText, cardsPerPage, cancellationToken);
+            return Results.File(
+                download.Content,
+                download.ContentType,
+                download.FileName);
+        }
+        catch (FileNotFoundException ex)
+        {
+            return Results.BadRequest(new { message = ex.Message });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new { message = ex.Message });
+        }
     });
 
     app.MapGet("/api/downloads/cylinder-qc/{batchDate}", (

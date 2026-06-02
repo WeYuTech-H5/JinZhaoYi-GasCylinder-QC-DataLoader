@@ -10,7 +10,6 @@ using JinZhaoYi.GasQcDataLoader.Configuration;
 using JinZhaoYi.GasQcDataLoader.DataModels;
 using JinZhaoYi.GasQcDataLoader.Services.Interface;
 using Microsoft.Extensions.Options;
-using A = DocumentFormat.OpenXml.Drawing;
 using Xdr = DocumentFormat.OpenXml.Drawing.Spreadsheet;
 
 namespace JinZhaoYi.GasQcDataLoader.Services.Service;
@@ -135,7 +134,6 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
             var targetSheetName = BuildUniqueOpenXmlSheetName(workbookPart, $"COA_{row.SampleName}", index + 1);
             var targetPart = CloneWorksheetPartWithRelationships(workbookPart, sourcePart, targetSheetName);
             WriteLargeRow(targetPart, row, templateType);
-            AddLargeHeaderImage(targetPart);
         }
 
         DeleteOpenXmlSheets(workbookPart, Large500MlSheetName, Large1LSheetName, LargeYadongSheetName, "欄位註解");
@@ -152,75 +150,6 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
         }
 
         return stream.ToArray();
-    }
-
-    private void AddLargeHeaderImage(WorksheetPart worksheetPart)
-    {
-        var imagePath = _options.CoaExport.LargeHeaderImagePath;
-        if (string.IsNullOrWhiteSpace(imagePath))
-        {
-            return;
-        }
-
-        imagePath = ResolvePath(imagePath.Trim());
-        if (!File.Exists(imagePath))
-        {
-            throw new FileNotFoundException($"COA large header image not found: {imagePath}", imagePath);
-        }
-
-        var drawingsPart = worksheetPart.DrawingsPart;
-        if (drawingsPart?.WorksheetDrawing is null)
-        {
-            drawingsPart = worksheetPart.AddNewPart<DrawingsPart>();
-            drawingsPart.WorksheetDrawing = new Xdr.WorksheetDrawing();
-            var relationshipId = worksheetPart.GetIdOfPart(drawingsPart);
-            worksheetPart.Worksheet.Append(new Drawing { Id = relationshipId });
-        }
-
-        var imagePart = drawingsPart.AddImagePart(ImagePartType.Png);
-        using (var imageStream = File.OpenRead(imagePath))
-        {
-            imagePart.FeedData(imageStream);
-        }
-
-        var imageRelationshipId = drawingsPart.GetIdOfPart(imagePart);
-        var drawingId = ResolveNextDrawingId(drawingsPart.WorksheetDrawing);
-        const long emusPerPixel = 9525;
-        const long widthPixels = 820;
-        const long heightPixels = 75;
-
-        var picture = new Xdr.Picture(
-            new Xdr.NonVisualPictureProperties(
-                new Xdr.NonVisualDrawingProperties
-                {
-                    Id = drawingId,
-                    Name = "COA Large Header"
-                },
-                new Xdr.NonVisualPictureDrawingProperties(
-                    new A.PictureLocks { NoChangeAspect = true })),
-            new Xdr.BlipFill(
-                new A.Blip { Embed = imageRelationshipId },
-                new A.SourceRectangle { Bottom = 55000 },
-                new A.Stretch(new A.FillRectangle())),
-            new Xdr.ShapeProperties(
-                new A.Transform2D(
-                    new A.Offset { X = 0, Y = 0 },
-                    new A.Extents { Cx = widthPixels * emusPerPixel, Cy = heightPixels * emusPerPixel }),
-                new A.PresetGeometry(new A.AdjustValueList()) { Preset = A.ShapeTypeValues.Rectangle }));
-
-        var anchor = new Xdr.OneCellAnchor(
-            new Xdr.FromMarker(
-                new Xdr.ColumnId("0"),
-                new Xdr.ColumnOffset("0"),
-                new Xdr.RowId("0"),
-                new Xdr.RowOffset("0")),
-            new Xdr.Extent { Cx = widthPixels * emusPerPixel, Cy = heightPixels * emusPerPixel },
-            picture,
-            new Xdr.ClientData());
-
-        drawingsPart.WorksheetDrawing.Append(anchor);
-        drawingsPart.WorksheetDrawing.Save();
-        worksheetPart.Worksheet.Save();
     }
 
     private byte[] ExportSmallWorkbookToBytes(string templatePath, IReadOnlyList<QcDataRow> orderedRows, int cardsPerPage)
@@ -687,17 +616,6 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
         Path.IsPathRooted(path)
             ? Path.GetFullPath(path)
             : Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, path));
-
-    private static uint ResolveNextDrawingId(Xdr.WorksheetDrawing worksheetDrawing)
-    {
-        var maxId = worksheetDrawing
-            .Descendants<Xdr.NonVisualDrawingProperties>()
-            .Select(properties => properties.Id?.Value ?? 0U)
-            .DefaultIfEmpty(0U)
-            .Max();
-
-        return maxId + 1;
-    }
 
     private static DateTime? ResolveExpirationDate(QcDataRow row)
     {
