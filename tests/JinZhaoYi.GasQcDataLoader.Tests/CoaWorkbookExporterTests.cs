@@ -126,7 +126,7 @@ public sealed class CoaWorkbookExporterTests
     }
 
     [Fact]
-    public void PdfConversionWorkbook_uses_static_pdf_header_without_changing_download_workbook()
+    public void PdfConversionWorkbook_uses_static_pdf_header_and_preserves_excel_print_layout()
     {
         var exporter = CreateExporter();
         var row = CreateRow("STD-PDF", "0.5L_Cylinder");
@@ -140,7 +140,7 @@ public sealed class CoaWorkbookExporterTests
         originalContent.Should().Equal(download.Content);
 
         var preparedDownload = new CoaWorkbookDownload(preparedContent, download.ContentType, download.FileName);
-        HasLegacyHeaderFooterDrawing(preparedDownload, "COA_STD-PDF").Should().BeFalse();
+        HasLegacyHeaderFooterDrawing(preparedDownload, "COA_STD-PDF").Should().BeTrue();
         HasWorksheetDrawing(preparedDownload, "COA_STD-PDF").Should().BeTrue();
     }
 
