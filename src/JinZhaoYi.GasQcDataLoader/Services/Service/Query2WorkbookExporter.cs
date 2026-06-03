@@ -137,7 +137,6 @@ public sealed class Query2WorkbookExporter(
         }
 
         var targetRow = Query2ColumnLayout.DataStartRowNumber;
-        var ppbRowNumbers = new List<int>();
         foreach (var exportRow in exportRows)
         {
             var styleRowNumber = ResolveStyleRow(styleRows, exportRow.RowType);
@@ -146,12 +145,12 @@ public sealed class Query2WorkbookExporter(
             if (exportRow.RowType == Query2ExportRowType.Ppb)
             {
                 CopyPpbResultsToPpbBlock(worksheet, targetRow);
-                ppbRowNumbers.Add(targetRow);
             }
 
             targetRow++;
         }
 
+        var lastDataRowNumber = targetRow - 1;
         var copiedCritRowNumbers = new List<int>();
         foreach (var critRowNumber in critRows)
         {
@@ -160,7 +159,7 @@ public sealed class Query2WorkbookExporter(
             targetRow++;
         }
 
-        ApplyPpbRangeFills(worksheet, ppbRowNumbers, copiedCritRowNumbers);
+        ApplyPpbRangeFills(worksheet, Query2ColumnLayout.DataStartRowNumber, lastDataRowNumber, copiedCritRowNumbers);
         templateWorksheet.Delete();
         return workbook;
     }
@@ -229,17 +228,18 @@ public sealed class Query2WorkbookExporter(
 
     private static void ApplyPpbRangeFills(
         IXLWorksheet worksheet,
-        IReadOnlyCollection<int> ppbRowNumbers,
+        int firstDataRowNumber,
+        int lastDataRowNumber,
         IReadOnlyCollection<int> critRowNumbers)
     {
-        if (ppbRowNumbers.Count == 0 ||
+        if (lastDataRowNumber < firstDataRowNumber ||
             !TryResolveCritRow(worksheet, critRowNumbers, "MAX", out var maxRowNumber) ||
             !TryResolveCritRow(worksheet, critRowNumbers, "MIN", out var minRowNumber))
         {
             return;
         }
 
-        foreach (var rowNumber in ppbRowNumbers)
+        for (var rowNumber = firstDataRowNumber; rowNumber <= lastDataRowNumber; rowNumber++)
         {
             for (var column = FirstPpbColumn; column <= LastPpbColumn; column++)
             {
