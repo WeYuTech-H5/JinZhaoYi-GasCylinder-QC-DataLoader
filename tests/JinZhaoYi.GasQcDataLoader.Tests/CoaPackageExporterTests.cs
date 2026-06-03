@@ -43,9 +43,10 @@ public sealed class CoaPackageExporterTests
     }
 
     [Fact]
-    public async Task ExportSmallPackageForDownload_keeps_duplicate_sample_names_unique()
+    public async Task ExportSmallPackageForDownload_returns_one_appended_excel_and_pdf()
     {
-        var exporter = new CoaPackageExporter(CreateWorkbookExporter(), new FakePdfConverter());
+        var pdfConverter = new FakePdfConverter();
+        var exporter = new CoaPackageExporter(CreateWorkbookExporter(), pdfConverter);
         var rows = new[]
         {
             CreateRow("STD-N001", 1),
@@ -56,10 +57,9 @@ public sealed class CoaPackageExporterTests
 
         using var archive = new ZipArchive(new MemoryStream(download.Content), ZipArchiveMode.Read);
         archive.Entries.Select(entry => entry.FullName).Should().BeEquivalentTo(
-            "COA(小卡)_20260521_STD-N001.xlsx",
-            "COA(小卡)_20260521_STD-N001.pdf",
-            "COA(小卡)_20260521_STD-N001_2.xlsx",
-            "COA(小卡)_20260521_STD-N001_2.pdf");
+            "COA(小卡)_20260521.xlsx",
+            "COA(小卡)_20260521.pdf");
+        pdfConverter.WorkbookFileNames.Should().Equal("COA(小卡)_20260521.xlsx");
     }
 
     private static CoaWorkbookExporter CreateWorkbookExporter() =>

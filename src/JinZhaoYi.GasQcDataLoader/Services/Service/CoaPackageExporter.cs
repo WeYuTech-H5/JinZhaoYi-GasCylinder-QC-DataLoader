@@ -22,17 +22,30 @@ public sealed class CoaPackageExporter(
             row => workbookExporter.ExportLargeForDownload([row], batchDateText, templateType),
             cancellationToken);
 
-    public Task<CoaWorkbookDownload> ExportSmallPackageForDownloadAsync(
+    public async Task<CoaWorkbookDownload> ExportSmallPackageForDownloadAsync(
         IReadOnlyCollection<QcDataRow> rows,
         string batchDateText,
         int cardsPerPage,
-        CancellationToken cancellationToken) =>
-        ExportPackageForDownloadAsync(
-            rows,
-            batchDateText,
-            "COA(小卡)",
-            row => workbookExporter.ExportSmallForDownload([row], batchDateText, cardsPerPage),
-            cancellationToken);
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var workbook = workbookExporter.ExportSmallForDownload(rows, batchDateText, cardsPerPage);
+        var pdfContent = await pdfConverter.ConvertXlsxToPdfAsync(workbook.Content, workbook.FileName, cancellationToken);
+        var pdfFileName = Path.ChangeExtension(workbook.FileName, ".pdf");
+
+        using var stream = new MemoryStream();
+        using (var archive = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true))
+        {
+            AddEntry(archive, workbook.FileName, workbook.Content);
+            AddEntry(archive, pdfFileName, pdfContent);
+        }
+
+        return new CoaWorkbookDownload(
+            stream.ToArray(),
+            "application/zip",
+            $"COA(小卡)_{batchDateText}.zip");
+    }
 
     private async Task<CoaWorkbookDownload> ExportPackageForDownloadAsync(
         IReadOnlyCollection<QcDataRow> rows,
