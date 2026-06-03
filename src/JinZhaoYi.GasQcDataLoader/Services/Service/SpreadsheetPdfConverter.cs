@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Xml.Linq;
 using ClosedXML.Excel;
@@ -9,6 +10,8 @@ using DocumentFormat.OpenXml.Spreadsheet;
 using JinZhaoYi.GasQcDataLoader.Configuration;
 using JinZhaoYi.GasQcDataLoader.Services.Interface;
 using Microsoft.Extensions.Options;
+using A = DocumentFormat.OpenXml.Drawing;
+using Xdr = DocumentFormat.OpenXml.Drawing.Spreadsheet;
 
 namespace JinZhaoYi.GasQcDataLoader.Services.Service;
 
@@ -21,6 +24,12 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
         string workbookFileName,
         CancellationToken cancellationToken)
     {
+        var excelPdfContent = TryConvertWithExcel(workbookContent);
+        if (excelPdfContent is not null)
+        {
+            return excelPdfContent;
+        }
+
         if (string.IsNullOrWhiteSpace(_options.LibreOfficePath) &&
             !IsExecutableAvailable("soffice"))
         {
@@ -175,8 +184,37 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
             return;
         }
 
+        AddWorksheetHeaderImageForPdf(worksheetPart, pdfHeaderImagePath);
         ReplaceHeaderFooterImagesWithPdfHeaderImage(worksheetPart, pdfHeaderImagePath);
         worksheetPart.Worksheet.Save();
+    }
+
+    private static void AddWorksheetHeaderImageForPdf(WorksheetPart worksheetPart, string pdfHeaderImagePath)
+    {
+        var drawingsPart = worksheetPart.DrawingsPart;
+        if (drawingsPart?.WorksheetDrawing is null)
+        {
+            drawingsPart = worksheetPart.AddNewPart<DrawingsPart>();
+            drawingsPart.WorksheetDrawing = new Xdr.WorksheetDrawing();
+            worksheetPart.Worksheet.Append(new Drawing { Id = worksheetPart.GetIdOfPart(drawingsPart) });
+        }
+
+        var imagePart = drawingsPart.AddImagePart(ImagePartType.Png);
+        using (var sourceStream = File.OpenRead(pdfHeaderImagePath))
+        using (var targetStream = imagePart.GetStream(FileMode.Create, FileAccess.Write))
+        {
+            sourceStream.CopyTo(targetStream);
+        }
+
+        drawingsPart.WorksheetDrawing.Append(CreateOneCellImageAnchor(
+            drawingsPart.WorksheetDrawing,
+            drawingsPart.GetIdOfPart(imagePart),
+            "COA PDF Header",
+            columnId: "0",
+            rowId: "0",
+            widthPoints: 350,
+            heightPoints: 70));
+        drawingsPart.WorksheetDrawing.Save();
     }
 
     private static void ReplaceHeaderFooterImagesWithPdfHeaderImage(WorksheetPart worksheetPart, string pdfHeaderImagePath)
@@ -207,6 +245,10 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
         foreach (var shape in vmlDocument.Descendants(v + "shape").ToArray())
         {
             var shapeId = shape.Attribute("id")?.Value;
+            if (shapeId == "CH")
+            {
+                AddVmlShapeImageAsWorksheetImage(worksheetPart, vmlPart, shape, v, o, shapeId);
+            }
             if (shapeId == "LH")
             {
                 shape.SetAttributeValue(
@@ -228,8 +270,215 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
         var headerFooter = worksheetPart.Worksheet.Elements<HeaderFooter>().FirstOrDefault();
         if (headerFooter?.OddHeader is not null)
         {
-            headerFooter.OddHeader.Text = "&L&G&C\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n&G";
+            headerFooter.OddHeader.Text = "&C\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n";
         }
+    }
+
+    private static byte[]? TryConvertWithExcel(byte[] workbookContent)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return null;
+        }
+
+        var excelType = Type.GetTypeFromProgID("Excel.Application");
+        if (excelType is null)
+        {
+            return null;
+        }
+
+        var tempDirectory = Path.Combine(Path.GetTempPath(), $"gas-qc-coa-excel-pdf-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDirectory);
+        dynamic? excel = null;
+        dynamic? workbook = null;
+
+        try
+        {
+            var workbookPath = Path.Combine(tempDirectory, "input.xlsx");
+            var pdfPath = Path.Combine(tempDirectory, "input.pdf");
+            File.WriteAllBytes(workbookPath, workbookContent);
+
+            excel = Activator.CreateInstance(excelType);
+            if (excel is null)
+            {
+                return null;
+            }
+
+            excel.Visible = false;
+            excel.DisplayAlerts = false;
+            workbook = excel.Workbooks.Open(workbookPath);
+            workbook.ExportAsFixedFormat(0, pdfPath);
+            workbook.Close(false);
+            workbook = null;
+            excel.Quit();
+            excel = null;
+
+            return File.Exists(pdfPath) ? File.ReadAllBytes(pdfPath) : null;
+        }
+        catch
+        {
+            return null;
+        }
+        finally
+        {
+            ReleaseExcelComObject(workbook, closeWorkbook: true);
+            ReleaseExcelComObject(excel, closeWorkbook: false);
+            try
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
+    private static void ReleaseExcelComObject(dynamic? comObject, bool closeWorkbook)
+    {
+        if (comObject is null)
+        {
+            return;
+        }
+
+        try
+        {
+            if (closeWorkbook)
+            {
+                comObject.Close(false);
+            }
+            else
+            {
+                comObject.Quit();
+            }
+        }
+        catch
+        {
+        }
+
+        try
+        {
+            Marshal.FinalReleaseComObject(comObject);
+        }
+        catch
+        {
+        }
+    }
+
+    private static void AddVmlShapeImageAsWorksheetImage(
+        WorksheetPart worksheetPart,
+        VmlDrawingPart vmlPart,
+        XElement shape,
+        XNamespace v,
+        XNamespace o,
+        string shapeId)
+    {
+        var relationshipId = shape.Element(v + "imagedata")?.Attribute(o + "relid")?.Value;
+        if (string.IsNullOrWhiteSpace(relationshipId) ||
+            vmlPart.GetPartById(relationshipId) is not ImagePart sourceImagePart)
+        {
+            return;
+        }
+
+        var drawingsPart = worksheetPart.DrawingsPart;
+        if (drawingsPart?.WorksheetDrawing is null)
+        {
+            drawingsPart = worksheetPart.AddNewPart<DrawingsPart>();
+            drawingsPart.WorksheetDrawing = new Xdr.WorksheetDrawing();
+            worksheetPart.Worksheet.Append(new Drawing { Id = worksheetPart.GetIdOfPart(drawingsPart) });
+        }
+
+        var imagePart = drawingsPart.AddImagePart(sourceImagePart.ContentType);
+        using (var sourceStream = sourceImagePart.GetStream(FileMode.Open, FileAccess.Read))
+        using (var targetStream = imagePart.GetStream(FileMode.Create, FileAccess.Write))
+        {
+            sourceStream.CopyTo(targetStream);
+        }
+
+        drawingsPart.WorksheetDrawing.Append(CreateOneCellImageAnchor(
+            drawingsPart.WorksheetDrawing,
+            drawingsPart.GetIdOfPart(imagePart),
+            $"COA PDF {shapeId}",
+            ResolvePdfHeaderColumnId(shapeId),
+            ResolvePdfHeaderRowId(shapeId),
+            ResolvePdfHeaderWidthPoints(shapeId),
+            ResolvePdfHeaderHeightPoints(shapeId)));
+        drawingsPart.WorksheetDrawing.Save();
+    }
+
+    private static string ResolvePdfHeaderColumnId(string shapeId) =>
+        shapeId switch
+        {
+            "RH" => "4",
+            "CH" => "2",
+            _ => "0"
+        };
+
+    private static string ResolvePdfHeaderRowId(string shapeId) =>
+        shapeId == "CH" ? "20" : "0";
+
+    private static long ResolvePdfHeaderWidthPoints(string shapeId) =>
+        shapeId switch
+        {
+            "RH" => 181,
+            "CH" => 162,
+            _ => 348
+        };
+
+    private static long ResolvePdfHeaderHeightPoints(string shapeId) =>
+        shapeId switch
+        {
+            "RH" => 102,
+            "CH" => 190,
+            _ => 78
+        };
+
+    private static Xdr.OneCellAnchor CreateOneCellImageAnchor(
+        Xdr.WorksheetDrawing worksheetDrawing,
+        string relationshipId,
+        string name,
+        string columnId,
+        string rowId,
+        long widthPoints,
+        long heightPoints)
+    {
+        const long emusPerPoint = 12700;
+        var widthEmus = widthPoints * emusPerPoint;
+        var heightEmus = heightPoints * emusPerPoint;
+        var drawingId = worksheetDrawing
+            .Descendants<Xdr.NonVisualDrawingProperties>()
+            .Select(properties => properties.Id?.Value ?? 0U)
+            .DefaultIfEmpty(0U)
+            .Max() + 1;
+
+        var picture = new Xdr.Picture(
+            new Xdr.NonVisualPictureProperties(
+                new Xdr.NonVisualDrawingProperties
+                {
+                    Id = drawingId,
+                    Name = name
+                },
+                new Xdr.NonVisualPictureDrawingProperties(new A.PictureLocks { NoChangeAspect = true })),
+            new Xdr.BlipFill(
+                new A.Blip { Embed = relationshipId },
+                new A.Stretch(new A.FillRectangle())),
+            new Xdr.ShapeProperties(
+                new A.Transform2D(
+                    new A.Offset { X = 0, Y = 0 },
+                    new A.Extents { Cx = widthEmus, Cy = heightEmus }),
+                new A.PresetGeometry(new A.AdjustValueList()) { Preset = A.ShapeTypeValues.Rectangle }));
+
+        return new Xdr.OneCellAnchor(
+            new Xdr.FromMarker(
+                new Xdr.ColumnId(columnId),
+                new Xdr.ColumnOffset("0"),
+                new Xdr.RowId(rowId),
+                new Xdr.RowOffset("0")),
+            new Xdr.Extent { Cx = widthEmus, Cy = heightEmus },
+            picture,
+            new Xdr.ClientData());
     }
 
     private byte[] ConvertWithFallback(byte[] workbookContent, string workbookFileName)
