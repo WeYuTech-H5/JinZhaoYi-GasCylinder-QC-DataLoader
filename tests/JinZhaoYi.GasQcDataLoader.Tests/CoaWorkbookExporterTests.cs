@@ -126,13 +126,14 @@ public sealed class CoaWorkbookExporterTests
     }
 
     [Fact]
-    public void PdfConversionWorkbook_promotes_large_header_images_without_changing_download_workbook()
+    public void PdfConversionWorkbook_uses_static_pdf_header_without_changing_download_workbook()
     {
         var exporter = CreateExporter();
         var row = CreateRow("STD-PDF", "0.5L_Cylinder");
         var download = exporter.ExportLargeForDownload([row], "20260521", CoaLargeTemplateType.Standard);
         var originalContent = download.Content.ToArray();
 
+        using var headerImage = new TemporaryPdfHeaderImage();
         var preparedContent = PrepareWorkbookForPdfConversion(originalContent);
 
         HasLegacyHeaderFooterDrawing(download, "COA_STD-PDF").Should().BeTrue();
@@ -140,8 +141,7 @@ public sealed class CoaWorkbookExporterTests
 
         var preparedDownload = new CoaWorkbookDownload(preparedContent, download.ContentType, download.FileName);
         HasLegacyHeaderFooterDrawing(preparedDownload, "COA_STD-PDF").Should().BeFalse();
-        HasDrawingInRange(preparedDownload, "COA_STD-PDF", "A1:F6").Should().BeTrue();
-        HasDrawingInRange(preparedDownload, "COA_STD-PDF", "H1:K6").Should().BeTrue();
+        HasWorksheetDrawing(preparedDownload, "COA_STD-PDF").Should().BeTrue();
     }
 
     [Fact]
@@ -453,6 +453,34 @@ public sealed class CoaWorkbookExporterTests
         left.EndRow >= right.StartRow;
 
     private readonly record struct CellRange(int StartColumn, int EndColumn, uint StartRow, uint EndRow);
+
+    private sealed class TemporaryPdfHeaderImage : IDisposable
+    {
+        private readonly string _path;
+
+        public TemporaryPdfHeaderImage()
+        {
+            var directory = Path.Combine(AppContext.BaseDirectory, "wwwroot", "image");
+            Directory.CreateDirectory(directory);
+            _path = Path.Combine(directory, "000-test-pdf-header.png");
+            File.WriteAllBytes(_path, Convert.FromBase64String(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lJqGygAAAABJRU5ErkJggg=="));
+        }
+
+        public void Dispose()
+        {
+            try
+            {
+                File.Delete(_path);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
 
     private static string ResolveTemplatePath(string fileName)
     {

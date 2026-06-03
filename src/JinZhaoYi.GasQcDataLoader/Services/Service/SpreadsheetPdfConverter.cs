@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Text;
-using System.Xml.Linq;
 using ClosedXML.Excel;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
@@ -140,9 +139,10 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
                 return workbookContent;
             }
 
+            var pdfHeaderImagePath = ResolvePdfHeaderImagePath();
             foreach (var worksheetPart in workbookPart.WorksheetParts)
             {
-                PromoteHeaderFooterImagesForPdf(worksheetPart);
+                ReplaceHeaderFooterWithPdfHeaderImage(worksheetPart, pdfHeaderImagePath);
             }
 
             workbookPart.Workbook.Save();
@@ -151,96 +151,47 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
         return stream.ToArray();
     }
 
-    private static void PromoteHeaderFooterImagesForPdf(WorksheetPart worksheetPart)
+    private static string? ResolvePdfHeaderImagePath()
     {
-        var vmlPart = worksheetPart.VmlDrawingParts.FirstOrDefault();
-        if (vmlPart is null || !worksheetPart.Worksheet.Elements<LegacyDrawingHeaderFooter>().Any())
-        {
-            return;
-        }
-
-        var headerImages = ResolveHeaderFooterImages(vmlPart);
-        if (headerImages.Count == 0)
-        {
-            return;
-        }
-
-        foreach (var image in headerImages)
-        {
-            AddWorksheetImage(worksheetPart, image);
-        }
-
-        EnsureWorksheetDimensionStartsAtA1(worksheetPart);
-        FitWorksheetToSinglePdfPage(worksheetPart);
-        worksheetPart.Worksheet.Elements<HeaderFooter>().ToList().ForEach(element => element.Remove());
-        worksheetPart.Worksheet.Elements<LegacyDrawingHeaderFooter>().ToList().ForEach(element => element.Remove());
-        worksheetPart.DeletePart(vmlPart);
-        worksheetPart.Worksheet.Save();
-    }
-
-    private static IReadOnlyList<HeaderFooterImage> ResolveHeaderFooterImages(VmlDrawingPart vmlPart)
-    {
-        XNamespace v = "urn:schemas-microsoft-com:vml";
-        XNamespace o = "urn:schemas-microsoft-com:office:office";
-        using var vmlStream = vmlPart.GetStream(FileMode.Open, FileAccess.Read);
-        var document = XDocument.Load(vmlStream);
-
-        var images = new List<HeaderFooterImage>();
-        foreach (var shape in document.Descendants(v + "shape"))
-        {
-            var shapeId = shape.Attribute("id")?.Value;
-            HeaderFooterImagePlacement? placement = shapeId switch
-            {
-                "LH" => HeaderFooterImagePlacement.Left,
-                "RH" => HeaderFooterImagePlacement.Right,
-                _ => null
-            };
-
-            if (placement is null)
-            {
-                continue;
-            }
-
-            var relationshipId = shape.Element(v + "imagedata")?.Attribute(o + "relid")?.Value;
-            if (string.IsNullOrWhiteSpace(relationshipId) ||
-                vmlPart.GetPartById(relationshipId) is not ImagePart imagePart)
-            {
-                continue;
-            }
-
-            var size = ParseVmlImageSize(shape.Attribute("style")?.Value);
-            images.Add(new HeaderFooterImage(placement.Value, imagePart, size.WidthEmus, size.HeightEmus));
-        }
-
-        return images;
-    }
-
-    private static (long WidthEmus, long HeightEmus) ParseVmlImageSize(string? style)
-    {
-        const long emusPerPoint = 12700;
-        var widthPoints = TryParseVmlPointValue(style, "width") ?? 0m;
-        var heightPoints = TryParseVmlPointValue(style, "height") ?? 0m;
-        return ((long)(widthPoints * emusPerPoint), (long)(heightPoints * emusPerPoint));
-    }
-
-    private static decimal? TryParseVmlPointValue(string? style, string propertyName)
-    {
-        if (string.IsNullOrWhiteSpace(style))
+        var baseDirectory = Path.GetDirectoryName(typeof(SpreadsheetPdfConverter).Assembly.Location)
+            ?? AppContext.BaseDirectory;
+        var imageDirectory = Path.Combine(baseDirectory, "wwwroot", "image");
+        if (!Directory.Exists(imageDirectory))
         {
             return null;
         }
 
-        var match = System.Text.RegularExpressions.Regex.Match(
-            style,
-            $@"(?:^|;)\s*{propertyName}\s*:\s*(?<value>[0-9.]+)pt",
-            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-        return match.Success &&
-            decimal.TryParse(match.Groups["value"].Value, NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out var value)
-                ? value
-                : null;
+        return Directory
+            .EnumerateFiles(imageDirectory, "*.png")
+            .OrderBy(path => Path.GetFileName(path), StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault();
     }
 
-    private static void AddWorksheetImage(WorksheetPart worksheetPart, HeaderFooterImage image)
+    private static void ReplaceHeaderFooterWithPdfHeaderImage(WorksheetPart worksheetPart, string? pdfHeaderImagePath)
+    {
+        if (string.IsNullOrWhiteSpace(pdfHeaderImagePath) ||
+            !File.Exists(pdfHeaderImagePath) ||
+            !worksheetPart.Worksheet.Elements<LegacyDrawingHeaderFooter>().Any())
+        {
+            return;
+        }
+
+        AddWorksheetImage(worksheetPart, pdfHeaderImagePath);
+        EnsureWorksheetDimensionStartsAtA1(worksheetPart);
+        FitWorksheetToSinglePdfPage(worksheetPart);
+        SetWorksheetPrintArea(worksheetPart, "A1:K60");
+        worksheetPart.Worksheet.Elements<RowBreaks>().ToList().ForEach(element => element.Remove());
+        worksheetPart.Worksheet.Elements<ColumnBreaks>().ToList().ForEach(element => element.Remove());
+        worksheetPart.Worksheet.Elements<HeaderFooter>().ToList().ForEach(element => element.Remove());
+        worksheetPart.Worksheet.Elements<LegacyDrawingHeaderFooter>().ToList().ForEach(element => element.Remove());
+        foreach (var vmlPart in worksheetPart.VmlDrawingParts.ToArray())
+        {
+            worksheetPart.DeletePart(vmlPart);
+        }
+        worksheetPart.Worksheet.Save();
+    }
+
+    private static void AddWorksheetImage(WorksheetPart worksheetPart, string imagePath)
     {
         var drawingsPart = worksheetPart.DrawingsPart;
         if (drawingsPart?.WorksheetDrawing is null)
@@ -250,35 +201,36 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
             worksheetPart.Worksheet.Append(new Drawing { Id = worksheetPart.GetIdOfPart(drawingsPart) });
         }
 
-        var targetImagePart = drawingsPart.AddImagePart(image.ImagePart.ContentType);
-        using (var sourceStream = image.ImagePart.GetStream(FileMode.Open, FileAccess.Read))
+        var targetImagePart = drawingsPart.AddImagePart(ImagePartType.Png);
+        using (var sourceStream = File.OpenRead(imagePath))
         using (var targetStream = targetImagePart.GetStream(FileMode.Create, FileAccess.Write))
         {
             sourceStream.CopyTo(targetStream);
         }
 
         var relationshipId = drawingsPart.GetIdOfPart(targetImagePart);
-        var anchor = CreateHeaderImageAnchor(drawingsPart.WorksheetDrawing, image, relationshipId);
+        var anchor = CreateHeaderImageAnchor(drawingsPart.WorksheetDrawing, relationshipId);
         drawingsPart.WorksheetDrawing.Append(anchor);
         drawingsPart.WorksheetDrawing.Save();
     }
 
     private static Xdr.OneCellAnchor CreateHeaderImageAnchor(
         Xdr.WorksheetDrawing worksheetDrawing,
-        HeaderFooterImage image,
         string relationshipId)
     {
         var drawingId = ResolveNextDrawingId(worksheetDrawing);
-        var columnId = image.Placement == HeaderFooterImagePlacement.Left ? "0" : "7";
-        var widthEmus = image.WidthEmus > 0 ? image.WidthEmus : 348L * 12700L;
-        var heightEmus = image.HeightEmus > 0 ? image.HeightEmus : 102L * 12700L;
+        const long emusPerPixel = 9525;
+        const long widthPixels = 650;
+        const long heightPixels = 131;
+        const long widthEmus = widthPixels * emusPerPixel;
+        const long heightEmus = heightPixels * emusPerPixel;
 
         var picture = new Xdr.Picture(
             new Xdr.NonVisualPictureProperties(
                 new Xdr.NonVisualDrawingProperties
                 {
                     Id = drawingId,
-                    Name = image.Placement == HeaderFooterImagePlacement.Left ? "COA Header Left" : "COA Header Right"
+                    Name = "COA PDF Header"
                 },
                 new Xdr.NonVisualPictureDrawingProperties(new A.PictureLocks { NoChangeAspect = true })),
             new Xdr.BlipFill(
@@ -292,7 +244,7 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
 
         return new Xdr.OneCellAnchor(
             new Xdr.FromMarker(
-                new Xdr.ColumnId(columnId),
+                new Xdr.ColumnId("0"),
                 new Xdr.ColumnOffset("0"),
                 new Xdr.RowId("0"),
                 new Xdr.RowOffset("0")),
@@ -346,16 +298,54 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
         pageSetup.Scale = null;
     }
 
-    private sealed record HeaderFooterImage(
-        HeaderFooterImagePlacement Placement,
-        ImagePart ImagePart,
-        long WidthEmus,
-        long HeightEmus);
-
-    private enum HeaderFooterImagePlacement
+    private static void SetWorksheetPrintArea(WorksheetPart worksheetPart, string rangeReference)
     {
-        Left,
-        Right
+        if (worksheetPart.OpenXmlPackage is not SpreadsheetDocument document ||
+            document.WorkbookPart is not { } workbookPart)
+        {
+            return;
+        }
+
+        var relationshipId = workbookPart.GetIdOfPart(worksheetPart);
+        var sheets = workbookPart.Workbook.Sheets?.Elements<Sheet>().ToArray() ?? [];
+        var sheetIndex = Array.FindIndex(sheets, sheet => string.Equals(sheet.Id?.Value, relationshipId, StringComparison.Ordinal));
+        if (sheetIndex < 0)
+        {
+            return;
+        }
+
+        var sheetName = sheets[sheetIndex].Name?.Value ?? "Sheet1";
+        var definedNames = workbookPart.Workbook.DefinedNames;
+        if (definedNames is null)
+        {
+            definedNames = new DefinedNames();
+            workbookPart.Workbook.InsertAfter(definedNames, workbookPart.Workbook.Sheets);
+        }
+        foreach (var existingPrintArea in definedNames.Elements<DefinedName>()
+            .Where(name => string.Equals(name.Name?.Value, "_xlnm.Print_Area", StringComparison.OrdinalIgnoreCase) &&
+                name.LocalSheetId?.Value == (uint)sheetIndex)
+            .ToArray())
+        {
+            existingPrintArea.Remove();
+        }
+
+        definedNames.Append(new DefinedName
+        {
+            Name = "_xlnm.Print_Area",
+            LocalSheetId = (uint)sheetIndex,
+            Text = $"'{sheetName.Replace("'", "''", StringComparison.Ordinal)}'!{ToAbsoluteRangeReference(rangeReference)}"
+        });
+    }
+
+    private static string ToAbsoluteRangeReference(string rangeReference)
+    {
+        var cells = rangeReference.Split(':', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return string.Join(":", cells.Select(cell =>
+        {
+            var letters = new string(cell.TakeWhile(char.IsLetter).ToArray());
+            var digits = new string(cell.SkipWhile(char.IsLetter).ToArray());
+            return $"${letters}${digits}";
+        }));
     }
 
     private byte[] ConvertWithFallback(byte[] workbookContent, string workbookFileName)
