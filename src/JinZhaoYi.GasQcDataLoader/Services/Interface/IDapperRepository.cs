@@ -84,6 +84,10 @@ public interface IDapperRepository
         ExcelPpbHistorySaveRequest request,
         CancellationToken cancellationToken);
 
+    Task InsertQuery2PreviewEditLogsAsync(
+        IReadOnlyCollection<Query2PreviewEditLogRow> rows,
+        CancellationToken cancellationToken);
+
     Task<PagedResponse<ExportOption>> GetExcelPpbExportOptionsAsync(
         DateTime batchDate,
         int page,

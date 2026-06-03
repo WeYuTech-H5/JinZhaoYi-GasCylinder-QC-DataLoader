@@ -228,6 +228,9 @@ public sealed class RfExtractorImportServiceTests : IDisposable
         public Task UpsertExcelPpbHistoryAsync(ExcelPpbHistorySaveRequest request, CancellationToken cancellationToken) =>
             Task.CompletedTask;
 
+        public Task InsertQuery2PreviewEditLogsAsync(IReadOnlyCollection<Query2PreviewEditLogRow> rows, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+
         public Task<PagedResponse<ExportOption>> GetExcelPpbExportOptionsAsync(DateTime batchDate, int page, int pageSize, CancellationToken cancellationToken) =>
             Task.FromResult(new PagedResponse<ExportOption>(page, pageSize, 0, []));
 

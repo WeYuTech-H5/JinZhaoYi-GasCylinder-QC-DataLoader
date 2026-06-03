@@ -236,5 +236,7 @@ public sealed class SchedulerTableOptions
     // 使用者成功產生 Query2 Excel 後的 PPB 快照，供手動 CSV 匯出清單勾選使用。
     public string ExcelPpbHistory { get; init; } = "ZZ_NF_GAS_QC_EXCEL_PPB_HISTORY";
 
+    public string Query2PreviewEditLog { get; init; } = "ZZ_NF_GAS_QC_QUERY2_PREVIEW_EDIT_LOG";
+
     public string ImportErrorLog { get; init; } = "ZZ_NF_GAS_QC_ERROR_LOG";
 }

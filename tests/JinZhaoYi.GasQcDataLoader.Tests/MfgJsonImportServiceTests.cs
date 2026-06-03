@@ -170,6 +170,8 @@ public sealed class MfgJsonImportServiceTests : IDisposable
 
         public Task UpsertExcelPpbHistoryAsync(ExcelPpbHistorySaveRequest request, CancellationToken cancellationToken) => Task.CompletedTask;
 
+        public Task InsertQuery2PreviewEditLogsAsync(IReadOnlyCollection<Query2PreviewEditLogRow> rows, CancellationToken cancellationToken) => Task.CompletedTask;
+
         public Task<PagedResponse<ExportOption>> GetExcelPpbExportOptionsAsync(
             DateTime batchDate,
             int page,

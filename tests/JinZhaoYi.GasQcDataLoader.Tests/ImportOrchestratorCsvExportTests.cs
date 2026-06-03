@@ -260,6 +260,11 @@ public sealed class ImportOrchestratorCsvExportTests
             CancellationToken cancellationToken) =>
             Task.CompletedTask;
 
+        public Task InsertQuery2PreviewEditLogsAsync(
+            IReadOnlyCollection<Query2PreviewEditLogRow> rows,
+            CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+
         public Task<PagedResponse<ExportOption>> GetExcelPpbExportOptionsAsync(
             DateTime batchDate,
             int page,

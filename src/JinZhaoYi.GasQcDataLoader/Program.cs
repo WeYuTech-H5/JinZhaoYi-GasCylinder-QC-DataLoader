@@ -38,6 +38,7 @@ try
     builder.Services.AddSingleton<IProcessedQuantFileStore, ProcessedQuantFileStore>();
     builder.Services.AddSingleton<IImportWriteSetBuilder, ImportWriteSetBuilder>();
     builder.Services.AddSingleton<IQuery2SelectionExportBuilder, Query2SelectionExportBuilder>();
+    builder.Services.AddSingleton<IQuery2PreviewService, Query2PreviewService>();
     builder.Services.AddSingleton<IQuery2WorkbookExporter, Query2WorkbookExporter>();
     builder.Services.AddSingleton<IPortPpbCsvExporter, PortPpbCsvExporter>();
     builder.Services.AddSingleton<ICoaWorkbookExporter, CoaWorkbookExporter>();
@@ -233,6 +234,141 @@ static void MapDownloadEndpoints(WebApplication app)
 
         var pagedOptions = await repository.GetExcelPpbExportOptionsAsync(parsedBatchDate, normalizedPage, normalizedPageSize, cancellationToken);
         return Results.Ok(BuildPagedExcelPpbGroupResponse(parsedBatchDate, pagedOptions));
+    });
+
+    app.MapPost("/api/exports/query2-excel/preview", async (
+        Query2ExcelPreviewRequest request,
+        IDapperRepository repository,
+        IQuery2SelectionExportBuilder exportBuilder,
+        IQuery2PreviewService previewService,
+        CancellationToken cancellationToken) =>
+    {
+        var validationRequest = new Query2ExcelExportRequest
+        {
+            StartDate = request.StartDate,
+            EndDate = request.EndDate,
+            RfId = request.RfId,
+            StdRawIds = request.StdRawIds,
+            PortRawIds = request.PortRawIds
+        };
+        if (!TryValidateQuery2ExportRequest(validationRequest, out var startDate, out var endDate, out var rfId, out var stdRawIds, out var portRawIds, out var validationMessage))
+        {
+            return Results.BadRequest(new { message = validationMessage });
+        }
+
+        var rf = await repository.GetRfByIdAsync(rfId, cancellationToken);
+        if (rf is null)
+        {
+            return Results.NotFound(new { message = $"RF '{rfId}' not found." });
+        }
+
+        var stdRows = await repository.GetRawRowsForExportAsync(startDate, endDate, stdRawIds, cancellationToken);
+        var portRows = await repository.GetRawRowsForExportAsync(startDate, endDate, portRawIds, cancellationToken);
+
+        if (stdRows.Count != stdRawIds.Length || portRows.Count != portRawIds.Length)
+        {
+            return Results.NotFound(new { message = "One or more selected raw rows were not found in the requested date range." });
+        }
+
+        var rows = exportBuilder.BuildRows(rf, stdRows, portRows);
+        if (rows.Count == 0)
+        {
+            return Results.NotFound(new { message = "No DB rows found for selected export data." });
+        }
+
+        return Results.Ok(previewService.CreatePreview(startDate, endDate, rfId, stdRawIds, portRawIds, rows));
+    });
+
+    app.MapPost("/api/exports/query2-excel/recalculate", (
+        Query2PreviewRecalculateRequest request,
+        IQuery2PreviewService previewService) =>
+    {
+        if (request.Preview is null)
+        {
+            return Results.BadRequest(new { message = "preview is required." });
+        }
+
+        try
+        {
+            return Results.Ok(previewService.Recalculate(request.Preview));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new { message = ex.Message });
+        }
+    });
+
+    app.MapPost("/api/exports/query2-excel/from-preview", async (
+        Query2PreviewExportRequest request,
+        IQuery2PreviewService previewService,
+        IQuery2WorkbookExporter exporter,
+        IDapperRepository repository,
+        IOptions<SchedulerOptions> options,
+        CancellationToken cancellationToken) =>
+    {
+        if (request.Preview is null)
+        {
+            return Results.BadRequest(new { message = "preview is required." });
+        }
+
+        if (!TryValidatePreviewExportRequest(request.Preview, out var startDate, out var endDate, out var rfId, out var stdRawIds, out var portRawIds, out var validationMessage))
+        {
+            return Results.BadRequest(new { message = validationMessage });
+        }
+
+        Query2PreviewState finalPreview;
+        IReadOnlyList<Query2ExportRow> rows;
+        try
+        {
+            finalPreview = previewService.Recalculate(request.Preview);
+            rows = previewService.ToExportRows(finalPreview);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new { message = ex.Message });
+        }
+
+        if (rows.Count == 0)
+        {
+            return Results.NotFound(new { message = "No Query2 preview rows were provided." });
+        }
+
+        var startDateText = startDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
+        var endDateText = endDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
+        var exportDateText = startDate.Date == endDate.Date ? startDateText : $"{startDateText}-{endDateText}";
+        var content = await exporter.ExportAsync(exportDateText, rows, cancellationToken);
+        if (content is null)
+        {
+            return Results.NotFound(new { message = "No Query2 Excel content was generated." });
+        }
+
+        var exportedAt = DateTime.Now;
+        var exportUser = options.Value.CreateUser;
+        var historyRequest = new ExcelPpbHistorySaveRequest(
+            startDate,
+            endDate,
+            rfId,
+            stdRawIds,
+            portRawIds,
+            rows.Where(row => row.RowType == Query2ExportRowType.Ppb).Select(row => row.Row).ToArray(),
+            exportedAt,
+            exportUser);
+
+        await repository.UpsertExcelPpbHistoryAsync(historyRequest, cancellationToken);
+
+        var excelExportKey = DapperRepository.ComputeExcelExportKey(historyRequest);
+        var editLogs = previewService.BuildEditLogs(
+            finalPreview,
+            excelExportKey,
+            Guid.NewGuid(),
+            exportedAt,
+            exportUser);
+        await repository.InsertQuery2PreviewEditLogsAsync(editLogs, cancellationToken);
+
+        return Results.File(
+            content,
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            $"Cylinder_Qc[{exportDateText}].xlsx");
     });
 
     app.MapPost("/api/exports/query2-excel", async (
@@ -587,6 +723,52 @@ static bool TryValidateQuery2ExportRequest(
     if (portRawIds.Length == 0)
     {
         message = "portRawIds must contain at least one selected PORT raw row.";
+        return false;
+    }
+
+    message = string.Empty;
+    return true;
+}
+
+static bool TryValidatePreviewExportRequest(
+    Query2PreviewState preview,
+    out DateTime startDate,
+    out DateTime endDate,
+    out string rfId,
+    out string[] stdRawIds,
+    out string[] portRawIds,
+    out string message)
+{
+    rfId = preview.RfId?.Trim() ?? string.Empty;
+    stdRawIds = NormalizeIds(preview.StdRawIds);
+    portRawIds = NormalizeIds(preview.PortRawIds);
+
+    if (!TryValidateDateRange(preview.StartDate, preview.EndDate, out startDate, out endDate, out message))
+    {
+        return false;
+    }
+
+    if (string.IsNullOrWhiteSpace(rfId))
+    {
+        message = "rfId is required.";
+        return false;
+    }
+
+    if (stdRawIds.Length == 0)
+    {
+        message = "stdRawIds must contain at least one selected STD raw row.";
+        return false;
+    }
+
+    if (portRawIds.Length == 0)
+    {
+        message = "portRawIds must contain at least one selected PORT raw row.";
+        return false;
+    }
+
+    if (preview.Rows.Count == 0)
+    {
+        message = "preview rows are required.";
         return false;
     }
 

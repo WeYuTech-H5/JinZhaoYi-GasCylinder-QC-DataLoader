@@ -1026,6 +1026,105 @@ public sealed class DapperRepository(
         }
     }
 
+    public async Task InsertQuery2PreviewEditLogsAsync(
+        IReadOnlyCollection<Query2PreviewEditLogRow> rows,
+        CancellationToken cancellationToken)
+    {
+        if (rows.Count == 0)
+        {
+            return;
+        }
+
+        await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
+        await connection.OpenAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
+
+        try
+        {
+            var sql = $"""
+                INSERT INTO dbo.{Quote(_tables.Query2PreviewEditLog)}
+                (
+                    ExportSessionId,
+                    ExcelExportKey,
+                    StartDate,
+                    EndDate,
+                    RfId,
+                    StdRawIds,
+                    PortRawIds,
+                    RowKey,
+                    RowType,
+                    RowDisplayId,
+                    FieldKey,
+                    ValueKind,
+                    Analyte,
+                    OriginalValue,
+                    NewValue,
+                    ExportedAt,
+                    ExportUser,
+                    CreateTime
+                )
+                VALUES
+                (
+                    @ExportSessionId,
+                    @ExcelExportKey,
+                    @StartDate,
+                    @EndDate,
+                    @RfId,
+                    @StdRawIds,
+                    @PortRawIds,
+                    @RowKey,
+                    @RowType,
+                    @RowDisplayId,
+                    @FieldKey,
+                    @ValueKind,
+                    @Analyte,
+                    @OriginalValue,
+                    @NewValue,
+                    @ExportedAt,
+                    @ExportUser,
+                    @CreateTime
+                )
+                """;
+
+            foreach (var row in rows)
+            {
+                await connection.ExecuteAsync(
+                    new CommandDefinition(
+                        sql,
+                        new
+                        {
+                            row.ExportSessionId,
+                            row.ExcelExportKey,
+                            row.StartDate,
+                            row.EndDate,
+                            row.RfId,
+                            row.StdRawIds,
+                            row.PortRawIds,
+                            row.RowKey,
+                            RowType = row.RowType.ToString(),
+                            row.RowDisplayId,
+                            row.FieldKey,
+                            row.ValueKind,
+                            row.Analyte,
+                            row.OriginalValue,
+                            row.NewValue,
+                            row.ExportedAt,
+                            row.ExportUser,
+                            row.CreateTime
+                        },
+                        transaction,
+                        cancellationToken: cancellationToken));
+            }
+
+            await transaction.CommitAsync(cancellationToken);
+        }
+        catch
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            throw;
+        }
+    }
+
     public async Task<PagedResponse<ExportOption>> GetExcelPpbExportOptionsAsync(
         DateTime batchDate,
         int page,
