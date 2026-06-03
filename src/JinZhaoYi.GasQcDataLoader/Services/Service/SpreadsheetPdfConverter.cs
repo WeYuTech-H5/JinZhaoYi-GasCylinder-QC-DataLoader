@@ -10,6 +10,8 @@ using DocumentFormat.OpenXml.Spreadsheet;
 using JinZhaoYi.GasQcDataLoader.Configuration;
 using JinZhaoYi.GasQcDataLoader.Services.Interface;
 using Microsoft.Extensions.Options;
+using PdfSharp.Drawing;
+using PdfSharp.Pdf.IO;
 using A = DocumentFormat.OpenXml.Drawing;
 using Xdr = DocumentFormat.OpenXml.Drawing.Spreadsheet;
 
@@ -97,7 +99,8 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
                 throw new InvalidOperationException($"LibreOffice did not create PDF output for '{workbookFileName}'. {stderr}{stdout}");
             }
 
-            return await File.ReadAllBytesAsync(pdfPath, cancellationToken);
+            var pdfContent = await File.ReadAllBytesAsync(pdfPath, cancellationToken);
+            return OverlayPdfHeaderImageIfNeeded(pdfContent, workbookContent);
         }
         catch (System.ComponentModel.Win32Exception ex)
         {
@@ -150,7 +153,7 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
             var pdfHeaderImagePath = ResolvePdfHeaderImagePath();
             foreach (var worksheetPart in workbookPart.WorksheetParts)
             {
-                ReplaceHeaderFooterWithPdfHeaderImage(worksheetPart, pdfHeaderImagePath);
+                ReplaceHeaderFooterWithPdfHeaderImage(workbookPart, worksheetPart, pdfHeaderImagePath);
             }
 
             workbookPart.Workbook.Save();
@@ -175,46 +178,86 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
             .FirstOrDefault();
     }
 
-    private static void ReplaceHeaderFooterWithPdfHeaderImage(WorksheetPart worksheetPart, string? pdfHeaderImagePath)
+    private static void ReplaceHeaderFooterWithPdfHeaderImage(
+        WorkbookPart workbookPart,
+        WorksheetPart worksheetPart,
+        string? pdfHeaderImagePath)
     {
         if (string.IsNullOrWhiteSpace(pdfHeaderImagePath) ||
             !File.Exists(pdfHeaderImagePath) ||
-            !worksheetPart.Worksheet.Elements<LegacyDrawingHeaderFooter>().Any())
+            !IsCoaLargeWorksheet(workbookPart, worksheetPart))
         {
             return;
         }
 
-        AddWorksheetHeaderImageForPdf(worksheetPart, pdfHeaderImagePath);
-        ReplaceHeaderFooterImagesWithPdfHeaderImage(worksheetPart, pdfHeaderImagePath);
+        if (worksheetPart.Worksheet.Elements<LegacyDrawingHeaderFooter>().Any())
+        {
+            ReplaceHeaderFooterImagesWithPdfHeaderImage(worksheetPart, pdfHeaderImagePath);
+        }
+
         worksheetPart.Worksheet.Save();
     }
 
-    private static void AddWorksheetHeaderImageForPdf(WorksheetPart worksheetPart, string pdfHeaderImagePath)
+    private static bool IsCoaLargeWorksheet(WorkbookPart workbookPart, WorksheetPart worksheetPart)
     {
-        var drawingsPart = worksheetPart.DrawingsPart;
-        if (drawingsPart?.WorksheetDrawing is null)
+        return worksheetPart.Worksheet
+            .Descendants<Row>()
+            .Where(row => (row.RowIndex?.Value ?? 0) <= 30)
+            .SelectMany(row => row.Elements<Cell>())
+            .Select(cell => GetCellText(workbookPart, cell))
+            .Any(text => text.Contains("Certificate Of Analysis", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string GetCellText(WorkbookPart workbookPart, Cell cell)
+    {
+        if (cell.DataType?.Value == CellValues.SharedString &&
+            int.TryParse(cell.CellValue?.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var sharedStringIndex))
         {
-            drawingsPart = worksheetPart.AddNewPart<DrawingsPart>();
-            drawingsPart.WorksheetDrawing = new Xdr.WorksheetDrawing();
-            worksheetPart.Worksheet.Append(new Drawing { Id = worksheetPart.GetIdOfPart(drawingsPart) });
+            var sharedString = workbookPart.SharedStringTablePart?.SharedStringTable
+                .Elements<SharedStringItem>()
+                .ElementAtOrDefault(sharedStringIndex);
+            return sharedString?.InnerText ?? string.Empty;
         }
 
-        var imagePart = drawingsPart.AddImagePart(ImagePartType.Png);
-        using (var sourceStream = File.OpenRead(pdfHeaderImagePath))
-        using (var targetStream = imagePart.GetStream(FileMode.Create, FileAccess.Write))
+        return cell.CellValue?.Text ?? cell.InnerText ?? string.Empty;
+    }
+
+    private static byte[] OverlayPdfHeaderImageIfNeeded(byte[] pdfContent, byte[] workbookContent)
+    {
+        var pdfHeaderImagePath = ResolvePdfHeaderImagePath();
+        if (string.IsNullOrWhiteSpace(pdfHeaderImagePath) ||
+            !File.Exists(pdfHeaderImagePath) ||
+            !WorkbookContainsCoaLargeWorksheet(workbookContent))
         {
-            sourceStream.CopyTo(targetStream);
+            return pdfContent;
         }
 
-        drawingsPart.WorksheetDrawing.Append(CreateOneCellImageAnchor(
-            drawingsPart.WorksheetDrawing,
-            drawingsPart.GetIdOfPart(imagePart),
-            "COA PDF Header",
-            columnId: "0",
-            rowId: "0",
-            widthPoints: 350,
-            heightPoints: 70));
-        drawingsPart.WorksheetDrawing.Save();
+        try
+        {
+            return PdfHeaderImageOverlay.Add(pdfContent, pdfHeaderImagePath);
+        }
+        catch
+        {
+            return pdfContent;
+        }
+    }
+
+    private static bool WorkbookContainsCoaLargeWorksheet(byte[] workbookContent)
+    {
+        using var stream = new MemoryStream(workbookContent);
+        using var document = SpreadsheetDocument.Open(stream, false);
+        var workbookPart = document.WorkbookPart;
+        return workbookPart is not null &&
+            (workbookPart.WorksheetParts.Any(worksheetPart => IsCoaLargeWorksheet(workbookPart, worksheetPart)) ||
+                SharedStringsContainCoaLargeMarkers(workbookPart));
+    }
+
+    private static bool SharedStringsContainCoaLargeMarkers(WorkbookPart workbookPart)
+    {
+        var sharedText = workbookPart.SharedStringTablePart?.SharedStringTable?.InnerText ?? string.Empty;
+        return sharedText.Contains("Certificate Of Analysis", StringComparison.OrdinalIgnoreCase) &&
+            sharedText.Contains("General Information", StringComparison.OrdinalIgnoreCase) &&
+            sharedText.Contains("CAS Number", StringComparison.OrdinalIgnoreCase);
     }
 
     private static void ReplaceHeaderFooterImagesWithPdfHeaderImage(WorksheetPart worksheetPart, string pdfHeaderImagePath)
@@ -479,6 +522,43 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
             new Xdr.Extent { Cx = widthEmus, Cy = heightEmus },
             picture,
             new Xdr.ClientData());
+    }
+
+    private static class PdfHeaderImageOverlay
+    {
+        public static byte[] Add(byte[] pdfContent, string imagePath)
+        {
+            return AddWithPdfSharp(pdfContent, imagePath);
+        }
+
+        private static byte[] AddWithPdfSharp(byte[] pdfContent, string imagePath)
+        {
+            using var pdfStream = new MemoryStream(pdfContent);
+            using var document = PdfReader.Open(pdfStream, PdfDocumentOpenMode.Modify);
+            using var image = XImage.FromFile(imagePath);
+
+            foreach (var page in document.Pages)
+            {
+                var pageWidth = page.Width.Point;
+                var headerWidth = Math.Min(559D, Math.Max(0D, pageWidth - 36D));
+                if (headerWidth <= 0D || image.PixelWidth <= 0)
+                {
+                    continue;
+                }
+
+                var headerHeight = headerWidth * image.PixelHeight / image.PixelWidth;
+                var headerX = (pageWidth - headerWidth) / 2D;
+                const double headerY = 7D;
+
+                using var graphics = XGraphics.FromPdfPage(page, XGraphicsPdfPageOptions.Append);
+                graphics.DrawImage(image, headerX, headerY, headerWidth, headerHeight);
+            }
+
+            using var output = new MemoryStream();
+            document.Save(output, closeStream: false);
+            return output.ToArray();
+        }
+
     }
 
     private byte[] ConvertWithFallback(byte[] workbookContent, string workbookFileName)
