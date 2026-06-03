@@ -18,6 +18,7 @@ public sealed class Query2PreviewService(ICalculationService calculationService)
     private const string HiddenSourceFolderNameKey = "_sourceFolderName";
     private const string HiddenId1Key = "_id1";
     private const string HiddenId2Key = "_id2";
+    private const NumberStyles DecimalNumberStyles = NumberStyles.Number | NumberStyles.AllowExponent;
 
     private static readonly Query2PreviewColumn[] BaseColumns =
     [
@@ -728,7 +729,7 @@ public sealed class Query2PreviewService(ICalculationService calculationService)
         {
             null => null,
             DateTime dateTime => dateTime.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture),
-            decimal decimalValue => decimalValue.ToString("G29", CultureInfo.InvariantCulture),
+            decimal decimalValue => decimalValue.ToString("0.#############################", CultureInfo.InvariantCulture),
             double doubleValue => doubleValue.ToString("G17", CultureInfo.InvariantCulture),
             float floatValue => floatValue.ToString("G9", CultureInfo.InvariantCulture),
             IFormattable formattable => formattable.ToString(null, CultureInfo.InvariantCulture),
@@ -742,8 +743,8 @@ public sealed class Query2PreviewService(ICalculationService calculationService)
             return null;
         }
 
-        if (decimal.TryParse(value, NumberStyles.Number, CultureInfo.InvariantCulture, out var parsed) ||
-            decimal.TryParse(value, NumberStyles.Number, CultureInfo.CurrentCulture, out parsed))
+        if (decimal.TryParse(value, DecimalNumberStyles, CultureInfo.InvariantCulture, out var parsed) ||
+            decimal.TryParse(value, DecimalNumberStyles, CultureInfo.CurrentCulture, out parsed))
         {
             return parsed;
         }
@@ -810,8 +811,8 @@ public sealed class Query2PreviewService(ICalculationService calculationService)
             return null;
         }
 
-        return decimal.TryParse(value, NumberStyles.Number, CultureInfo.InvariantCulture, out var parsed) ||
-               decimal.TryParse(value, NumberStyles.Number, CultureInfo.CurrentCulture, out parsed)
+        return decimal.TryParse(value, DecimalNumberStyles, CultureInfo.InvariantCulture, out var parsed) ||
+               decimal.TryParse(value, DecimalNumberStyles, CultureInfo.CurrentCulture, out parsed)
             ? parsed
             : null;
     }

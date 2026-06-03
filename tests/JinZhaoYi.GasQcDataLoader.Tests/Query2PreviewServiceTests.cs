@@ -47,6 +47,38 @@ public sealed class Query2PreviewServiceTests
     }
 
     [Fact]
+    public void Recalculate_accepts_scientific_notation_decimal_values()
+    {
+        var service = CreateService();
+        var preview = CreatePreview(service);
+        var firstStdRaw = preview.Rows.First(row => row.RowType == Query2ExportRowType.Raw && row.CurrentValues["port"] == "STD");
+        firstStdRaw.CurrentValues[AcetoneAreaKey] = "1.25E-05";
+        firstStdRaw.ManualOverrides[AcetoneAreaKey] = "1.25E-05";
+
+        var recalculated = service.Recalculate(preview);
+
+        var recalculatedRaw = recalculated.Rows.Single(row => row.RowKey == firstStdRaw.RowKey);
+        recalculatedRaw.CurrentValues[AcetoneAreaKey].Should().Be("0.0000125");
+    }
+
+    [Fact]
+    public void CreatePreview_formats_decimal_values_without_scientific_notation()
+    {
+        var service = CreateService();
+        var row = Row("STD1", "STD", "STDLOT", 1, new DateTime(2026, 6, 1, 8, 0, 0), "STD", 0.0000189022765012299187138573m);
+
+        var preview = service.CreatePreview(
+            new DateTime(2026, 6, 1),
+            new DateTime(2026, 6, 1),
+            "RF1",
+            ["STD1"],
+            [],
+            [new Query2ExportRow(Query2ExportRowType.Raw, row)]);
+
+        preview.Rows.Single().CurrentValues[AcetoneAreaKey].Should().Be("0.0000189022765012299187138573");
+    }
+
+    [Fact]
     public void Recalculate_rejects_non_editable_manual_fields()
     {
         var service = CreateService();
