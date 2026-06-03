@@ -1,4 +1,6 @@
 using ClosedXML.Excel;
+using DocumentFormat.OpenXml.Packaging;
+using DocumentFormat.OpenXml.Spreadsheet;
 using JinZhaoYi.GasQcDataLoader.Configuration;
 using JinZhaoYi.GasQcDataLoader.DataModels;
 using JinZhaoYi.GasQcDataLoader.Services.Interface;
@@ -12,6 +14,12 @@ public sealed class Query2WorkbookExporter(
 {
     private const string Query2SheetName = "Query2";
     private const string TemplateSheetName = "_Query2Template";
+    private const int BaseColumnCount = 16;
+    private static readonly XLColor PpbWithinRangeFill = XLColor.FromHtml("#E2EFDA");
+    private static readonly XLColor PpbOutOfRangeFill = XLColor.FromHtml("#FF6969");
+    private static int FirstAreaColumn => BaseColumnCount + 1;
+    private static int FirstPpbColumn => BaseColumnCount + CompoundMap.Analytes.Count + 1;
+    private static int LastPpbColumn => BaseColumnCount + CompoundMap.Analytes.Count * 2;
 
     private readonly SchedulerOptions _options = options.Value;
 
@@ -96,13 +104,15 @@ public sealed class Query2WorkbookExporter(
         using var workbook = BuildWorkbook(templatePath, exportRows);
         using var stream = new MemoryStream();
         workbook.SaveAs(stream);
-        return stream.ToArray();
+        return RemovePpbConditionalFormatting(stream.ToArray());
     }
 
     private static void ExportWorkbook(string templatePath, string outputPath, IReadOnlyList<Query2ExportRow> exportRows)
     {
         using var workbook = BuildWorkbook(templatePath, exportRows);
-        workbook.SaveAs(outputPath);
+        using var stream = new MemoryStream();
+        workbook.SaveAs(stream);
+        File.WriteAllBytes(outputPath, RemovePpbConditionalFormatting(stream.ToArray()));
     }
 
     private static XLWorkbook BuildWorkbook(string templatePath, IReadOnlyList<Query2ExportRow> exportRows)
@@ -127,20 +137,30 @@ public sealed class Query2WorkbookExporter(
         }
 
         var targetRow = Query2ColumnLayout.DataStartRowNumber;
+        var ppbRowNumbers = new List<int>();
         foreach (var exportRow in exportRows)
         {
             var styleRowNumber = ResolveStyleRow(styleRows, exportRow.RowType);
             CopyTemplateRow(templateWorksheet, styleRowNumber, worksheet, targetRow);
             WriteRowValues(worksheet, targetRow, Query2ColumnLayout.BuildValues(exportRow));
+            if (exportRow.RowType == Query2ExportRowType.Ppb)
+            {
+                CopyPpbResultsToPpbBlock(worksheet, targetRow);
+                ppbRowNumbers.Add(targetRow);
+            }
+
             targetRow++;
         }
 
+        var copiedCritRowNumbers = new List<int>();
         foreach (var critRowNumber in critRows)
         {
             CopyTemplateRow(templateWorksheet, critRowNumber, worksheet, targetRow);
+            copiedCritRowNumbers.Add(targetRow);
             targetRow++;
         }
 
+        ApplyPpbRangeFills(worksheet, ppbRowNumbers, copiedCritRowNumbers);
         templateWorksheet.Delete();
         return workbook;
     }
@@ -192,6 +212,156 @@ public sealed class Query2WorkbookExporter(
                     break;
             }
         }
+    }
+
+    private static void CopyPpbResultsToPpbBlock(IXLWorksheet worksheet, int rowNumber)
+    {
+        for (var index = 0; index < CompoundMap.Analytes.Count; index++)
+        {
+            var sourceCell = worksheet.Cell(rowNumber, FirstAreaColumn + index);
+            var targetCell = worksheet.Cell(rowNumber, FirstPpbColumn + index);
+            if (targetCell.IsEmpty() && !sourceCell.IsEmpty())
+            {
+                targetCell.Value = sourceCell.Value;
+            }
+        }
+    }
+
+    private static void ApplyPpbRangeFills(
+        IXLWorksheet worksheet,
+        IReadOnlyCollection<int> ppbRowNumbers,
+        IReadOnlyCollection<int> critRowNumbers)
+    {
+        if (ppbRowNumbers.Count == 0 ||
+            !TryResolveCritRow(worksheet, critRowNumbers, "MAX", out var maxRowNumber) ||
+            !TryResolveCritRow(worksheet, critRowNumbers, "MIN", out var minRowNumber))
+        {
+            return;
+        }
+
+        foreach (var rowNumber in ppbRowNumbers)
+        {
+            for (var column = FirstPpbColumn; column <= LastPpbColumn; column++)
+            {
+                var cell = worksheet.Cell(rowNumber, column);
+                if (!TryGetDecimal(cell, out var value) ||
+                    !TryGetDecimal(worksheet.Cell(maxRowNumber, column), out var max) ||
+                    !TryGetDecimal(worksheet.Cell(minRowNumber, column), out var min))
+                {
+                    continue;
+                }
+
+                var lowerBound = Math.Min(min, max);
+                var upperBound = Math.Max(min, max);
+                cell.Style.Fill.BackgroundColor = value >= lowerBound && value <= upperBound
+                    ? PpbWithinRangeFill
+                    : PpbOutOfRangeFill;
+            }
+        }
+    }
+
+    private static bool TryResolveCritRow(
+        IXLWorksheet worksheet,
+        IReadOnlyCollection<int> critRowNumbers,
+        string marker,
+        out int rowNumber)
+    {
+        foreach (var candidate in critRowNumbers)
+        {
+            var id = worksheet.Cell(candidate, 1).GetString();
+            if (id.Contains(marker, StringComparison.OrdinalIgnoreCase))
+            {
+                rowNumber = candidate;
+                return true;
+            }
+        }
+
+        rowNumber = 0;
+        return false;
+    }
+
+    private static bool TryGetDecimal(IXLCell cell, out decimal value)
+    {
+        if (cell.TryGetValue<decimal>(out value))
+        {
+            return true;
+        }
+
+        var text = cell.GetString();
+        return decimal.TryParse(text, out value);
+    }
+
+    private static byte[] RemovePpbConditionalFormatting(byte[] workbookContent)
+    {
+        using var stream = new MemoryStream();
+        stream.Write(workbookContent, 0, workbookContent.Length);
+        stream.Position = 0;
+
+        using (var document = SpreadsheetDocument.Open(stream, true))
+        {
+            var workbookPart = document.WorkbookPart;
+            var sheet = workbookPart?.Workbook.Descendants<Sheet>()
+                .FirstOrDefault(candidate => string.Equals(candidate.Name?.Value, Query2SheetName, StringComparison.OrdinalIgnoreCase));
+            if (workbookPart is not null &&
+                sheet?.Id?.Value is { } relationshipId &&
+                workbookPart.GetPartById(relationshipId) is WorksheetPart worksheetPart)
+            {
+                foreach (var conditionalFormatting in worksheetPart.Worksheet.Elements<ConditionalFormatting>().ToArray())
+                {
+                var sqref = conditionalFormatting.GetAttribute("sqref", string.Empty).Value ?? string.Empty;
+                    if (SequenceReferencesOverlapPpbColumns(sqref))
+                    {
+                        conditionalFormatting.Remove();
+                    }
+                }
+
+                worksheetPart.Worksheet.Save();
+            }
+        }
+
+        return stream.ToArray();
+    }
+
+    private static bool SequenceReferencesOverlapPpbColumns(string sequenceReferences)
+    {
+        return sequenceReferences
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Any(reference => RangeOverlapsColumnBand(reference, FirstPpbColumn, LastPpbColumn));
+    }
+
+    private static bool RangeOverlapsColumnBand(string reference, int firstColumn, int lastColumn)
+    {
+        var parts = reference.Split(':', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (parts.Length == 0)
+        {
+            return false;
+        }
+
+        var rangeFirstColumn = ParseColumnNumber(parts[0]);
+        var rangeLastColumn = ParseColumnNumber(parts.Length > 1 ? parts[1] : parts[0]);
+        if (rangeFirstColumn == 0 || rangeLastColumn == 0)
+        {
+            return false;
+        }
+
+        return Math.Min(rangeFirstColumn, rangeLastColumn) <= lastColumn &&
+            Math.Max(rangeFirstColumn, rangeLastColumn) >= firstColumn;
+    }
+
+    private static int ParseColumnNumber(string cellReference)
+    {
+        var columnNumber = 0;
+        foreach (var character in cellReference)
+        {
+            if (!char.IsLetter(character))
+            {
+                break;
+            }
+
+            columnNumber = columnNumber * 26 + char.ToUpperInvariant(character) - 'A' + 1;
+        }
+
+        return columnNumber;
     }
 
     private static Dictionary<Query2ExportRowType, int> DetectStyleRows(IXLWorksheet templateWorksheet, int lastUsedRow)
