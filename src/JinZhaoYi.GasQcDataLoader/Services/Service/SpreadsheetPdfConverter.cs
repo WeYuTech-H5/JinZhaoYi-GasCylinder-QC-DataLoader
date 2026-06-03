@@ -178,8 +178,8 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
 
         AddWorksheetImage(worksheetPart, pdfHeaderImagePath);
         EnsureWorksheetDimensionStartsAtA1(worksheetPart);
-        FitWorksheetToSinglePdfPage(worksheetPart);
-        SetWorksheetPrintArea(worksheetPart, "A1:K60");
+        ConfigureWorksheetForPdfPage(worksheetPart);
+        SetWorksheetPrintArea(worksheetPart, "A1:G60");
         worksheetPart.Worksheet.Elements<RowBreaks>().ToList().ForEach(element => element.Remove());
         worksheetPart.Worksheet.Elements<ColumnBreaks>().ToList().ForEach(element => element.Remove());
         worksheetPart.Worksheet.Elements<HeaderFooter>().ToList().ForEach(element => element.Remove());
@@ -220,8 +220,8 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
     {
         var drawingId = ResolveNextDrawingId(worksheetDrawing);
         const long emusPerPixel = 9525;
-        const long widthPixels = 650;
-        const long heightPixels = 131;
+        const long widthPixels = 700;
+        const long heightPixels = 141;
         const long widthEmus = widthPixels * emusPerPixel;
         const long heightEmus = heightPixels * emusPerPixel;
 
@@ -279,12 +279,34 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
             : $"A1{reference[separatorIndex..]}";
     }
 
-    private static void FitWorksheetToSinglePdfPage(WorksheetPart worksheetPart)
+    private static void ConfigureWorksheetForPdfPage(WorksheetPart worksheetPart)
     {
         var sheetProperties = worksheetPart.Worksheet.GetFirstChild<SheetProperties>()
             ?? worksheetPart.Worksheet.PrependChild(new SheetProperties());
         sheetProperties.PageSetupProperties ??= new PageSetupProperties();
         sheetProperties.PageSetupProperties.FitToPage = true;
+
+        var pageMargins = worksheetPart.Worksheet.GetFirstChild<PageMargins>();
+        if (pageMargins is null)
+        {
+            pageMargins = new PageMargins();
+            var existingPageSetup = worksheetPart.Worksheet.GetFirstChild<PageSetup>();
+            if (existingPageSetup is null)
+            {
+                worksheetPart.Worksheet.Append(pageMargins);
+            }
+            else
+            {
+                worksheetPart.Worksheet.InsertBefore(pageMargins, existingPageSetup);
+            }
+        }
+
+        pageMargins.Left = 0.15D;
+        pageMargins.Right = 0.15D;
+        pageMargins.Top = 0.2D;
+        pageMargins.Bottom = 0.2D;
+        pageMargins.Header = 0D;
+        pageMargins.Footer = 0D;
 
         var pageSetup = worksheetPart.Worksheet.GetFirstChild<PageSetup>();
         if (pageSetup is null)
@@ -293,6 +315,8 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
             worksheetPart.Worksheet.Append(pageSetup);
         }
 
+        pageSetup.PaperSize = 9;
+        pageSetup.Orientation = OrientationValues.Portrait;
         pageSetup.FitToWidth = 1;
         pageSetup.FitToHeight = 1;
         pageSetup.Scale = null;
