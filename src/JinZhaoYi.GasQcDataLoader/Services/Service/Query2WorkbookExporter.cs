@@ -12,6 +12,9 @@ public sealed class Query2WorkbookExporter(
 {
     private const string Query2SheetName = "Query2";
     private const string TemplateSheetName = "_Query2Template";
+    private const int BaseColumnCount = 16;
+    private static readonly XLColor PpbWithinRangeFill = XLColor.FromHtml("#C6EFCE");
+    private static readonly XLColor PpbOutOfRangeFill = XLColor.FromHtml("#FFC7CE");
 
     private readonly SchedulerOptions _options = options.Value;
 
@@ -127,20 +130,29 @@ public sealed class Query2WorkbookExporter(
         }
 
         var targetRow = Query2ColumnLayout.DataStartRowNumber;
+        var ppbRowNumbers = new List<int>();
         foreach (var exportRow in exportRows)
         {
             var styleRowNumber = ResolveStyleRow(styleRows, exportRow.RowType);
             CopyTemplateRow(templateWorksheet, styleRowNumber, worksheet, targetRow);
             WriteRowValues(worksheet, targetRow, Query2ColumnLayout.BuildValues(exportRow));
+            if (exportRow.RowType == Query2ExportRowType.Ppb)
+            {
+                ppbRowNumbers.Add(targetRow);
+            }
+
             targetRow++;
         }
 
+        var copiedCritRowNumbers = new List<int>();
         foreach (var critRowNumber in critRows)
         {
             CopyTemplateRow(templateWorksheet, critRowNumber, worksheet, targetRow);
+            copiedCritRowNumbers.Add(targetRow);
             targetRow++;
         }
 
+        ApplyPpbRangeFills(worksheet, ppbRowNumbers, copiedCritRowNumbers);
         templateWorksheet.Delete();
         return workbook;
     }
@@ -192,6 +204,72 @@ public sealed class Query2WorkbookExporter(
                     break;
             }
         }
+    }
+
+    private static void ApplyPpbRangeFills(
+        IXLWorksheet worksheet,
+        IReadOnlyCollection<int> ppbRowNumbers,
+        IReadOnlyCollection<int> critRowNumbers)
+    {
+        if (ppbRowNumbers.Count == 0 ||
+            !TryResolveCritRow(worksheet, critRowNumbers, "MAX", out var maxRowNumber) ||
+            !TryResolveCritRow(worksheet, critRowNumbers, "MIN", out var minRowNumber))
+        {
+            return;
+        }
+
+        var firstAnalyteColumn = BaseColumnCount + 1;
+        var lastAnalyteColumn = BaseColumnCount + CompoundMap.Analytes.Count;
+        foreach (var rowNumber in ppbRowNumbers)
+        {
+            for (var column = firstAnalyteColumn; column <= lastAnalyteColumn; column++)
+            {
+                var cell = worksheet.Cell(rowNumber, column);
+                if (!TryGetDecimal(cell, out var value) ||
+                    !TryGetDecimal(worksheet.Cell(maxRowNumber, column), out var max) ||
+                    !TryGetDecimal(worksheet.Cell(minRowNumber, column), out var min))
+                {
+                    continue;
+                }
+
+                var lowerBound = Math.Min(min, max);
+                var upperBound = Math.Max(min, max);
+                cell.Style.Fill.BackgroundColor = value >= lowerBound && value <= upperBound
+                    ? PpbWithinRangeFill
+                    : PpbOutOfRangeFill;
+            }
+        }
+    }
+
+    private static bool TryResolveCritRow(
+        IXLWorksheet worksheet,
+        IReadOnlyCollection<int> critRowNumbers,
+        string marker,
+        out int rowNumber)
+    {
+        foreach (var candidate in critRowNumbers)
+        {
+            var id = worksheet.Cell(candidate, 1).GetString();
+            if (id.Contains(marker, StringComparison.OrdinalIgnoreCase))
+            {
+                rowNumber = candidate;
+                return true;
+            }
+        }
+
+        rowNumber = 0;
+        return false;
+    }
+
+    private static bool TryGetDecimal(IXLCell cell, out decimal value)
+    {
+        if (cell.TryGetValue<decimal>(out value))
+        {
+            return true;
+        }
+
+        var text = cell.GetString();
+        return decimal.TryParse(text, out value);
     }
 
     private static Dictionary<Query2ExportRowType, int> DetectStyleRows(IXLWorksheet templateWorksheet, int lastUsedRow)
