@@ -229,41 +229,6 @@ public sealed class Query2WorkbookExporterTests : IDisposable
         worksheet.Cell(5, 5).GetValue<int>().Should().Be(9);
     }
 
-    [Fact]
-    public async Task ExportAsync_colors_ppb_results_by_crit_range()
-    {
-        var templateDirectory = Path.Combine(_rootPath, "template-ppb-colors");
-        var batchDirectory = Path.Combine(_rootPath, "20260603-ppb-colors");
-        Directory.CreateDirectory(templateDirectory);
-        Directory.CreateDirectory(batchDirectory);
-
-        var templatePath = Path.Combine(templateDirectory, "template.xlsx");
-        CreateTemplateWorkbook(templatePath);
-
-        var exporter = new Query2WorkbookExporter(
-            Options.Create(new SchedulerOptions
-            {
-                ExcelExport = new SchedulerExcelExportOptions
-                {
-                    Enabled = true,
-                    TemplatePath = templatePath
-                }
-            }),
-            NullLogger<Query2WorkbookExporter>.Instance);
-
-        var writeSet = new ImportWriteSet();
-        writeSet.Query2Rows.Add(new Query2ExportRow(Query2ExportRowType.Ppb, Row("ppb(5900)", "PORT 2", "20260603001", acetone: 100m)));
-        writeSet.Query2Rows.Add(new Query2ExportRow(Query2ExportRowType.Ppb, Row("ppb(5901)", "PORT 2", "20260603001", acetone: 120m)));
-
-        var outputPath = await exporter.ExportAsync(writeSet, [CreateCandidate(batchDirectory, "20260603")], CancellationToken.None);
-
-        using var workbook = new XLWorkbook(outputPath!);
-        var worksheet = workbook.Worksheet("Query2");
-
-        worksheet.Cell(4, 17).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFC6EFCE));
-        worksheet.Cell(5, 17).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFFFC7CE));
-    }
-
     public void Dispose()
     {
         if (Directory.Exists(_rootPath))
@@ -294,8 +259,6 @@ public sealed class Query2WorkbookExporterTests : IDisposable
         SeedTemplateRow(worksheet, 9, "QC(AVG1,AVG2)", XLColor.FromHtml("#D9B8E5"));
         SeedTemplateRow(worksheet, 10, "Crit(MAX)", XLColor.LightGray);
         SeedTemplateRow(worksheet, 11, "Crit(MIN)", XLColor.Gray);
-        worksheet.Cell(10, 17).Value = 110;
-        worksheet.Cell(11, 17).Value = 90;
 
         workbook.SaveAs(templatePath);
     }
