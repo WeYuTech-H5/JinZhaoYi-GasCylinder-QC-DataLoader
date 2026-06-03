@@ -357,10 +357,11 @@ static void MapDownloadEndpoints(WebApplication app)
         await repository.UpsertExcelPpbHistoryAsync(historyRequest, cancellationToken);
 
         var excelExportKey = DapperRepository.ComputeExcelExportKey(historyRequest);
+        var exportSessionId = Guid.NewGuid();
         var editLogs = previewService.BuildEditLogs(
             finalPreview,
             excelExportKey,
-            Guid.NewGuid(),
+            exportSessionId,
             exportedAt,
             exportUser);
         await repository.InsertQuery2PreviewEditLogsAsync(editLogs, cancellationToken);
@@ -368,7 +369,7 @@ static void MapDownloadEndpoints(WebApplication app)
         return Results.File(
             content,
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            $"Cylinder_Qc[{exportDateText}].xlsx");
+            $"Cylinder_Qc[{exportDateText}][{exportSessionId:D}].xlsx");
     });
 
     app.MapPost("/api/exports/query2-excel", async (
