@@ -3,6 +3,7 @@ using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Spreadsheet;
 using FluentAssertions;
+using System.Reflection;
 using JinZhaoYi.GasQcDataLoader.Configuration;
 using JinZhaoYi.GasQcDataLoader.DataModels;
 using JinZhaoYi.GasQcDataLoader.Services.Interface;
@@ -122,6 +123,25 @@ public sealed class CoaWorkbookExporterTests
         var download = exporter.ExportLargeForDownload([row], "20260521", CoaLargeTemplateType.Standard);
 
         HasWorksheetDrawing(download, "COA_STD-REALIMG").Should().BeTrue();
+    }
+
+    [Fact]
+    public void PdfConversionWorkbook_promotes_large_header_images_without_changing_download_workbook()
+    {
+        var exporter = CreateExporter();
+        var row = CreateRow("STD-PDF", "0.5L_Cylinder");
+        var download = exporter.ExportLargeForDownload([row], "20260521", CoaLargeTemplateType.Standard);
+        var originalContent = download.Content.ToArray();
+
+        var preparedContent = PrepareWorkbookForPdfConversion(originalContent);
+
+        HasLegacyHeaderFooterDrawing(download, "COA_STD-PDF").Should().BeTrue();
+        originalContent.Should().Equal(download.Content);
+
+        var preparedDownload = new CoaWorkbookDownload(preparedContent, download.ContentType, download.FileName);
+        HasLegacyHeaderFooterDrawing(preparedDownload, "COA_STD-PDF").Should().BeFalse();
+        HasDrawingInRange(preparedDownload, "COA_STD-PDF", "A1:F6").Should().BeTrue();
+        HasDrawingInRange(preparedDownload, "COA_STD-PDF", "H1:K6").Should().BeTrue();
     }
 
     [Fact]
@@ -298,6 +318,26 @@ public sealed class CoaWorkbookExporterTests
         var worksheetPart = (WorksheetPart)workbookPart.GetPartById(sheet.Id!);
         return worksheetPart.DrawingsPart is not null &&
             worksheetPart.Worksheet.Descendants<Drawing>().Any();
+    }
+
+    private static bool HasLegacyHeaderFooterDrawing(CoaWorkbookDownload download, string sheetName)
+    {
+        using var stream = new MemoryStream(download.Content);
+        using var document = SpreadsheetDocument.Open(stream, false);
+        var workbookPart = document.WorkbookPart!;
+        var sheet = workbookPart.Workbook.Sheets!.Elements<Sheet>()
+            .First(item => string.Equals(item.Name?.Value, sheetName, StringComparison.OrdinalIgnoreCase));
+        var worksheetPart = (WorksheetPart)workbookPart.GetPartById(sheet.Id!);
+        return worksheetPart.Worksheet.Descendants<LegacyDrawingHeaderFooter>().Any();
+    }
+
+    private static byte[] PrepareWorkbookForPdfConversion(byte[] workbookContent)
+    {
+        var method = typeof(SpreadsheetPdfConverter).GetMethod(
+            "PrepareWorkbookForPdfConversion",
+            BindingFlags.NonPublic | BindingFlags.Static);
+        method.Should().NotBeNull();
+        return ((byte[]?)method!.Invoke(null, [workbookContent]))!;
     }
 
     private static string? GetCellFontRgb(CoaWorkbookDownload download, string sheetName, string cellReference)
