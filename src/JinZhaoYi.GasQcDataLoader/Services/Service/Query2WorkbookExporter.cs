@@ -18,8 +18,7 @@ public sealed class Query2WorkbookExporter(
     private static readonly XLColor PpbWithinRangeFill = XLColor.FromHtml("#E2EFDA");
     private static readonly XLColor PpbOutOfRangeFill = XLColor.FromHtml("#FF6969");
     private static int FirstAreaColumn => BaseColumnCount + 1;
-    private static int FirstPpbColumn => BaseColumnCount + CompoundMap.Analytes.Count + 1;
-    private static int LastPpbColumn => BaseColumnCount + CompoundMap.Analytes.Count * 2;
+    private static int FixedAreaCount => CompoundMap.Analytes.Count;
 
     private readonly SchedulerOptions _options = options.Value;
 
@@ -57,7 +56,7 @@ public sealed class Query2WorkbookExporter(
 
         Directory.CreateDirectory(outputDirectory);
 
-        await Task.Run(() => ExportWorkbook(templatePath, outputPath, writeSet.Query2Rows), cancellationToken);
+        await Task.Run(() => ExportWorkbook(templatePath, outputPath, writeSet.Query2Rows, []), cancellationToken);
 
         logger.LogInformation("Query2 Excel exported to {OutputPath}.", outputPath);
         return outputPath;
@@ -66,6 +65,7 @@ public sealed class Query2WorkbookExporter(
     public async Task<byte[]?> ExportAsync(
         string batchDate,
         IReadOnlyList<Query2ExportRow> rows,
+        IReadOnlyList<Query2DynamicAreaField> dynamicAreaFields,
         CancellationToken cancellationToken)
     {
         if (!_options.ExcelExport.Enabled || rows.Count == 0)
@@ -74,7 +74,7 @@ public sealed class Query2WorkbookExporter(
         }
 
         var templatePath = ResolveTemplatePath();
-        return await Task.Run(() => ExportWorkbookToBytes(templatePath, rows), cancellationToken);
+        return await Task.Run(() => ExportWorkbookToBytes(templatePath, rows, dynamicAreaFields), cancellationToken);
     }
 
     private string ResolveOutputDirectory(QuantFileCandidate firstCandidate) =>
@@ -99,28 +99,42 @@ public sealed class Query2WorkbookExporter(
         return templatePath;
     }
 
-    private static byte[] ExportWorkbookToBytes(string templatePath, IReadOnlyList<Query2ExportRow> exportRows)
+    private static byte[] ExportWorkbookToBytes(
+        string templatePath,
+        IReadOnlyList<Query2ExportRow> exportRows,
+        IReadOnlyList<Query2DynamicAreaField> dynamicAreaFields)
     {
-        using var workbook = BuildWorkbook(templatePath, exportRows);
+        using var workbook = BuildWorkbook(templatePath, exportRows, dynamicAreaFields);
         using var stream = new MemoryStream();
         workbook.SaveAs(stream);
-        return RemovePpbConditionalFormatting(stream.ToArray());
+        return RemovePpbConditionalFormatting(stream.ToArray(), dynamicAreaFields.Count);
     }
 
-    private static void ExportWorkbook(string templatePath, string outputPath, IReadOnlyList<Query2ExportRow> exportRows)
+    private static void ExportWorkbook(
+        string templatePath,
+        string outputPath,
+        IReadOnlyList<Query2ExportRow> exportRows,
+        IReadOnlyList<Query2DynamicAreaField> dynamicAreaFields)
     {
-        using var workbook = BuildWorkbook(templatePath, exportRows);
+        using var workbook = BuildWorkbook(templatePath, exportRows, dynamicAreaFields);
         using var stream = new MemoryStream();
         workbook.SaveAs(stream);
-        File.WriteAllBytes(outputPath, RemovePpbConditionalFormatting(stream.ToArray()));
+        File.WriteAllBytes(outputPath, RemovePpbConditionalFormatting(stream.ToArray(), dynamicAreaFields.Count));
     }
 
-    private static XLWorkbook BuildWorkbook(string templatePath, IReadOnlyList<Query2ExportRow> exportRows)
+    private static XLWorkbook BuildWorkbook(
+        string templatePath,
+        IReadOnlyList<Query2ExportRow> exportRows,
+        IReadOnlyList<Query2DynamicAreaField> dynamicAreaFields)
     {
         var workbook = new XLWorkbook(templatePath);
         var worksheet = workbook.Worksheet(Query2SheetName)
             ?? throw new InvalidOperationException($"Template workbook does not contain worksheet '{Query2SheetName}'.");
         var templateWorksheet = worksheet.CopyTo(TemplateSheetName);
+        var headers = Query2ColumnLayout.BuildHeaders(dynamicAreaFields);
+
+        ApplyDynamicAreaColumns(worksheet, dynamicAreaFields);
+        ApplyDynamicAreaColumns(templateWorksheet, dynamicAreaFields);
 
         foreach (var otherSheet in workbook.Worksheets.Where(sheet => sheet.Name != Query2SheetName && sheet.Name != TemplateSheetName).ToList())
         {
@@ -140,11 +154,11 @@ public sealed class Query2WorkbookExporter(
         foreach (var exportRow in exportRows)
         {
             var styleRowNumber = ResolveStyleRow(styleRows, exportRow.RowType);
-            CopyTemplateRow(templateWorksheet, styleRowNumber, worksheet, targetRow);
-            WriteRowValues(worksheet, targetRow, Query2ColumnLayout.BuildValues(exportRow));
+            CopyTemplateRow(templateWorksheet, styleRowNumber, worksheet, targetRow, headers.Count);
+            WriteRowValues(worksheet, targetRow, Query2ColumnLayout.BuildValues(exportRow, dynamicAreaFields));
             if (exportRow.RowType == Query2ExportRowType.Ppb)
             {
-                CopyPpbResultsToPpbBlock(worksheet, targetRow);
+                CopyPpbResultsToPpbBlock(worksheet, targetRow, dynamicAreaFields.Count);
             }
 
             targetRow++;
@@ -154,23 +168,49 @@ public sealed class Query2WorkbookExporter(
         var copiedCritRowNumbers = new List<int>();
         foreach (var critRowNumber in critRows)
         {
-            CopyTemplateRow(templateWorksheet, critRowNumber, worksheet, targetRow);
+            CopyTemplateRow(templateWorksheet, critRowNumber, worksheet, targetRow, headers.Count);
             copiedCritRowNumbers.Add(targetRow);
             targetRow++;
         }
 
-        ApplyPpbRangeFills(worksheet, Query2ColumnLayout.DataStartRowNumber, lastDataRowNumber, copiedCritRowNumbers);
+        ApplyPpbRangeFills(worksheet, Query2ColumnLayout.DataStartRowNumber, lastDataRowNumber, copiedCritRowNumbers, dynamicAreaFields.Count);
         templateWorksheet.Delete();
         return workbook;
     }
 
-    private static void CopyTemplateRow(IXLWorksheet sourceWorksheet, int sourceRowNumber, IXLWorksheet targetWorksheet, int targetRowNumber)
+    private static void ApplyDynamicAreaColumns(
+        IXLWorksheet worksheet,
+        IReadOnlyList<Query2DynamicAreaField> dynamicAreaFields)
+    {
+        if (dynamicAreaFields.Count == 0)
+        {
+            return;
+        }
+
+        var insertBeforeColumn = FirstAreaColumn + FixedAreaCount;
+        worksheet.Column(insertBeforeColumn).InsertColumnsBefore(dynamicAreaFields.Count);
+        var styleColumn = insertBeforeColumn - 1;
+        for (var index = 0; index < dynamicAreaFields.Count; index++)
+        {
+            var columnNumber = insertBeforeColumn + index;
+            worksheet.Column(columnNumber).Style = worksheet.Column(styleColumn).Style;
+            worksheet.Column(columnNumber).Width = worksheet.Column(styleColumn).Width;
+            worksheet.Cell(Query2ColumnLayout.HeaderRowNumber, columnNumber).Value = dynamicAreaFields[index].DisplayName;
+        }
+    }
+
+    private static void CopyTemplateRow(
+        IXLWorksheet sourceWorksheet,
+        int sourceRowNumber,
+        IXLWorksheet targetWorksheet,
+        int targetRowNumber,
+        int columnCount)
     {
         var sourceRange = sourceWorksheet.Range(
             sourceRowNumber,
             1,
             sourceRowNumber,
-            Query2ColumnLayout.Headers.Count);
+            columnCount);
 
         sourceRange.CopyTo(targetWorksheet.Cell(targetRowNumber, 1));
         targetWorksheet.Row(targetRowNumber).Height = sourceWorksheet.Row(sourceRowNumber).Height;
@@ -213,12 +253,16 @@ public sealed class Query2WorkbookExporter(
         }
     }
 
-    private static void CopyPpbResultsToPpbBlock(IXLWorksheet worksheet, int rowNumber)
+    private static void CopyPpbResultsToPpbBlock(
+        IXLWorksheet worksheet,
+        int rowNumber,
+        int dynamicAreaCount)
     {
+        var firstPpbColumn = ResolveFirstPpbColumn(dynamicAreaCount);
         for (var index = 0; index < CompoundMap.Analytes.Count; index++)
         {
             var sourceCell = worksheet.Cell(rowNumber, FirstAreaColumn + index);
-            var targetCell = worksheet.Cell(rowNumber, FirstPpbColumn + index);
+            var targetCell = worksheet.Cell(rowNumber, firstPpbColumn + index);
             if (targetCell.IsEmpty() && !sourceCell.IsEmpty())
             {
                 targetCell.Value = sourceCell.Value;
@@ -230,7 +274,8 @@ public sealed class Query2WorkbookExporter(
         IXLWorksheet worksheet,
         int firstDataRowNumber,
         int lastDataRowNumber,
-        IReadOnlyCollection<int> critRowNumbers)
+        IReadOnlyCollection<int> critRowNumbers,
+        int dynamicAreaCount)
     {
         if (lastDataRowNumber < firstDataRowNumber ||
             !TryResolveCritRow(worksheet, critRowNumbers, "MAX", out var maxRowNumber) ||
@@ -239,9 +284,11 @@ public sealed class Query2WorkbookExporter(
             return;
         }
 
+        var firstPpbColumn = ResolveFirstPpbColumn(dynamicAreaCount);
+        var lastPpbColumn = ResolveLastPpbColumn(dynamicAreaCount);
         for (var rowNumber = firstDataRowNumber; rowNumber <= lastDataRowNumber; rowNumber++)
         {
-            for (var column = FirstPpbColumn; column <= LastPpbColumn; column++)
+            for (var column = firstPpbColumn; column <= lastPpbColumn; column++)
             {
                 var cell = worksheet.Cell(rowNumber, column);
                 if (!TryGetDecimal(cell, out var value) ||
@@ -291,7 +338,13 @@ public sealed class Query2WorkbookExporter(
         return decimal.TryParse(text, out value);
     }
 
-    private static byte[] RemovePpbConditionalFormatting(byte[] workbookContent)
+    private static int ResolveFirstPpbColumn(int dynamicAreaCount) =>
+        BaseColumnCount + FixedAreaCount + dynamicAreaCount + 1;
+
+    private static int ResolveLastPpbColumn(int dynamicAreaCount) =>
+        ResolveFirstPpbColumn(dynamicAreaCount) + CompoundMap.Analytes.Count - 1;
+
+    private static byte[] RemovePpbConditionalFormatting(byte[] workbookContent, int dynamicAreaCount)
     {
         using var stream = new MemoryStream();
         stream.Write(workbookContent, 0, workbookContent.Length);
@@ -309,7 +362,7 @@ public sealed class Query2WorkbookExporter(
                 foreach (var conditionalFormatting in worksheetPart.Worksheet.Elements<ConditionalFormatting>().ToArray())
                 {
                 var sqref = conditionalFormatting.GetAttribute("sqref", string.Empty).Value ?? string.Empty;
-                    if (SequenceReferencesOverlapPpbColumns(sqref))
+                    if (SequenceReferencesOverlapPpbColumns(sqref, dynamicAreaCount))
                     {
                         conditionalFormatting.Remove();
                     }
@@ -322,11 +375,13 @@ public sealed class Query2WorkbookExporter(
         return stream.ToArray();
     }
 
-    private static bool SequenceReferencesOverlapPpbColumns(string sequenceReferences)
+    private static bool SequenceReferencesOverlapPpbColumns(string sequenceReferences, int dynamicAreaCount)
     {
+        var firstPpbColumn = ResolveFirstPpbColumn(dynamicAreaCount);
+        var lastPpbColumn = ResolveLastPpbColumn(dynamicAreaCount);
         return sequenceReferences
             .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Any(reference => RangeOverlapsColumnBand(reference, FirstPpbColumn, LastPpbColumn));
+            .Any(reference => RangeOverlapsColumnBand(reference, firstPpbColumn, lastPpbColumn));
     }
 
     private static bool RangeOverlapsColumnBand(string reference, int firstColumn, int lastColumn)

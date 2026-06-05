@@ -88,6 +88,28 @@ public interface IDapperRepository
         IReadOnlyCollection<Query2PreviewEditLogRow> rows,
         CancellationToken cancellationToken);
 
+    Task<IReadOnlyList<Query2DynamicAreaField>> GetQuery2DynamicAreaFieldsAsync(
+        bool includeInactive,
+        CancellationToken cancellationToken);
+
+    Task<Query2DynamicAreaField> UpsertQuery2DynamicAreaFieldAsync(
+        Query2DynamicAreaFieldUpsertRequest request,
+        string user,
+        CancellationToken cancellationToken);
+
+    Task DisableQuery2DynamicAreaFieldAsync(
+        string fieldKey,
+        string user,
+        CancellationToken cancellationToken);
+
+    Task<IReadOnlyList<Query2DynamicAreaPortValue>> GetQuery2DynamicAreaPortValuesAsync(
+        CancellationToken cancellationToken);
+
+    Task UpsertQuery2DynamicAreaPortValuesAsync(
+        IReadOnlyCollection<Query2DynamicAreaPortValueDto> rows,
+        string user,
+        CancellationToken cancellationToken);
+
     Task<PagedResponse<ExportOption>> GetExcelPpbExportOptionsAsync(
         DateTime batchDate,
         int page,

@@ -9,6 +9,11 @@ public static class Query2ColumnLayout
     public static IReadOnlyList<string> Headers { get; } = BuildHeaders();
 
     public static IReadOnlyList<object?> BuildValues(Query2ExportRow exportRow)
+        => BuildValues(exportRow, []);
+
+    public static IReadOnlyList<object?> BuildValues(
+        Query2ExportRow exportRow,
+        IReadOnlyList<Query2DynamicAreaField> dynamicAreaFields)
     {
         var row = exportRow.Row;
         var values = new List<object?>(Headers.Count)
@@ -36,6 +41,11 @@ public static class Query2ColumnLayout
             values.Add(row.Areas.GetValueOrDefault(analyte.Suffix));
         }
 
+        foreach (var field in dynamicAreaFields)
+        {
+            values.Add(row.Areas.GetValueOrDefault(field.FieldKey));
+        }
+
         foreach (var analyte in CompoundMap.Analytes)
         {
             values.Add(row.Ppbs.GetValueOrDefault(analyte.Suffix));
@@ -49,7 +59,14 @@ public static class Query2ColumnLayout
         return values;
     }
 
+    public static IReadOnlyList<string> BuildHeaders(
+        IReadOnlyList<Query2DynamicAreaField> dynamicAreaFields) =>
+        BuildHeaders(dynamicAreaFields.Select(field => field.DisplayName).ToArray());
+
     private static IReadOnlyList<string> BuildHeaders()
+        => BuildHeaders(Array.Empty<string>());
+
+    private static IReadOnlyList<string> BuildHeaders(IReadOnlyList<string> dynamicAreaHeaders)
     {
         var headers = new List<string>
         {
@@ -74,6 +91,11 @@ public static class Query2ColumnLayout
         foreach (var analyte in CompoundMap.Analytes)
         {
             headers.Add(analyte.Suffix);
+        }
+
+        foreach (var header in dynamicAreaHeaders)
+        {
+            headers.Add(header);
         }
 
         foreach (var analyte in CompoundMap.Analytes)

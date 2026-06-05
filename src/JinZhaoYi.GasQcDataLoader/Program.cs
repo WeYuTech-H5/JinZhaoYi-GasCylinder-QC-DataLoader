@@ -236,6 +236,99 @@ static void MapDownloadEndpoints(WebApplication app)
         return Results.Ok(BuildPagedExcelPpbGroupResponse(parsedBatchDate, pagedOptions));
     });
 
+    app.MapGet("/api/query2/dynamic-area-fields", async (
+        bool? includeInactive,
+        IDapperRepository repository,
+        CancellationToken cancellationToken) =>
+    {
+        var fields = await repository.GetQuery2DynamicAreaFieldsAsync(includeInactive ?? true, cancellationToken);
+        return Results.Ok(fields.Select(ToDynamicAreaFieldDto));
+    });
+
+    app.MapPost("/api/query2/dynamic-area-fields", async (
+        Query2DynamicAreaFieldUpsertRequest request,
+        IDapperRepository repository,
+        IOptions<SchedulerOptions> options,
+        CancellationToken cancellationToken) =>
+    {
+        try
+        {
+            var field = await repository.UpsertQuery2DynamicAreaFieldAsync(request, options.Value.CreateUser, cancellationToken);
+            return Results.Ok(ToDynamicAreaFieldDto(field));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new { message = ex.Message });
+        }
+    });
+
+    app.MapPut("/api/query2/dynamic-area-fields/{fieldKey}", async (
+        string fieldKey,
+        Query2DynamicAreaFieldUpsertRequest request,
+        IDapperRepository repository,
+        IOptions<SchedulerOptions> options,
+        CancellationToken cancellationToken) =>
+    {
+        try
+        {
+            var updateRequest = new Query2DynamicAreaFieldUpsertRequest
+            {
+                ColumnName = fieldKey,
+                DisplayName = request.DisplayName,
+                SortOrder = request.SortOrder,
+                IsActive = request.IsActive
+            };
+            var field = await repository.UpsertQuery2DynamicAreaFieldAsync(updateRequest, options.Value.CreateUser, cancellationToken);
+            return Results.Ok(ToDynamicAreaFieldDto(field));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new { message = ex.Message });
+        }
+    });
+
+    app.MapDelete("/api/query2/dynamic-area-fields/{fieldKey}", async (
+        string fieldKey,
+        IDapperRepository repository,
+        IOptions<SchedulerOptions> options,
+        CancellationToken cancellationToken) =>
+    {
+        try
+        {
+            await repository.DisableQuery2DynamicAreaFieldAsync(fieldKey, options.Value.CreateUser, cancellationToken);
+            return Results.NoContent();
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new { message = ex.Message });
+        }
+    });
+
+    app.MapGet("/api/query2/dynamic-area-port-values", async (
+        IDapperRepository repository,
+        CancellationToken cancellationToken) =>
+    {
+        var values = await repository.GetQuery2DynamicAreaPortValuesAsync(cancellationToken);
+        return Results.Ok(values.Select(value => new Query2DynamicAreaPortValueDto(value.FieldKey, value.PortKey, value.AreaValue)));
+    });
+
+    app.MapPut("/api/query2/dynamic-area-port-values", async (
+        Query2DynamicAreaPortValueUpsertRequest request,
+        IDapperRepository repository,
+        IOptions<SchedulerOptions> options,
+        CancellationToken cancellationToken) =>
+    {
+        try
+        {
+            await repository.UpsertQuery2DynamicAreaPortValuesAsync(request.Values, options.Value.CreateUser, cancellationToken);
+            return Results.NoContent();
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new { message = ex.Message });
+        }
+    });
+
     app.MapPost("/api/exports/query2-excel/preview", async (
         Query2ExcelPreviewRequest request,
         IDapperRepository repository,
@@ -276,7 +369,9 @@ static void MapDownloadEndpoints(WebApplication app)
             return Results.NotFound(new { message = "No DB rows found for selected export data." });
         }
 
-        return Results.Ok(previewService.CreatePreview(startDate, endDate, rfId, stdRawIds, portRawIds, rows));
+        var dynamicAreaFields = await repository.GetQuery2DynamicAreaFieldsAsync(includeInactive: false, cancellationToken);
+        var dynamicAreaValues = await repository.GetQuery2DynamicAreaPortValuesAsync(cancellationToken);
+        return Results.Ok(previewService.CreatePreview(startDate, endDate, rfId, stdRawIds, portRawIds, rows, dynamicAreaFields, dynamicAreaValues));
     });
 
     app.MapPost("/api/exports/query2-excel/recalculate", (
@@ -336,7 +431,7 @@ static void MapDownloadEndpoints(WebApplication app)
         var startDateText = startDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
         var endDateText = endDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
         var exportDateText = startDate.Date == endDate.Date ? startDateText : $"{startDateText}-{endDateText}";
-        var content = await exporter.ExportAsync(exportDateText, rows, cancellationToken);
+        var content = await exporter.ExportAsync(exportDateText, rows, finalPreview.DynamicAreaFields, cancellationToken);
         if (content is null)
         {
             return Results.NotFound(new { message = "No Query2 Excel content was generated." });
@@ -376,6 +471,7 @@ static void MapDownloadEndpoints(WebApplication app)
         Query2ExcelExportRequest request,
         IDapperRepository repository,
         IQuery2SelectionExportBuilder exportBuilder,
+        IQuery2PreviewService previewService,
         IQuery2WorkbookExporter exporter,
         IOptions<SchedulerOptions> options,
         CancellationToken cancellationToken) =>
@@ -405,10 +501,15 @@ static void MapDownloadEndpoints(WebApplication app)
             return Results.NotFound(new { message = "No DB rows found for selected export data." });
         }
 
+        var dynamicAreaFields = await repository.GetQuery2DynamicAreaFieldsAsync(includeInactive: false, cancellationToken);
+        var dynamicAreaValues = await repository.GetQuery2DynamicAreaPortValuesAsync(cancellationToken);
+        var preview = previewService.CreatePreview(startDate, endDate, rfId, stdRawIds, portRawIds, rows, dynamicAreaFields, dynamicAreaValues);
+        rows = previewService.ToExportRows(preview);
+
         var startDateText = startDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
         var endDateText = endDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
         var exportDateText = startDate.Date == endDate.Date ? startDateText : $"{startDateText}-{endDateText}";
-        var content = await exporter.ExportAsync(exportDateText, rows, cancellationToken);
+        var content = await exporter.ExportAsync(exportDateText, rows, preview.DynamicAreaFields, cancellationToken);
         if (content is null)
         {
             return Results.NotFound(new { message = "No Query2 Excel content was generated." });
@@ -690,6 +791,14 @@ static bool TryParseBatchDate(string? value, out DateTime batchDate) =>
         CultureInfo.InvariantCulture,
         DateTimeStyles.None,
         out batchDate);
+
+static Query2DynamicAreaFieldDto ToDynamicAreaFieldDto(Query2DynamicAreaField field) =>
+    new(
+        field.FieldKey,
+        field.ColumnName,
+        field.DisplayName,
+        field.SortOrder,
+        field.IsActive);
 
 static bool TryValidateQuery2ExportRequest(
     Query2ExcelExportRequest request,

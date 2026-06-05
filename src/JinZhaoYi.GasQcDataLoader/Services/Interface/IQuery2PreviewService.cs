@@ -10,7 +10,9 @@ public interface IQuery2PreviewService
         string rfId,
         IReadOnlyList<string> stdRawIds,
         IReadOnlyList<string> portRawIds,
-        IReadOnlyList<Query2ExportRow> rows);
+        IReadOnlyList<Query2ExportRow> rows,
+        IReadOnlyList<Query2DynamicAreaField> dynamicAreaFields,
+        IReadOnlyList<Query2DynamicAreaPortValue> dynamicAreaPortValues);
 
     Query2PreviewState Recalculate(Query2PreviewState preview);
 

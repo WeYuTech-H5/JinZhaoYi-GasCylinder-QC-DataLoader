@@ -12,5 +12,6 @@ public interface IQuery2WorkbookExporter
     Task<byte[]?> ExportAsync(
         string batchDate,
         IReadOnlyList<Query2ExportRow> rows,
+        IReadOnlyList<Query2DynamicAreaField> dynamicAreaFields,
         CancellationToken cancellationToken);
 }

@@ -39,6 +39,8 @@ public sealed class Query2PreviewState
 
     public IReadOnlyList<Query2PreviewColumn> Columns { get; set; } = [];
 
+    public IReadOnlyList<Query2DynamicAreaField> DynamicAreaFields { get; set; } = [];
+
     public IReadOnlyList<Query2PreviewRow> Rows { get; set; } = [];
 }
 
@@ -55,6 +57,8 @@ public sealed class Query2PreviewColumn
     public string? ValueKind { get; set; }
 
     public string? Analyte { get; set; }
+
+    public bool IsDynamic { get; set; }
 
     public string DataType { get; set; } = "text";
 }

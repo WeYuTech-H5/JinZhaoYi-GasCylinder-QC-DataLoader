@@ -238,5 +238,9 @@ public sealed class SchedulerTableOptions
 
     public string Query2PreviewEditLog { get; init; } = "ZZ_NF_GAS_QC_QUERY2_PREVIEW_EDIT_LOG";
 
+    public string Query2DynamicAreaField { get; init; } = "ZZ_NF_GAS_QC_QUERY2_DYNAMIC_AREA_FIELD";
+
+    public string Query2DynamicAreaPortValue { get; init; } = "ZZ_NF_GAS_QC_QUERY2_DYNAMIC_AREA_PORT_VALUE";
+
     public string ImportErrorLog { get; init; } = "ZZ_NF_GAS_QC_ERROR_LOG";
 }

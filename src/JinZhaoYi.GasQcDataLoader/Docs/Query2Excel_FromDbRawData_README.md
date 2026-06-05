@@ -153,6 +153,31 @@ stdRawIds 至少 1 筆
 portRawIds 至少 1 筆
 ```
 
+### 4.1 Dynamic AREA 欄位
+
+使用者可透過維護表新增 Query2 專用的動態 AREA 欄位，例如 `Area_Apple`
+
+相關 API：
+
+```text
+GET    /api/query2/dynamic-area-fields
+POST   /api/query2/dynamic-area-fields
+PUT    /api/query2/dynamic-area-fields/{fieldKey}
+DELETE /api/query2/dynamic-area-fields/{fieldKey}
+GET    /api/query2/dynamic-area-port-values
+PUT    /api/query2/dynamic-area-port-values
+```
+
+資料流：
+
+- `Area_Apple` 會正規化為 `FieldKey = Apple`、`ColumnName = Area_Apple`
+- 欄位只插入 Query2 Excel 的 AREA 區最後，位於固定 AREA 欄位後、PPB 欄位前
+- 不建立對應的 dynamic `ppb_*` 或 `RT_*` 欄位
+- port value 以 Query2 `Port` 文字綁定，例如 `RF`、`STD`、`PORT 2`
+- 建立 preview 時只套用到 RF / STD raw / PORT raw 來源列
+- AVG / RPD / QC / PPB 計算列不直接套維護值，而是由重算公式產生
+- v1 不 ALTER 既有 QC raw / avg / ppb / history 實體 table，dynamic AREA 只影響 Query2 preview 和 Query2 Excel 匯出
+
 ## 5. 匯出時 DB 讀取規則
 
 ### 5.1 讀 RF
@@ -512,4 +537,3 @@ ppb(5904), 1,2,4-TCB -> denominator 使用下一組 STD AVG
 ppb(5905), Methylene Chloride -> denominator 使用指定 STD raw
 ppb(5905), 1,2,4-TCB -> denominator 使用下一組 STD AVG
 ```
-

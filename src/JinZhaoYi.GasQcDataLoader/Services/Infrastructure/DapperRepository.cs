@@ -1125,6 +1125,278 @@ public sealed class DapperRepository(
         }
     }
 
+    public async Task<IReadOnlyList<Query2DynamicAreaField>> GetQuery2DynamicAreaFieldsAsync(
+        bool includeInactive,
+        CancellationToken cancellationToken)
+    {
+        using var connection = sqlConnectionFactory.CreateConnection();
+        var sql = $"""
+            SELECT
+                FieldKey,
+                ColumnName,
+                DisplayName,
+                SortOrder,
+                IsActive
+            FROM dbo.{Quote(_tables.Query2DynamicAreaField)}
+            WHERE @IncludeInactive = 1 OR IsActive = 1
+            ORDER BY SortOrder, FieldKey
+            """;
+
+        var rows = await connection.QueryAsync<Query2DynamicAreaField>(
+            new CommandDefinition(sql, new { IncludeInactive = includeInactive }, cancellationToken: cancellationToken));
+        return rows.ToArray();
+    }
+
+    public async Task<Query2DynamicAreaField> UpsertQuery2DynamicAreaFieldAsync(
+        Query2DynamicAreaFieldUpsertRequest request,
+        string user,
+        CancellationToken cancellationToken)
+    {
+        var existingFields = await GetQuery2DynamicAreaFieldsAsync(includeInactive: true, cancellationToken);
+        var field = Query2DynamicAreaRules.NormalizeFieldRequest(request, existingFields);
+        var auditUser = string.IsNullOrWhiteSpace(user) ? "SYSTEM" : user.Trim();
+        var now = DateTime.Now;
+
+        await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
+        await connection.OpenAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+
+        try
+        {
+            var existsSql = $"""
+                SELECT COUNT(1)
+                FROM dbo.{Quote(_tables.Query2DynamicAreaField)}
+                WHERE FieldKey = @FieldKey
+                """;
+            var exists = await connection.ExecuteScalarAsync<int>(
+                new CommandDefinition(
+                    existsSql,
+                    new { field.FieldKey },
+                    transaction,
+                    cancellationToken: cancellationToken)) > 0;
+
+            if (exists)
+            {
+                var updateSql = $"""
+                    UPDATE dbo.{Quote(_tables.Query2DynamicAreaField)}
+                    SET
+                        ColumnName = @ColumnName,
+                        DisplayName = @DisplayName,
+                        SortOrder = @SortOrder,
+                        IsActive = @IsActive,
+                        EditUser = @AuditUser,
+                        EditTime = @Now
+                    WHERE FieldKey = @FieldKey
+                    """;
+                await connection.ExecuteAsync(
+                    new CommandDefinition(
+                        updateSql,
+                        new
+                        {
+                            field.FieldKey,
+                            field.ColumnName,
+                            field.DisplayName,
+                            field.SortOrder,
+                            field.IsActive,
+                            AuditUser = auditUser,
+                            Now = now
+                        },
+                        transaction,
+                        cancellationToken: cancellationToken));
+            }
+            else
+            {
+                var insertSql = $"""
+                    INSERT INTO dbo.{Quote(_tables.Query2DynamicAreaField)}
+                    (
+                        FieldKey,
+                        ColumnName,
+                        DisplayName,
+                        SortOrder,
+                        IsActive,
+                        CreateUser,
+                        CreateTime
+                    )
+                    VALUES
+                    (
+                        @FieldKey,
+                        @ColumnName,
+                        @DisplayName,
+                        @SortOrder,
+                        @IsActive,
+                        @AuditUser,
+                        @Now
+                    )
+                    """;
+                await connection.ExecuteAsync(
+                    new CommandDefinition(
+                        insertSql,
+                        new
+                        {
+                            field.FieldKey,
+                            field.ColumnName,
+                            field.DisplayName,
+                            field.SortOrder,
+                            field.IsActive,
+                            AuditUser = auditUser,
+                            Now = now
+                        },
+                        transaction,
+                        cancellationToken: cancellationToken));
+            }
+
+            await transaction.CommitAsync(cancellationToken);
+            return field;
+        }
+        catch
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            throw;
+        }
+    }
+
+    public async Task DisableQuery2DynamicAreaFieldAsync(
+        string fieldKey,
+        string user,
+        CancellationToken cancellationToken)
+    {
+        var normalizedFieldKey = Query2DynamicAreaRules.NormalizeFieldKey(fieldKey);
+        var auditUser = string.IsNullOrWhiteSpace(user) ? "SYSTEM" : user.Trim();
+        var sql = $"""
+            UPDATE dbo.{Quote(_tables.Query2DynamicAreaField)}
+            SET
+                IsActive = 0,
+                EditUser = @AuditUser,
+                EditTime = @Now
+            WHERE FieldKey = @FieldKey
+            """;
+
+        using var connection = sqlConnectionFactory.CreateConnection();
+        await connection.ExecuteAsync(
+            new CommandDefinition(
+                sql,
+                new { FieldKey = normalizedFieldKey, AuditUser = auditUser, Now = DateTime.Now },
+                cancellationToken: cancellationToken));
+    }
+
+    public async Task<IReadOnlyList<Query2DynamicAreaPortValue>> GetQuery2DynamicAreaPortValuesAsync(
+        CancellationToken cancellationToken)
+    {
+        using var connection = sqlConnectionFactory.CreateConnection();
+        var sql = $"""
+            SELECT
+                portValues.FieldKey,
+                portValues.PortKey,
+                portValues.AreaValue
+            FROM dbo.{Quote(_tables.Query2DynamicAreaPortValue)} portValues
+            INNER JOIN dbo.{Quote(_tables.Query2DynamicAreaField)} fields
+                ON fields.FieldKey = portValues.FieldKey
+            WHERE fields.IsActive = 1
+            ORDER BY fields.SortOrder, portValues.PortKey
+            """;
+
+        var rows = await connection.QueryAsync<Query2DynamicAreaPortValue>(
+            new CommandDefinition(sql, cancellationToken: cancellationToken));
+        return rows.ToArray();
+    }
+
+    public async Task UpsertQuery2DynamicAreaPortValuesAsync(
+        IReadOnlyCollection<Query2DynamicAreaPortValueDto> rows,
+        string user,
+        CancellationToken cancellationToken)
+    {
+        if (rows.Count == 0)
+        {
+            return;
+        }
+
+        var existingFields = await GetQuery2DynamicAreaFieldsAsync(includeInactive: true, cancellationToken);
+        var fieldKeys = existingFields
+            .Select(field => field.FieldKey)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var normalizedRows = rows
+            .Select(row => new Query2DynamicAreaPortValue(
+                Query2DynamicAreaRules.NormalizeFieldKey(row.FieldKey),
+                Query2DynamicAreaRules.NormalizePortKey(row.PortKey),
+                row.AreaValue))
+            .ToArray();
+
+        var missingField = normalizedRows.FirstOrDefault(row => !fieldKeys.Contains(row.FieldKey));
+        if (missingField is not null)
+        {
+            throw new InvalidOperationException($"Dynamic AREA field '{missingField.FieldKey}' does not exist.");
+        }
+
+        var auditUser = string.IsNullOrWhiteSpace(user) ? "SYSTEM" : user.Trim();
+        var now = DateTime.Now;
+
+        await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
+        await connection.OpenAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+
+        try
+        {
+            var sql = $"""
+                MERGE dbo.{Quote(_tables.Query2DynamicAreaPortValue)} AS target
+                USING
+                (
+                    SELECT
+                        @FieldKey AS FieldKey,
+                        @PortKey AS PortKey,
+                        @AreaValue AS AreaValue
+                ) AS source
+                    ON target.FieldKey = source.FieldKey
+                   AND target.PortKey = source.PortKey
+                WHEN MATCHED THEN
+                    UPDATE SET
+                        AreaValue = source.AreaValue,
+                        EditUser = @AuditUser,
+                        EditTime = @Now
+                WHEN NOT MATCHED THEN
+                    INSERT
+                    (
+                        FieldKey,
+                        PortKey,
+                        AreaValue,
+                        CreateUser,
+                        CreateTime
+                    )
+                    VALUES
+                    (
+                        source.FieldKey,
+                        source.PortKey,
+                        source.AreaValue,
+                        @AuditUser,
+                        @Now
+                    );
+                """;
+
+            foreach (var row in normalizedRows)
+            {
+                await connection.ExecuteAsync(
+                    new CommandDefinition(
+                        sql,
+                        new
+                        {
+                            row.FieldKey,
+                            row.PortKey,
+                            row.AreaValue,
+                            AuditUser = auditUser,
+                            Now = now
+                        },
+                        transaction,
+                        cancellationToken: cancellationToken));
+            }
+
+            await transaction.CommitAsync(cancellationToken);
+        }
+        catch
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            throw;
+        }
+    }
+
     public async Task<PagedResponse<ExportOption>> GetExcelPpbExportOptionsAsync(
         DateTime batchDate,
         int page,
