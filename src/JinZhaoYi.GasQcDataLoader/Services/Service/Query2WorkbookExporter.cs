@@ -15,8 +15,8 @@ public sealed class Query2WorkbookExporter(
     private const string Query2SheetName = "Query2";
     private const string TemplateSheetName = "_Query2Template";
     private const int BaseColumnCount = 16;
-    private static readonly XLColor PpbWithinRangeFill = XLColor.FromHtml("#E2EFDA");
-    private static readonly XLColor PpbOutOfRangeFill = XLColor.FromHtml("#FF6969");
+    private static readonly XLColor WithinRangeFill = XLColor.FromHtml("#E2EFDA");
+    private static readonly XLColor OutOfRangeFill = XLColor.FromHtml("#FF6969");
     private static int FirstAreaColumn => BaseColumnCount + 1;
     private static int FixedAreaCount => CompoundMap.Analytes.Count;
 
@@ -107,7 +107,7 @@ public sealed class Query2WorkbookExporter(
         using var workbook = BuildWorkbook(templatePath, exportRows, dynamicAreaFields);
         using var stream = new MemoryStream();
         workbook.SaveAs(stream);
-        return RemovePpbConditionalFormatting(stream.ToArray(), dynamicAreaFields.Count);
+        return RemoveResultConditionalFormatting(stream.ToArray(), dynamicAreaFields.Count);
     }
 
     private static void ExportWorkbook(
@@ -119,7 +119,7 @@ public sealed class Query2WorkbookExporter(
         using var workbook = BuildWorkbook(templatePath, exportRows, dynamicAreaFields);
         using var stream = new MemoryStream();
         workbook.SaveAs(stream);
-        File.WriteAllBytes(outputPath, RemovePpbConditionalFormatting(stream.ToArray(), dynamicAreaFields.Count));
+        File.WriteAllBytes(outputPath, RemoveResultConditionalFormatting(stream.ToArray(), dynamicAreaFields.Count));
     }
 
     private static XLWorkbook BuildWorkbook(
@@ -173,7 +173,7 @@ public sealed class Query2WorkbookExporter(
             targetRow++;
         }
 
-        ApplyPpbRangeFills(worksheet, Query2ColumnLayout.DataStartRowNumber, lastDataRowNumber, copiedCritRowNumbers, dynamicAreaFields.Count);
+        ApplyResultRangeFills(worksheet, Query2ColumnLayout.DataStartRowNumber, lastDataRowNumber, copiedCritRowNumbers, dynamicAreaFields.Count);
         templateWorksheet.Delete();
         return workbook;
     }
@@ -270,7 +270,7 @@ public sealed class Query2WorkbookExporter(
         }
     }
 
-    private static void ApplyPpbRangeFills(
+    private static void ApplyResultRangeFills(
         IXLWorksheet worksheet,
         int firstDataRowNumber,
         int lastDataRowNumber,
@@ -284,25 +284,32 @@ public sealed class Query2WorkbookExporter(
             return;
         }
 
-        var firstPpbColumn = ResolveFirstPpbColumn(dynamicAreaCount);
-        var lastPpbColumn = ResolveLastPpbColumn(dynamicAreaCount);
-        for (var rowNumber = firstDataRowNumber; rowNumber <= lastDataRowNumber; rowNumber++)
+        var columnBands = new[]
         {
-            for (var column = firstPpbColumn; column <= lastPpbColumn; column++)
-            {
-                var cell = worksheet.Cell(rowNumber, column);
-                if (!TryGetDecimal(cell, out var value) ||
-                    !TryGetDecimal(worksheet.Cell(maxRowNumber, column), out var max) ||
-                    !TryGetDecimal(worksheet.Cell(minRowNumber, column), out var min))
-                {
-                    continue;
-                }
+            (First: FirstAreaColumn, Last: ResolveLastAreaColumn()),
+            (First: ResolveFirstPpbColumn(dynamicAreaCount), Last: ResolveLastPpbColumn(dynamicAreaCount))
+        };
 
-                var lowerBound = Math.Min(min, max);
-                var upperBound = Math.Max(min, max);
-                cell.Style.Fill.BackgroundColor = value >= lowerBound && value <= upperBound
-                    ? PpbWithinRangeFill
-                    : PpbOutOfRangeFill;
+        foreach (var band in columnBands)
+        {
+            for (var rowNumber = firstDataRowNumber; rowNumber <= lastDataRowNumber; rowNumber++)
+            {
+                for (var column = band.First; column <= band.Last; column++)
+                {
+                    var cell = worksheet.Cell(rowNumber, column);
+                    if (!TryGetDecimal(cell, out var value) ||
+                        !TryGetDecimal(worksheet.Cell(maxRowNumber, column), out var max) ||
+                        !TryGetDecimal(worksheet.Cell(minRowNumber, column), out var min))
+                    {
+                        continue;
+                    }
+
+                    var lowerBound = Math.Min(min, max);
+                    var upperBound = Math.Max(min, max);
+                    cell.Style.Fill.BackgroundColor = value >= lowerBound && value <= upperBound
+                        ? WithinRangeFill
+                        : OutOfRangeFill;
+                }
             }
         }
     }
@@ -341,10 +348,13 @@ public sealed class Query2WorkbookExporter(
     private static int ResolveFirstPpbColumn(int dynamicAreaCount) =>
         BaseColumnCount + FixedAreaCount + dynamicAreaCount + 1;
 
+    private static int ResolveLastAreaColumn() =>
+        FirstAreaColumn + FixedAreaCount - 1;
+
     private static int ResolveLastPpbColumn(int dynamicAreaCount) =>
         ResolveFirstPpbColumn(dynamicAreaCount) + CompoundMap.Analytes.Count - 1;
 
-    private static byte[] RemovePpbConditionalFormatting(byte[] workbookContent, int dynamicAreaCount)
+    private static byte[] RemoveResultConditionalFormatting(byte[] workbookContent, int dynamicAreaCount)
     {
         using var stream = new MemoryStream();
         stream.Write(workbookContent, 0, workbookContent.Length);
@@ -361,8 +371,8 @@ public sealed class Query2WorkbookExporter(
             {
                 foreach (var conditionalFormatting in worksheetPart.Worksheet.Elements<ConditionalFormatting>().ToArray())
                 {
-                var sqref = conditionalFormatting.GetAttribute("sqref", string.Empty).Value ?? string.Empty;
-                    if (SequenceReferencesOverlapPpbColumns(sqref, dynamicAreaCount))
+                    var sqref = conditionalFormatting.GetAttribute("sqref", string.Empty).Value ?? string.Empty;
+                    if (SequenceReferencesOverlapResultColumns(sqref, dynamicAreaCount))
                     {
                         conditionalFormatting.Remove();
                     }
@@ -375,13 +385,15 @@ public sealed class Query2WorkbookExporter(
         return stream.ToArray();
     }
 
-    private static bool SequenceReferencesOverlapPpbColumns(string sequenceReferences, int dynamicAreaCount)
+    private static bool SequenceReferencesOverlapResultColumns(string sequenceReferences, int dynamicAreaCount)
     {
         var firstPpbColumn = ResolveFirstPpbColumn(dynamicAreaCount);
         var lastPpbColumn = ResolveLastPpbColumn(dynamicAreaCount);
         return sequenceReferences
             .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Any(reference => RangeOverlapsColumnBand(reference, firstPpbColumn, lastPpbColumn));
+            .Any(reference =>
+                RangeOverlapsColumnBand(reference, FirstAreaColumn, ResolveLastAreaColumn()) ||
+                RangeOverlapsColumnBand(reference, firstPpbColumn, lastPpbColumn));
     }
 
     private static bool RangeOverlapsColumnBand(string reference, int firstColumn, int lastColumn)
