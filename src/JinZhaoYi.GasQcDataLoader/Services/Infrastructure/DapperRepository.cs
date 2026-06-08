@@ -231,6 +231,7 @@ public sealed class DapperRepository(
             WHERE CAST(AnlzTime AS date) = @BatchDate
               AND AnlzTime IS NOT NULL
               AND ExcelPpbExportId IS NOT NULL
+              AND (@Search IS NULL OR SampleName LIKE @SearchPattern)
             GROUP BY ExcelExportKey, Port, LotNo, SampleName
         ) grouped
         """;
@@ -242,6 +243,7 @@ public sealed class DapperRepository(
             WHERE CAST(AnlzTime AS date) = @BatchDate
               AND AnlzTime IS NOT NULL
               AND ExcelPpbExportId IS NOT NULL
+              AND (@Search IS NULL OR SampleName LIKE @SearchPattern)
             GROUP BY ExcelExportKey, Port, LotNo, SampleName
             ORDER BY Port, LotNo, SampleName, ExcelExportKey
             OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY
@@ -1399,15 +1401,19 @@ public sealed class DapperRepository(
 
     public async Task<PagedResponse<ExportOption>> GetExcelPpbExportOptionsAsync(
         DateTime batchDate,
+        string? search,
         int page,
         int pageSize,
         CancellationToken cancellationToken)
     {
         var normalizedPage = Math.Max(1, page);
         var normalizedPageSize = Math.Clamp(pageSize, 1, 500);
+        var normalizedSearch = string.IsNullOrWhiteSpace(search) ? null : search.Trim();
         var parameters = new
         {
             BatchDate = batchDate.Date,
+            Search = normalizedSearch,
+            SearchPattern = normalizedSearch is null ? null : $"%{normalizedSearch}%",
             Offset = (normalizedPage - 1) * normalizedPageSize,
             PageSize = normalizedPageSize
         };

@@ -112,6 +112,7 @@ public interface IDapperRepository
 
     Task<PagedResponse<ExportOption>> GetExcelPpbExportOptionsAsync(
         DateTime batchDate,
+        string? search,
         int page,
         int pageSize,
         CancellationToken cancellationToken);

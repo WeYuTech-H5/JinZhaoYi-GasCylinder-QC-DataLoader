@@ -217,6 +217,7 @@ static void MapDownloadEndpoints(WebApplication app)
 
     app.MapGet("/api/excel-ppb-options", async (
         string batchDate,
+        string? search,
         int? page,
         int? pageSize,
         IDapperRepository repository,
@@ -232,7 +233,7 @@ static void MapDownloadEndpoints(WebApplication app)
             return Results.BadRequest(new { message = validationMessage });
         }
 
-        var pagedOptions = await repository.GetExcelPpbExportOptionsAsync(parsedBatchDate, normalizedPage, normalizedPageSize, cancellationToken);
+        var pagedOptions = await repository.GetExcelPpbExportOptionsAsync(parsedBatchDate, search, normalizedPage, normalizedPageSize, cancellationToken);
         return Results.Ok(BuildPagedExcelPpbGroupResponse(parsedBatchDate, pagedOptions));
     });
 

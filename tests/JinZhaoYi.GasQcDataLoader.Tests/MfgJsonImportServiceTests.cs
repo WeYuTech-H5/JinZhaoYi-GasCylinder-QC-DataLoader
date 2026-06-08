@@ -174,6 +174,7 @@ public sealed class MfgJsonImportServiceTests : IDisposable
 
         public Task<PagedResponse<ExportOption>> GetExcelPpbExportOptionsAsync(
             DateTime batchDate,
+            string? search,
             int page,
             int pageSize,
             CancellationToken cancellationToken) =>
