@@ -58,6 +58,8 @@ public sealed class QcDataRow
 
     public string? ExcelExportKey { get; set; }
 
+    public Guid? ExcelExportSessionId { get; set; }
+
     public DateTime? ExcelExportedAt { get; set; }
 
     public string? ExcelExportUser { get; set; }
@@ -114,6 +116,7 @@ public sealed class QcDataRow
             EditTime = EditTime,
             ExcelPpbExportId = ExcelPpbExportId,
             ExcelExportKey = ExcelExportKey,
+            ExcelExportSessionId = ExcelExportSessionId,
             ExcelExportedAt = ExcelExportedAt,
             ExcelExportUser = ExcelExportUser,
             ExcelStartDate = ExcelStartDate,

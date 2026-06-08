@@ -226,34 +226,37 @@ public sealed class DapperRepository(
     private const string ExcelPpbGroupCountSqlFormat = """
         SELECT COUNT(1)
         FROM (
-            SELECT ExcelExportKey, Port, LotNo, SampleName
+            SELECT ExcelExportSessionId, ExcelExportKey, Port, LotNo, SampleName
             FROM dbo.{0}
             WHERE CAST(AnlzTime AS date) >= @StartDate
               AND CAST(AnlzTime AS date) <= @EndDate
               AND AnlzTime IS NOT NULL
               AND ExcelPpbExportId IS NOT NULL
+              AND (@ExportSessionId IS NULL OR ExcelExportSessionId = @ExportSessionId)
               AND (@Search IS NULL OR SampleName LIKE @SearchPattern)
-            GROUP BY ExcelExportKey, Port, LotNo, SampleName
+            GROUP BY ExcelExportSessionId, ExcelExportKey, Port, LotNo, SampleName
         ) grouped
         """;
 
     private const string ExcelPpbPagedGroupsSqlFormat = """
         WITH PageGroups AS (
-            SELECT ExcelExportKey, Port, LotNo, SampleName
+            SELECT ExcelExportSessionId, ExcelExportKey, Port, LotNo, SampleName
             FROM dbo.{0}
             WHERE CAST(AnlzTime AS date) >= @StartDate
               AND CAST(AnlzTime AS date) <= @EndDate
               AND AnlzTime IS NOT NULL
               AND ExcelPpbExportId IS NOT NULL
+              AND (@ExportSessionId IS NULL OR ExcelExportSessionId = @ExportSessionId)
               AND (@Search IS NULL OR SampleName LIKE @SearchPattern)
-            GROUP BY ExcelExportKey, Port, LotNo, SampleName
-            ORDER BY Port, LotNo, SampleName, ExcelExportKey
+            GROUP BY ExcelExportSessionId, ExcelExportKey, Port, LotNo, SampleName
+            ORDER BY Port, LotNo, SampleName, ExcelExportKey, ExcelExportSessionId
             OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY
         )
         SELECT rows.*
         FROM dbo.{0} rows
         INNER JOIN PageGroups pageGroups
             ON rows.ExcelExportKey = pageGroups.ExcelExportKey
+           AND (rows.ExcelExportSessionId = pageGroups.ExcelExportSessionId OR rows.ExcelExportSessionId IS NULL AND pageGroups.ExcelExportSessionId IS NULL)
            AND ISNULL(rows.Port, '') = ISNULL(pageGroups.Port, '')
            AND ISNULL(rows.LotNo, '') = ISNULL(pageGroups.LotNo, '')
            AND ISNULL(rows.SampleName, '') = ISNULL(pageGroups.SampleName, '')
@@ -261,6 +264,7 @@ public sealed class DapperRepository(
           AND CAST(rows.AnlzTime AS date) <= @EndDate
           AND rows.AnlzTime IS NOT NULL
           AND rows.ExcelPpbExportId IS NOT NULL
+          AND (@ExportSessionId IS NULL OR rows.ExcelExportSessionId = @ExportSessionId)
         ORDER BY
             rows.Port,
             rows.LotNo,
@@ -302,7 +306,10 @@ public sealed class DapperRepository(
         ) parent
         WHERE CAST(rows.AnlzTime AS date) >= @StartDate
           AND CAST(rows.AnlzTime AS date) <= @EndDate
-          AND rows.ExcelPpbExportId IN @SelectedIds
+          AND (
+                rows.ExcelPpbExportId IN @SelectedIds
+             OR CONCAT(CONVERT(NVARCHAR(36), rows.ExcelExportSessionId), N':', rows.ExcelPpbExportId) IN @SelectedIds
+          )
         ORDER BY rows.AnlzTime, rows.SampleNo, rows.SourceFolderName, rows.SampleName
         """;
 
@@ -977,11 +984,20 @@ public sealed class DapperRepository(
             // ExcelExportKey now identifies calculation inputs. Source columns also match legacy date-based keys.
             var deleteSql = $"""
                 DELETE FROM dbo.{Quote(_tables.ExcelPpbHistory)}
-                WHERE ExcelExportKey = @ExcelExportKey
+                WHERE (
+                        @ExportSessionId IS NOT NULL
+                    AND ExcelExportSessionId = @ExportSessionId
+                   )
                    OR (
-                        UPPER(LTRIM(RTRIM(ISNULL(ExcelRfId, N'')))) = @NormalizedRfId
-                    AND ISNULL(ExcelStdRawIds, N'') = @NormalizedStdRawIds
-                    AND ISNULL(ExcelPortRawIds, N'') = @NormalizedPortRawIds
+                        @ExportSessionId IS NULL
+                    AND (
+                            ExcelExportKey = @ExcelExportKey
+                         OR (
+                                UPPER(LTRIM(RTRIM(ISNULL(ExcelRfId, N'')))) = @NormalizedRfId
+                            AND ISNULL(ExcelStdRawIds, N'') = @NormalizedStdRawIds
+                            AND ISNULL(ExcelPortRawIds, N'') = @NormalizedPortRawIds
+                            )
+                        )
                    )
                 """;
             await connection.ExecuteAsync(
@@ -989,6 +1005,7 @@ public sealed class DapperRepository(
                     deleteSql,
                     new
                     {
+                        ExportSessionId = request.ExportSessionId,
                         ExcelExportKey = excelExportKey,
                         NormalizedRfId = normalizedRfId,
                         NormalizedStdRawIds = normalizedStdRawIds,
@@ -1006,7 +1023,8 @@ public sealed class DapperRepository(
                     var historyRow = row.DeepClone();
                     historyRow.Sid = ++sid;
                     historyRow.ExcelExportKey = excelExportKey;
-                    historyRow.ExcelPpbExportId = ComputeExcelPpbExportId(excelExportKey, historyRow);
+                    historyRow.ExcelExportSessionId = request.ExportSessionId;
+                    historyRow.ExcelPpbExportId = ComputeExcelPpbExportId(excelExportKey, request.ExportSessionId, historyRow);
                     historyRow.ExcelExportedAt = request.ExportedAt;
                     historyRow.ExcelExportUser = request.ExportUser;
                     historyRow.ExcelStartDate = request.StartDate.Date;
@@ -1407,6 +1425,7 @@ public sealed class DapperRepository(
         DateTime startDate,
         DateTime endDate,
         string? search,
+        Guid? exportSessionId,
         int page,
         int pageSize,
         CancellationToken cancellationToken)
@@ -1420,6 +1439,7 @@ public sealed class DapperRepository(
             EndDate = endDate.Date,
             Search = normalizedSearch,
             SearchPattern = normalizedSearch is null ? null : $"%{normalizedSearch}%",
+            ExportSessionId = exportSessionId,
             Offset = (normalizedPage - 1) * normalizedPageSize,
             PageSize = normalizedPageSize
         };
@@ -1714,9 +1734,12 @@ public sealed class DapperRepository(
         var displayName = !string.IsNullOrWhiteSpace(row.SampleName)
             ? row.SampleName
             : row.ExcelPpbExportId ?? RawDataIdentity.FromRow(row).ToStableId();
+        var optionId = row.ExcelExportSessionId.HasValue && !string.IsNullOrWhiteSpace(row.ExcelPpbExportId)
+            ? $"{row.ExcelExportSessionId.Value:D}:{row.ExcelPpbExportId}"
+            : row.ExcelPpbExportId ?? string.Empty;
 
         return new ExportOption(
-            row.ExcelPpbExportId ?? string.Empty,
+            optionId,
             displayName,
             row.AnlzTime?.ToString("yyyyMMdd") ?? string.Empty,
             "ExcelPpb",
@@ -2203,6 +2226,7 @@ public sealed class DapperRepository(
         var values = BuildValues(row, includePpb: false, includeRt: false, includeIdRefs: true);
         values["ExcelPpbExportId"] = row.ExcelPpbExportId;
         values["ExcelExportKey"] = row.ExcelExportKey;
+        values["ExcelExportSessionId"] = row.ExcelExportSessionId;
         values["ExcelExportedAt"] = row.ExcelExportedAt;
         values["ExcelExportUser"] = row.ExcelExportUser;
         values["ExcelStartDate"] = row.ExcelStartDate;
@@ -2280,6 +2304,7 @@ public sealed class DapperRepository(
             EditTime = ReadDateTime(dictionary, "EDIT_TIME"),
             ExcelPpbExportId = ReadString(dictionary, "ExcelPpbExportId"),
             ExcelExportKey = ReadString(dictionary, "ExcelExportKey"),
+            ExcelExportSessionId = ReadGuid(dictionary, "ExcelExportSessionId"),
             ExcelExportedAt = ReadDateTime(dictionary, "ExcelExportedAt"),
             ExcelExportUser = ReadString(dictionary, "ExcelExportUser"),
             ExcelStartDate = ReadDateTime(dictionary, "ExcelStartDate"),
@@ -2329,11 +2354,12 @@ public sealed class DapperRepository(
         return ComputeHashHex(text);
     }
 
-    private static string ComputeExcelPpbExportId(string excelExportKey, QcDataRow row)
+    private static string ComputeExcelPpbExportId(string excelExportKey, Guid? exportSessionId, QcDataRow row)
     {
         var text = string.Join(
             '\u001F',
             excelExportKey,
+            exportSessionId?.ToString("D") ?? string.Empty,
             NormalizeKeyPart(row.Id),
             RawDataIdentity.FromRow(row).ToStableId());
 
@@ -2396,6 +2422,9 @@ public sealed class DapperRepository(
 
     private static DateTime? ReadDateTime(IDictionary<string, object?> row, string key) =>
         row.TryGetValue(key, out var value) && value is not null and not DBNull ? Convert.ToDateTime(value) : null;
+
+    private static Guid? ReadGuid(IDictionary<string, object?> row, string key) =>
+        row.TryGetValue(key, out var value) && value is not null and not DBNull ? Guid.Parse(Convert.ToString(value)!) : null;
 
     private static decimal? ReadDecimal(IDictionary<string, object?> row, string key) =>
         row.TryGetValue(key, out var value) && value is not null and not DBNull ? Convert.ToDecimal(value) : null;

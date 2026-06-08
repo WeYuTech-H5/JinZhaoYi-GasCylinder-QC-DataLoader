@@ -114,6 +114,7 @@ public interface IDapperRepository
         DateTime startDate,
         DateTime endDate,
         string? search,
+        Guid? exportSessionId,
         int page,
         int pageSize,
         CancellationToken cancellationToken);

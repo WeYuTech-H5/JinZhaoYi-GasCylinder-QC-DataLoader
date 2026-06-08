@@ -7,5 +7,6 @@ public sealed record ExcelPpbHistorySaveRequest(
     IReadOnlyList<string> StdRawIds,
     IReadOnlyList<string> PortRawIds,
     IReadOnlyList<QcDataRow> PpbRows,
+    Guid? ExportSessionId,
     DateTime ExportedAt,
     string? ExportUser);

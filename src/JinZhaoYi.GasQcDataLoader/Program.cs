@@ -220,6 +220,7 @@ static void MapDownloadEndpoints(WebApplication app)
         string? startDate,
         string? endDate,
         string? search,
+        string? exportSessionId,
         int? page,
         int? pageSize,
         IDapperRepository repository,
@@ -235,7 +236,18 @@ static void MapDownloadEndpoints(WebApplication app)
             return Results.BadRequest(new { message = validationMessage });
         }
 
-        var pagedOptions = await repository.GetExcelPpbExportOptionsAsync(parsedStartDate, parsedEndDate, search, normalizedPage, normalizedPageSize, cancellationToken);
+        Guid? parsedExportSessionId = null;
+        if (!string.IsNullOrWhiteSpace(exportSessionId))
+        {
+            if (!Guid.TryParse(exportSessionId.Trim(), out var exportSessionGuid))
+            {
+                return Results.BadRequest(new { message = "exportSessionId must be a valid GUID." });
+            }
+
+            parsedExportSessionId = exportSessionGuid;
+        }
+
+        var pagedOptions = await repository.GetExcelPpbExportOptionsAsync(parsedStartDate, parsedEndDate, search, parsedExportSessionId, normalizedPage, normalizedPageSize, cancellationToken);
         return Results.Ok(BuildPagedExcelPpbGroupResponse(parsedStartDate, parsedEndDate, pagedOptions));
     });
 
@@ -442,6 +454,7 @@ static void MapDownloadEndpoints(WebApplication app)
 
         var exportedAt = DateTime.Now;
         var exportUser = options.Value.CreateUser;
+        var exportSessionId = Guid.NewGuid();
         var historyRequest = new ExcelPpbHistorySaveRequest(
             startDate,
             endDate,
@@ -449,13 +462,13 @@ static void MapDownloadEndpoints(WebApplication app)
             stdRawIds,
             portRawIds,
             rows.Where(row => row.RowType == Query2ExportRowType.Ppb).Select(row => row.Row).ToArray(),
+            exportSessionId,
             exportedAt,
             exportUser);
 
         await repository.UpsertExcelPpbHistoryAsync(historyRequest, cancellationToken);
 
         var excelExportKey = DapperRepository.ComputeExcelExportKey(historyRequest);
-        var exportSessionId = Guid.NewGuid();
         var editLogs = previewService.BuildEditLogs(
             finalPreview,
             excelExportKey,
@@ -519,6 +532,7 @@ static void MapDownloadEndpoints(WebApplication app)
         }
 
         // 只有成功產生 Excel 的 PPB 才能進入 CSV 候選清單，避免使用者下載到沒有對應快照的資料。
+        var exportSessionId = Guid.NewGuid();
         await repository.UpsertExcelPpbHistoryAsync(
             new ExcelPpbHistorySaveRequest(
                 startDate,
@@ -527,6 +541,7 @@ static void MapDownloadEndpoints(WebApplication app)
                 stdRawIds,
                 portRawIds,
                 rows.Where(row => row.RowType == Query2ExportRowType.Ppb).Select(row => row.Row).ToArray(),
+                exportSessionId,
                 DateTime.Now,
                 options.Value.CreateUser),
             cancellationToken);
@@ -534,7 +549,7 @@ static void MapDownloadEndpoints(WebApplication app)
         return Results.File(
             content,
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            $"Cylinder_Qc[{exportDateText}].xlsx");
+            $"Cylinder_Qc[{exportDateText}][{exportSessionId:D}].xlsx");
     });
 
     app.MapPost("/api/exports/port-ppb-csv", async (

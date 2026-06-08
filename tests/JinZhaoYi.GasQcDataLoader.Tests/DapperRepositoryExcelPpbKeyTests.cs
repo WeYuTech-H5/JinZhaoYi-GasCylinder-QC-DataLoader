@@ -54,5 +54,5 @@ public sealed class DapperRepositoryExcelPpbKeyTests
         string rfId,
         IReadOnlyList<string> stdRawIds,
         IReadOnlyList<string> portRawIds) =>
-        new(startDate, endDate, rfId, stdRawIds, portRawIds, [], DateTime.Now, "test");
+        new(startDate, endDate, rfId, stdRawIds, portRawIds, [], null, DateTime.Now, "test");
 }

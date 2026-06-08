@@ -231,7 +231,22 @@ public sealed class RfExtractorImportServiceTests : IDisposable
         public Task InsertQuery2PreviewEditLogsAsync(IReadOnlyCollection<Query2PreviewEditLogRow> rows, CancellationToken cancellationToken) =>
             Task.CompletedTask;
 
-        public Task<PagedResponse<ExportOption>> GetExcelPpbExportOptionsAsync(DateTime startDate, DateTime endDate, string? search, int page, int pageSize, CancellationToken cancellationToken) =>
+        public Task<IReadOnlyList<Query2DynamicAreaField>> GetQuery2DynamicAreaFieldsAsync(bool includeInactive, CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<Query2DynamicAreaField>>([]);
+
+        public Task<Query2DynamicAreaField> UpsertQuery2DynamicAreaFieldAsync(Query2DynamicAreaFieldUpsertRequest request, string user, CancellationToken cancellationToken) =>
+            Task.FromResult(Query2DynamicAreaRules.NormalizeFieldRequest(request, []));
+
+        public Task DisableQuery2DynamicAreaFieldAsync(string fieldKey, string user, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+
+        public Task<IReadOnlyList<Query2DynamicAreaPortValue>> GetQuery2DynamicAreaPortValuesAsync(CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<Query2DynamicAreaPortValue>>([]);
+
+        public Task UpsertQuery2DynamicAreaPortValuesAsync(IReadOnlyCollection<Query2DynamicAreaPortValueDto> rows, string user, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+
+        public Task<PagedResponse<ExportOption>> GetExcelPpbExportOptionsAsync(DateTime startDate, DateTime endDate, string? search, Guid? exportSessionId, int page, int pageSize, CancellationToken cancellationToken) =>
             Task.FromResult(new PagedResponse<ExportOption>(page, pageSize, 0, []));
 
         public Task<IReadOnlyList<QcDataRow>> GetExcelPpbRowsForCsvAsync(DateTime startDate, DateTime endDate, IReadOnlyCollection<string> selectedIds, CancellationToken cancellationToken) =>

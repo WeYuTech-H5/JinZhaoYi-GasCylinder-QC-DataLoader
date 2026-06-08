@@ -73,7 +73,9 @@ public sealed class Query2PreviewServiceTests
             "RF1",
             ["STD1"],
             [],
-            [new Query2ExportRow(Query2ExportRowType.Raw, row)]);
+            [new Query2ExportRow(Query2ExportRowType.Raw, row)],
+            [],
+            []);
 
         preview.Rows.Single().CurrentValues[AcetoneAreaKey].Should().Be("0.0000189022765012299187138573");
     }
@@ -142,7 +144,9 @@ public sealed class Query2PreviewServiceTests
             "RF1",
             ["STD1", "STD2"],
             ["PORT1", "PORT2"],
-            rows);
+            rows,
+            [],
+            []);
     }
 
     private static Query2PreviewService CreateService() => new(new CalculationService());
