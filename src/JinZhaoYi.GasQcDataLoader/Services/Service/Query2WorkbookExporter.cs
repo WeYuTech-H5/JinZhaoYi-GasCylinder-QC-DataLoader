@@ -284,33 +284,52 @@ public sealed class Query2WorkbookExporter(
             return;
         }
 
-        var columnBands = new[]
+        for (var rowNumber = firstDataRowNumber; rowNumber <= lastDataRowNumber; rowNumber++)
         {
-            (First: FirstAreaColumn, Last: ResolveLastAreaColumn()),
-            (First: ResolveFirstPpbColumn(dynamicAreaCount), Last: ResolveLastPpbColumn(dynamicAreaCount))
-        };
-
-        foreach (var band in columnBands)
-        {
-            for (var rowNumber = firstDataRowNumber; rowNumber <= lastDataRowNumber; rowNumber++)
+            if (ClassifyRow(worksheet.Cell(rowNumber, 1).GetString()) == Query2ExportRowType.Ppb)
             {
-                for (var column = band.First; column <= band.Last; column++)
-                {
-                    var cell = worksheet.Cell(rowNumber, column);
-                    if (!TryGetDecimal(cell, out var value) ||
-                        !TryGetDecimal(worksheet.Cell(maxRowNumber, column), out var max) ||
-                        !TryGetDecimal(worksheet.Cell(minRowNumber, column), out var min))
-                    {
-                        continue;
-                    }
-
-                    var lowerBound = Math.Min(min, max);
-                    var upperBound = Math.Max(min, max);
-                    cell.Style.Fill.BackgroundColor = value >= lowerBound && value <= upperBound
-                        ? WithinRangeFill
-                        : OutOfRangeFill;
-                }
+                ApplyRangeFills(
+                    worksheet,
+                    rowNumber,
+                    FirstAreaColumn,
+                    ResolveLastAreaColumn(),
+                    maxRowNumber,
+                    minRowNumber);
             }
+
+            ApplyRangeFills(
+                worksheet,
+                rowNumber,
+                ResolveFirstPpbColumn(dynamicAreaCount),
+                ResolveLastPpbColumn(dynamicAreaCount),
+                maxRowNumber,
+                minRowNumber);
+        }
+    }
+
+    private static void ApplyRangeFills(
+        IXLWorksheet worksheet,
+        int rowNumber,
+        int firstColumn,
+        int lastColumn,
+        int maxRowNumber,
+        int minRowNumber)
+    {
+        for (var column = firstColumn; column <= lastColumn; column++)
+        {
+            var cell = worksheet.Cell(rowNumber, column);
+            if (!TryGetDecimal(cell, out var value) ||
+                !TryGetDecimal(worksheet.Cell(maxRowNumber, column), out var max) ||
+                !TryGetDecimal(worksheet.Cell(minRowNumber, column), out var min))
+            {
+                continue;
+            }
+
+            var lowerBound = Math.Min(min, max);
+            var upperBound = Math.Max(min, max);
+            cell.Style.Fill.BackgroundColor = value >= lowerBound && value <= upperBound
+                ? WithinRangeFill
+                : OutOfRangeFill;
         }
     }
 

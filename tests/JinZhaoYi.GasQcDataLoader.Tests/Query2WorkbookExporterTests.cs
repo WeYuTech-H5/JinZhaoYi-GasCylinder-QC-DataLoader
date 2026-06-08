@@ -255,6 +255,7 @@ public sealed class Query2WorkbookExporterTests : IDisposable
         writeSet.Query2Rows.Add(new Query2ExportRow(Query2ExportRowType.Raw, Row("20260603001", "PORT 2", "20260603001", acetone: 100m, ppbAcetone: 100m)));
         writeSet.Query2Rows.Add(new Query2ExportRow(Query2ExportRowType.Raw, Row("20260603002", "PORT 2", "20260603001", acetone: 120m, ppbAcetone: 120m)));
         writeSet.Query2Rows.Add(new Query2ExportRow(Query2ExportRowType.Ppb, Row("ppb(5900)", "PORT 2", "20260603001", acetone: 100m)));
+        writeSet.Query2Rows.Add(new Query2ExportRow(Query2ExportRowType.Ppb, Row("ppb(5901)", "PORT 2", "20260603001", acetone: 120m)));
 
         var outputPath = await exporter.ExportAsync(writeSet, [CreateCandidate(batchDirectory, "20260603")], CancellationToken.None);
 
@@ -264,19 +265,23 @@ public sealed class Query2WorkbookExporterTests : IDisposable
         worksheet.Cell(4, 17).GetValue<decimal>().Should().Be(100m);
         worksheet.Cell(5, 17).GetValue<decimal>().Should().Be(120m);
         worksheet.Cell(6, 17).GetValue<decimal>().Should().Be(100m);
-        worksheet.Cell(4, 17).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFE2EFDA));
-        worksheet.Cell(5, 17).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFFF6969));
+        worksheet.Cell(7, 17).GetValue<decimal>().Should().Be(120m);
+        worksheet.Cell(4, 17).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFF9DC3E6));
+        worksheet.Cell(5, 17).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFF9DC3E6));
         worksheet.Cell(6, 17).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFE2EFDA));
-        worksheet.Cell(7, 17).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFFFE699));
+        worksheet.Cell(7, 17).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFFF6969));
         worksheet.Cell(8, 17).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFFFE699));
+        worksheet.Cell(9, 17).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFFFE699));
         worksheet.Cell(4, 56).GetValue<decimal>().Should().Be(100m);
         worksheet.Cell(5, 56).GetValue<decimal>().Should().Be(120m);
         worksheet.Cell(6, 56).GetValue<decimal>().Should().Be(100m);
+        worksheet.Cell(7, 56).GetValue<decimal>().Should().Be(120m);
         worksheet.Cell(4, 56).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFE2EFDA));
         worksheet.Cell(5, 56).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFFF6969));
         worksheet.Cell(6, 56).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFE2EFDA));
-        worksheet.Cell(7, 56).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFFFE699));
+        worksheet.Cell(7, 56).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFFF6969));
         worksheet.Cell(8, 56).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFFFE699));
+        worksheet.Cell(9, 56).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFFFE699));
     }
 
     public void Dispose()
