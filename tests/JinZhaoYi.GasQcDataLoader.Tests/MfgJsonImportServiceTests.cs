@@ -173,7 +173,8 @@ public sealed class MfgJsonImportServiceTests : IDisposable
         public Task InsertQuery2PreviewEditLogsAsync(IReadOnlyCollection<Query2PreviewEditLogRow> rows, CancellationToken cancellationToken) => Task.CompletedTask;
 
         public Task<PagedResponse<ExportOption>> GetExcelPpbExportOptionsAsync(
-            DateTime batchDate,
+            DateTime startDate,
+            DateTime endDate,
             string? search,
             int page,
             int pageSize,
@@ -181,7 +182,8 @@ public sealed class MfgJsonImportServiceTests : IDisposable
             Task.FromResult(new PagedResponse<ExportOption>(page, pageSize, 0, []));
 
         public Task<IReadOnlyList<QcDataRow>> GetExcelPpbRowsForCsvAsync(
-            DateTime batchDate,
+            DateTime startDate,
+            DateTime endDate,
             IReadOnlyCollection<string> selectedIds,
             CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<QcDataRow>>([]);

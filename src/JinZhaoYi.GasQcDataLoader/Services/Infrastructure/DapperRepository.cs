@@ -228,7 +228,8 @@ public sealed class DapperRepository(
         FROM (
             SELECT ExcelExportKey, Port, LotNo, SampleName
             FROM dbo.{0}
-            WHERE CAST(AnlzTime AS date) = @BatchDate
+            WHERE CAST(AnlzTime AS date) >= @StartDate
+              AND CAST(AnlzTime AS date) <= @EndDate
               AND AnlzTime IS NOT NULL
               AND ExcelPpbExportId IS NOT NULL
               AND (@Search IS NULL OR SampleName LIKE @SearchPattern)
@@ -240,7 +241,8 @@ public sealed class DapperRepository(
         WITH PageGroups AS (
             SELECT ExcelExportKey, Port, LotNo, SampleName
             FROM dbo.{0}
-            WHERE CAST(AnlzTime AS date) = @BatchDate
+            WHERE CAST(AnlzTime AS date) >= @StartDate
+              AND CAST(AnlzTime AS date) <= @EndDate
               AND AnlzTime IS NOT NULL
               AND ExcelPpbExportId IS NOT NULL
               AND (@Search IS NULL OR SampleName LIKE @SearchPattern)
@@ -255,7 +257,8 @@ public sealed class DapperRepository(
            AND ISNULL(rows.Port, '') = ISNULL(pageGroups.Port, '')
            AND ISNULL(rows.LotNo, '') = ISNULL(pageGroups.LotNo, '')
            AND ISNULL(rows.SampleName, '') = ISNULL(pageGroups.SampleName, '')
-        WHERE CAST(rows.AnlzTime AS date) = @BatchDate
+        WHERE CAST(rows.AnlzTime AS date) >= @StartDate
+          AND CAST(rows.AnlzTime AS date) <= @EndDate
           AND rows.AnlzTime IS NOT NULL
           AND rows.ExcelPpbExportId IS NOT NULL
         ORDER BY
@@ -297,7 +300,8 @@ public sealed class DapperRepository(
                 parentLot.CREATE_TIME DESC,
                 parentLot.ID DESC
         ) parent
-        WHERE CAST(rows.AnlzTime AS date) = @BatchDate
+        WHERE CAST(rows.AnlzTime AS date) >= @StartDate
+          AND CAST(rows.AnlzTime AS date) <= @EndDate
           AND rows.ExcelPpbExportId IN @SelectedIds
         ORDER BY rows.AnlzTime, rows.SampleNo, rows.SourceFolderName, rows.SampleName
         """;
@@ -1400,7 +1404,8 @@ public sealed class DapperRepository(
     }
 
     public async Task<PagedResponse<ExportOption>> GetExcelPpbExportOptionsAsync(
-        DateTime batchDate,
+        DateTime startDate,
+        DateTime endDate,
         string? search,
         int page,
         int pageSize,
@@ -1411,7 +1416,8 @@ public sealed class DapperRepository(
         var normalizedSearch = string.IsNullOrWhiteSpace(search) ? null : search.Trim();
         var parameters = new
         {
-            BatchDate = batchDate.Date,
+            StartDate = startDate.Date,
+            EndDate = endDate.Date,
             Search = normalizedSearch,
             SearchPattern = normalizedSearch is null ? null : $"%{normalizedSearch}%",
             Offset = (normalizedPage - 1) * normalizedPageSize,
@@ -1441,7 +1447,8 @@ public sealed class DapperRepository(
     }
 
     public async Task<IReadOnlyList<QcDataRow>> GetExcelPpbRowsForCsvAsync(
-        DateTime batchDate,
+        DateTime startDate,
+        DateTime endDate,
         IReadOnlyCollection<string> selectedIds,
         CancellationToken cancellationToken)
     {
@@ -1462,7 +1469,7 @@ public sealed class DapperRepository(
         var rows = await connection.QueryAsync(
             new CommandDefinition(
                 sql,
-                new { BatchDate = batchDate.Date, SelectedIds = selectedSet.ToArray() },
+                new { StartDate = startDate.Date, EndDate = endDate.Date, SelectedIds = selectedSet.ToArray() },
                 cancellationToken: cancellationToken));
 
         return rows

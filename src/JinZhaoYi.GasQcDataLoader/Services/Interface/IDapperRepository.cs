@@ -111,14 +111,16 @@ public interface IDapperRepository
         CancellationToken cancellationToken);
 
     Task<PagedResponse<ExportOption>> GetExcelPpbExportOptionsAsync(
-        DateTime batchDate,
+        DateTime startDate,
+        DateTime endDate,
         string? search,
         int page,
         int pageSize,
         CancellationToken cancellationToken);
 
     Task<IReadOnlyList<QcDataRow>> GetExcelPpbRowsForCsvAsync(
-        DateTime batchDate,
+        DateTime startDate,
+        DateTime endDate,
         IReadOnlyCollection<string> selectedIds,
         CancellationToken cancellationToken);
 

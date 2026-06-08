@@ -216,16 +216,18 @@ static void MapDownloadEndpoints(WebApplication app)
     });
 
     app.MapGet("/api/excel-ppb-options", async (
-        string batchDate,
+        string? batchDate,
+        string? startDate,
+        string? endDate,
         string? search,
         int? page,
         int? pageSize,
         IDapperRepository repository,
         CancellationToken cancellationToken) =>
     {
-        if (!TryParseBatchDate(batchDate, out var parsedBatchDate))
+        if (!TryParseDateRange(startDate, endDate, batchDate, out var parsedStartDate, out var parsedEndDate, out var dateRangeMessage))
         {
-            return Results.BadRequest(new { message = "batchDate must use yyyyMMdd format." });
+            return Results.BadRequest(new { message = dateRangeMessage });
         }
 
         if (!TryValidatePagination(page, pageSize, out var normalizedPage, out var normalizedPageSize, out var validationMessage))
@@ -233,8 +235,8 @@ static void MapDownloadEndpoints(WebApplication app)
             return Results.BadRequest(new { message = validationMessage });
         }
 
-        var pagedOptions = await repository.GetExcelPpbExportOptionsAsync(parsedBatchDate, search, normalizedPage, normalizedPageSize, cancellationToken);
-        return Results.Ok(BuildPagedExcelPpbGroupResponse(parsedBatchDate, pagedOptions));
+        var pagedOptions = await repository.GetExcelPpbExportOptionsAsync(parsedStartDate, parsedEndDate, search, normalizedPage, normalizedPageSize, cancellationToken);
+        return Results.Ok(BuildPagedExcelPpbGroupResponse(parsedStartDate, parsedEndDate, pagedOptions));
     });
 
     app.MapGet("/api/query2/dynamic-area-fields", async (
@@ -566,19 +568,19 @@ static void MapDownloadEndpoints(WebApplication app)
         IPortPpbCsvExporter exporter,
         CancellationToken cancellationToken) =>
     {
-        if (!TryValidateExportRequest(request, out var batchDate, out var selectedIds, out var validationMessage))
+        if (!TryValidateExcelPpbExportRequest(request.BatchDate, request.StartDate, request.EndDate, request.SelectedIds, out var startDate, out var endDate, out var selectedIds, out var validationMessage))
         {
             return Results.BadRequest(new { message = validationMessage });
         }
 
-        var rows = await repository.GetExcelPpbRowsForCsvAsync(batchDate, selectedIds, cancellationToken);
+        var rows = await repository.GetExcelPpbRowsForCsvAsync(startDate, endDate, selectedIds, cancellationToken);
         if (rows.Count == 0)
         {
             return Results.NotFound(new { message = "No Excel PPB history rows found for selected export data." });
         }
 
-        var batchDateText = batchDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
-        var download = exporter.ExportForDownload(rows, batchDateText);
+        var dateRangeText = FormatDateRange(startDate, endDate);
+        var download = exporter.ExportForDownload(rows, dateRangeText);
         return Results.File(
             download.Content,
             download.ContentType,
@@ -591,21 +593,21 @@ static void MapDownloadEndpoints(WebApplication app)
         ICoaPackageExporter exporter,
         CancellationToken cancellationToken) =>
     {
-        if (!TryValidateCoaLargeExportRequest(request, out var batchDate, out var selectedIds, out var templateType, out var validationMessage))
+        if (!TryValidateCoaLargeExportRequest(request, out var startDate, out var endDate, out var selectedIds, out var templateType, out var validationMessage))
         {
             return Results.BadRequest(new { message = validationMessage });
         }
 
-        var rows = await repository.GetExcelPpbRowsForCsvAsync(batchDate, selectedIds, cancellationToken);
+        var rows = await repository.GetExcelPpbRowsForCsvAsync(startDate, endDate, selectedIds, cancellationToken);
         if (rows.Count == 0)
         {
             return Results.NotFound(new { message = "No Excel PPB history rows found for selected COA export data." });
         }
 
-        var batchDateText = batchDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
+        var dateRangeText = FormatDateRange(startDate, endDate);
         try
         {
-            var download = await exporter.ExportLargePackageForDownloadAsync(rows, batchDateText, templateType, cancellationToken);
+            var download = await exporter.ExportLargePackageForDownloadAsync(rows, dateRangeText, templateType, cancellationToken);
             return Results.File(
                 download.Content,
                 download.ContentType,
@@ -628,21 +630,21 @@ static void MapDownloadEndpoints(WebApplication app)
         IOptions<SchedulerOptions> options,
         CancellationToken cancellationToken) =>
     {
-        if (!TryValidateCoaSmallExportRequest(request, options.Value.CoaExport.DefaultSmallCardsPerPage, out var batchDate, out var selectedIds, out var cardsPerPage, out var validationMessage))
+        if (!TryValidateCoaSmallExportRequest(request, options.Value.CoaExport.DefaultSmallCardsPerPage, out var startDate, out var endDate, out var selectedIds, out var cardsPerPage, out var validationMessage))
         {
             return Results.BadRequest(new { message = validationMessage });
         }
 
-        var rows = await repository.GetExcelPpbRowsForCsvAsync(batchDate, selectedIds, cancellationToken);
+        var rows = await repository.GetExcelPpbRowsForCsvAsync(startDate, endDate, selectedIds, cancellationToken);
         if (rows.Count == 0)
         {
             return Results.NotFound(new { message = "No Excel PPB history rows found for selected COA export data." });
         }
 
-        var batchDateText = batchDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
+        var dateRangeText = FormatDateRange(startDate, endDate);
         try
         {
-            var download = await exporter.ExportSmallPackageForDownloadAsync(rows, batchDateText, cardsPerPage, cancellationToken);
+            var download = await exporter.ExportSmallPackageForDownloadAsync(rows, dateRangeText, cardsPerPage, cancellationToken);
             return Results.File(
                 download.Content,
                 download.ContentType,
@@ -730,13 +732,14 @@ static bool TryValidateExportRequestParts(
 
 static bool TryValidateCoaLargeExportRequest(
     CoaLargeExportRequest request,
-    out DateTime batchDate,
+    out DateTime startDate,
+    out DateTime endDate,
     out string[] selectedIds,
     out CoaLargeTemplateType templateType,
     out string message)
 {
     templateType = CoaLargeTemplateType.Standard;
-    if (!TryValidateExportRequestParts(request.BatchDate, request.SelectedIds, out batchDate, out selectedIds, out message))
+    if (!TryValidateExcelPpbExportRequest(request.BatchDate, request.StartDate, request.EndDate, request.SelectedIds, out startDate, out endDate, out selectedIds, out message))
     {
         return false;
     }
@@ -764,13 +767,14 @@ static bool TryValidateCoaLargeExportRequest(
 static bool TryValidateCoaSmallExportRequest(
     CoaSmallExportRequest request,
     int defaultCardsPerPage,
-    out DateTime batchDate,
+    out DateTime startDate,
+    out DateTime endDate,
     out string[] selectedIds,
     out int cardsPerPage,
     out string message)
 {
     cardsPerPage = request.CardsPerPage ?? defaultCardsPerPage;
-    if (!TryValidateExportRequestParts(request.BatchDate, request.SelectedIds, out batchDate, out selectedIds, out message))
+    if (!TryValidateExcelPpbExportRequest(request.BatchDate, request.StartDate, request.EndDate, request.SelectedIds, out startDate, out endDate, out selectedIds, out message))
     {
         return false;
     }
@@ -785,6 +789,36 @@ static bool TryValidateCoaSmallExportRequest(
     return true;
 }
 
+static bool TryValidateExcelPpbExportRequest(
+    string? batchDateText,
+    string? startDateText,
+    string? endDateText,
+    IReadOnlyList<string> requestSelectedIds,
+    out DateTime startDate,
+    out DateTime endDate,
+    out string[] selectedIds,
+    out string message)
+{
+    selectedIds = requestSelectedIds
+        .Where(id => !string.IsNullOrWhiteSpace(id))
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .ToArray();
+
+    if (!TryParseDateRange(startDateText, endDateText, batchDateText, out startDate, out endDate, out message))
+    {
+        return false;
+    }
+
+    if (selectedIds.Length == 0)
+    {
+        message = "selectedIds must contain at least one export option id.";
+        return false;
+    }
+
+    message = string.Empty;
+    return true;
+}
+
 static bool TryParseBatchDate(string? value, out DateTime batchDate) =>
     DateTime.TryParseExact(
         value,
@@ -792,6 +826,53 @@ static bool TryParseBatchDate(string? value, out DateTime batchDate) =>
         CultureInfo.InvariantCulture,
         DateTimeStyles.None,
         out batchDate);
+
+static bool TryParseDateRange(
+    string? startDateText,
+    string? endDateText,
+    string? fallbackBatchDateText,
+    out DateTime startDate,
+    out DateTime endDate,
+    out string message)
+{
+    if (string.IsNullOrWhiteSpace(startDateText) && string.IsNullOrWhiteSpace(endDateText))
+    {
+        if (!TryParseBatchDate(fallbackBatchDateText, out startDate))
+        {
+            endDate = default;
+            message = "batchDate or startDate/endDate must use yyyyMMdd format.";
+            return false;
+        }
+
+        endDate = startDate;
+        message = string.Empty;
+        return true;
+    }
+
+    var hasStartDate = TryParseBatchDate(startDateText, out startDate);
+    var hasEndDate = TryParseBatchDate(endDateText, out endDate);
+    if (!hasStartDate || !hasEndDate)
+    {
+        message = "startDate and endDate must use yyyyMMdd format.";
+        return false;
+    }
+
+    if (endDate.Date < startDate.Date)
+    {
+        message = "endDate must be greater than or equal to startDate.";
+        return false;
+    }
+
+    message = string.Empty;
+    return true;
+}
+
+static string FormatDateRange(DateTime startDate, DateTime endDate)
+{
+    var startDateText = startDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
+    var endDateText = endDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
+    return startDate.Date == endDate.Date ? startDateText : $"{startDateText}-{endDateText}";
+}
 
 static Query2DynamicAreaFieldDto ToDynamicAreaFieldDto(Query2DynamicAreaField field) =>
     new(
@@ -1023,15 +1104,15 @@ static PagedExportGroupResponse BuildPagedPortPpbGroupResponse(
 }
 
 static PagedExportGroupResponse BuildPagedExcelPpbGroupResponse(
-    DateTime batchDate,
+    DateTime startDate,
+    DateTime endDate,
     PagedResponse<ExportOption> options)
 {
     var groups = BuildExcelPpbGroups(options.Items);
 
-    var batchDateText = batchDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
     return new PagedExportGroupResponse(
-        batchDateText,
-        batchDateText,
+        startDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture),
+        endDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture),
         [],
         groups,
         options.Page,
