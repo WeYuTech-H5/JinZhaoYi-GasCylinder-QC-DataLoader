@@ -20,7 +20,7 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
     private const string Large1LSheetName = "COA(1 L)";
     private const string LargeYadongSheetName = "COA(亞東)";
     private const string SmallBlankSheetName = "Report(空白)";
-    private const string SmallCardPrintArea = "$B$2:$AA$64";
+    private const string SmallCardPrintArea = "$B$2:$AA$66";
 
     private static readonly LargeContainerFields LargeHalfLiterFields = new(
         ProductName: "STD Gas PC for Semiconductor",
@@ -58,15 +58,15 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
 
     private static readonly IReadOnlyList<SmallCardLayout> SmallCardLayouts =
     [
-        new("F6", "F8", "B19", "F19", "B20", "B2:I20"),
-        new("O6", "O8", "K19", "O19", "K20", "K2:R20"),
-        new("X6", "X8", "T19", "X19", "T20", "T2:AA20"),
-        new("F28", "F30", "B41", "F41", "B42", "B24:I42"),
-        new("O28", "O30", "K41", "O41", "K42", "K24:R42"),
-        new("X28", "X30", "T41", "X41", "T42", "T24:AA42"),
-        new("F50", "F52", "B63", "F63", "B64", "B46:I64"),
-        new("O50", "O52", "K63", "O63", "K64", "K46:R64"),
-        new("X50", "X52", "T63", "X63", "T64", "T46:AA64")
+        new("F6", "F8", "B19", "F19", "B20", "B2:I22"),
+        new("O6", "O8", "K19", "O19", "K20", "K2:R22"),
+        new("X6", "X8", "T19", "X19", "T20", "T2:AA22"),
+        new("F28", "F30", "B41", "F41", "B42", "B24:I44"),
+        new("O28", "O30", "K41", "O41", "K42", "K24:R44"),
+        new("X28", "X30", "T41", "X41", "T42", "T24:AA44"),
+        new("F50", "F52", "B63", "F63", "B64", "B46:I66"),
+        new("O50", "O52", "K63", "O63", "K64", "K46:R66"),
+        new("X50", "X52", "T63", "X63", "T64", "T46:AA66")
     ];
 
     private readonly SchedulerOptions _options = options.Value;

@@ -234,8 +234,8 @@ public sealed class CoaWorkbookExporterTests
         var download = exporter.ExportSmallForDownload(rows, "20260521", 9);
         var sheetNames = GetSheetNames(download);
 
-        GetPrintArea(download, sheetNames[0]).Should().Be($"'{sheetNames[0]}'!$B$2:$AA$64");
-        GetPrintArea(download, sheetNames[1]).Should().Be($"'{sheetNames[1]}'!$B$2:$AA$64");
+        GetPrintArea(download, sheetNames[0]).Should().Be($"'{sheetNames[0]}'!$B$2:$AA$66");
+        GetPrintArea(download, sheetNames[1]).Should().Be($"'{sheetNames[1]}'!$B$2:$AA$66");
         GetSmallSheetPageSetup(download, sheetNames[0]).Should().Be((true, 9U, 1U, 1U));
     }
 
@@ -271,6 +271,24 @@ public sealed class CoaWorkbookExporterTests
         HasDrawingInRange(download, "COA小卡1", "K2:R20").Should().BeFalse();
         HasDrawingInRange(download, "COA小卡1", "K24:R42").Should().BeFalse();
         HasDrawingInRange(download, "COA小卡1", "T46:AA64").Should().BeFalse();
+    }
+
+    [Fact]
+    public void ExportSmallForDownload_keeps_only_used_card_signature_rows()
+    {
+        var exporter = CreateExporter();
+
+        var download = exporter.ExportSmallForDownload([CreateRow("STD-N004", "1L_Cylinder")], "20260521", 9);
+
+        using var workbook = Open(download);
+        var sheet = workbook.Worksheet(GetSheetNames(download)[0]);
+        sheet.Cell("B22").GetString().Should().NotBeEmpty();
+        sheet.Cell("F22").GetString().Should().NotBeEmpty();
+
+        foreach (var cellReference in new[] { "K22", "O22", "T22", "X22", "B44", "F44", "K44", "O44", "T44", "X44", "B66", "F66", "K66", "O66", "T66", "X66" })
+        {
+            sheet.Cell(cellReference).GetString().Should().BeEmpty();
+        }
     }
 
     [Fact]
