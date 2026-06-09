@@ -804,6 +804,19 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
     {
         foreach (var relationship in sourcePart.Parts)
         {
+            if (relationship.OpenXmlPart is DrawingsPart sourceDrawingsPart)
+            {
+                var targetDrawingsPart = targetPart.AddNewPart<DrawingsPart>(relationship.RelationshipId);
+                using (var sourceStream = sourceDrawingsPart.GetStream(FileMode.Open, FileAccess.Read))
+                using (var targetStream = targetDrawingsPart.GetStream(FileMode.Create, FileAccess.Write))
+                {
+                    sourceStream.CopyTo(targetStream);
+                }
+
+                CopyPartRelationships(sourceDrawingsPart, targetDrawingsPart);
+                continue;
+            }
+
             targetPart.AddPart(relationship.OpenXmlPart, relationship.RelationshipId);
         }
 

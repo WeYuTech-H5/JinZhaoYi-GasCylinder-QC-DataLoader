@@ -317,6 +317,24 @@ public sealed class CoaWorkbookExporterTests
         HasDrawingInRange(download, "COA小卡2", "K2:R20").Should().BeFalse();
     }
 
+    [Fact]
+    public void ExportSmallForDownload_keeps_first_page_drawings_when_tenth_card_creates_second_sheet()
+    {
+        var exporter = CreateExporter();
+        var rows = Enumerable.Range(1, 10)
+            .Select(index => CreateRow($"STD-N{index:000}", "1L_Cylinder", index))
+            .ToArray();
+
+        var download = exporter.ExportSmallForDownload(rows, "20260521", 9);
+        var sheetNames = GetSheetNames(download);
+
+        HasDrawingInRange(download, sheetNames[0], "B2:I22").Should().BeTrue();
+        HasDrawingInRange(download, sheetNames[0], "K2:R22").Should().BeTrue();
+        HasDrawingInRange(download, sheetNames[0], "T46:AA66").Should().BeTrue();
+        HasDrawingInRange(download, sheetNames[1], "B2:I22").Should().BeTrue();
+        HasDrawingInRange(download, sheetNames[1], "K2:R22").Should().BeFalse();
+    }
+
     private static CoaWorkbookExporter CreateExporter(string? largeTemplatePath = null, string? largeHeaderImagePath = null) =>
         new(Options.Create(new SchedulerOptions
         {
