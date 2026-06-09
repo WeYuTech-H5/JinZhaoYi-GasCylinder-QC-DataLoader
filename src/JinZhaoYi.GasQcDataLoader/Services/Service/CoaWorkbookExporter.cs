@@ -20,6 +20,7 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
     private const string Large1LSheetName = "COA(1 L)";
     private const string LargeYadongSheetName = "COA(亞東)";
     private const string SmallBlankSheetName = "Report(空白)";
+    private const string SmallCardPrintArea = "$B$2:$AA$64";
 
     private static readonly LargeContainerFields LargeHalfLiterFields = new(
         ProductName: "STD Gas PC for Semiconductor",
@@ -194,9 +195,12 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
             {
                 WriteSmallCard(worksheetPart, SmallCardLayouts[cardIndex], page.Rows[cardIndex]);
             }
+
+            ApplySmallCardPrintLayout(worksheetPart);
         }
 
         DeleteOpenXmlSheets(workbookPart, "Report(範本)", "欄位註解");
+        SetSmallCardPrintAreas(workbookPart);
         DeleteCalculationChain(workbookPart);
         ResetWorkbookView(workbookPart);
         workbookPart.Workbook.Save();
@@ -578,6 +582,97 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
         }
 
         return pages;
+    }
+
+    private static void ApplySmallCardPrintLayout(WorksheetPart worksheetPart)
+    {
+        var worksheet = worksheetPart.Worksheet;
+
+        var sheetProperties = worksheet.GetFirstChild<SheetProperties>();
+        if (sheetProperties is null)
+        {
+            sheetProperties = new SheetProperties();
+            worksheet.InsertAt(sheetProperties, 0);
+        }
+
+        sheetProperties.PageSetupProperties ??= new PageSetupProperties();
+        sheetProperties.PageSetupProperties.FitToPage = true;
+
+        var pageMargins = worksheet.GetFirstChild<PageMargins>();
+        if (pageMargins is null)
+        {
+            pageMargins = new PageMargins();
+            worksheet.Append(pageMargins);
+        }
+
+        pageMargins.Left = 0.25D;
+        pageMargins.Right = 0.25D;
+        pageMargins.Top = 0.25D;
+        pageMargins.Bottom = 0.25D;
+        pageMargins.Header = 0D;
+        pageMargins.Footer = 0D;
+
+        var pageSetup = worksheet.GetFirstChild<PageSetup>();
+        if (pageSetup is null)
+        {
+            pageSetup = new PageSetup();
+            worksheet.Append(pageSetup);
+        }
+
+        pageSetup.PaperSize = 9U; // A4
+        pageSetup.Orientation = OrientationValues.Portrait;
+        pageSetup.FitToWidth = 1U;
+        pageSetup.FitToHeight = 1U;
+        pageSetup.Scale = null;
+
+        worksheet.Save();
+    }
+
+    private static void SetSmallCardPrintAreas(WorkbookPart workbookPart)
+    {
+        if (workbookPart.Workbook.DefinedNames is not null)
+        {
+            foreach (var existing in workbookPart.Workbook.DefinedNames
+                .Elements<DefinedName>()
+                .Where(name => name.Name?.Value == "_xlnm.Print_Area")
+                .ToArray())
+            {
+                existing.Remove();
+            }
+        }
+
+        var sheets = workbookPart.Workbook.Sheets?.Elements<Sheet>().ToArray() ?? [];
+        for (var index = 0; index < sheets.Length; index++)
+        {
+            var sheetName = sheets[index].Name?.Value;
+            if (!string.IsNullOrWhiteSpace(sheetName))
+            {
+                SetPrintArea(workbookPart, sheetName, (uint)index, SmallCardPrintArea);
+            }
+        }
+    }
+
+    private static void SetPrintArea(WorkbookPart workbookPart, string sheetName, uint localSheetIdValue, string areaReference)
+    {
+        workbookPart.Workbook.DefinedNames ??= new DefinedNames();
+        var definedNames = workbookPart.Workbook.DefinedNames;
+        var localSheetId = (UInt32Value)localSheetIdValue;
+
+        foreach (var existing in definedNames
+            .Elements<DefinedName>()
+            .Where(name => name.Name?.Value == "_xlnm.Print_Area" && name.LocalSheetId?.Value == localSheetId.Value)
+            .ToArray())
+        {
+            existing.Remove();
+        }
+
+        var escapedSheetName = sheetName.Replace("'", "''", StringComparison.Ordinal);
+        definedNames.Append(new DefinedName
+        {
+            Name = "_xlnm.Print_Area",
+            LocalSheetId = localSheetId,
+            Text = $"'{escapedSheetName}'!{areaReference}"
+        });
     }
 
     private static IReadOnlyList<QcDataRow> OrderRows(IReadOnlyCollection<QcDataRow> rows) =>

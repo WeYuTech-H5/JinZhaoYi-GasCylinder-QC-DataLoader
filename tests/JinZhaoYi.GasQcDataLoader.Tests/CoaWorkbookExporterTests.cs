@@ -224,6 +224,22 @@ public sealed class CoaWorkbookExporterTests
     }
 
     [Fact]
+    public void ExportSmallForDownload_sets_each_sheet_to_nine_card_a4_print_area()
+    {
+        var exporter = CreateExporter();
+        var rows = Enumerable.Range(1, 10)
+            .Select(index => CreateRow($"STD-N{index:000}", "1L_Cylinder", index))
+            .ToArray();
+
+        var download = exporter.ExportSmallForDownload(rows, "20260521", 9);
+        var sheetNames = GetSheetNames(download);
+
+        GetPrintArea(download, sheetNames[0]).Should().Be($"'{sheetNames[0]}'!$B$2:$AA$64");
+        GetPrintArea(download, sheetNames[1]).Should().Be($"'{sheetNames[1]}'!$B$2:$AA$64");
+        GetSmallSheetPageSetup(download, sheetNames[0]).Should().Be((true, 9U, 1U, 1U));
+    }
+
+    [Fact]
     public void ExportSmallForDownload_rejects_invalid_cards_per_page()
     {
         var exporter = CreateExporter();
@@ -307,6 +323,53 @@ public sealed class CoaWorkbookExporterTests
 
     private static XLWorkbook Open(CoaWorkbookDownload download) =>
         new(new MemoryStream(download.Content));
+
+    private static string[] GetSheetNames(CoaWorkbookDownload download)
+    {
+        using var stream = new MemoryStream(download.Content);
+        using var document = SpreadsheetDocument.Open(stream, false);
+        return document.WorkbookPart!.Workbook.Sheets!.Elements<Sheet>()
+            .Select(sheet => sheet.Name?.Value ?? string.Empty)
+            .ToArray();
+    }
+
+    private static string? GetPrintArea(CoaWorkbookDownload download, string sheetName)
+    {
+        using var stream = new MemoryStream(download.Content);
+        using var document = SpreadsheetDocument.Open(stream, false);
+        var workbookPart = document.WorkbookPart!;
+        var sheets = workbookPart.Workbook.Sheets!.Elements<Sheet>().ToArray();
+        var sheetIndex = Array.FindIndex(
+            sheets,
+            sheet => string.Equals(sheet.Name?.Value, sheetName, StringComparison.OrdinalIgnoreCase));
+        sheetIndex.Should().BeGreaterThanOrEqualTo(0);
+
+        return workbookPart.Workbook.DefinedNames
+            ?.Elements<DefinedName>()
+            .FirstOrDefault(name =>
+                name.Name?.Value == "_xlnm.Print_Area" &&
+                name.LocalSheetId?.Value == (uint)sheetIndex)
+            ?.Text;
+    }
+
+    private static (bool FitToPage, uint? PaperSize, uint? FitToWidth, uint? FitToHeight) GetSmallSheetPageSetup(
+        CoaWorkbookDownload download,
+        string sheetName)
+    {
+        using var stream = new MemoryStream(download.Content);
+        using var document = SpreadsheetDocument.Open(stream, false);
+        var workbookPart = document.WorkbookPart!;
+        var sheet = workbookPart.Workbook.Sheets!.Elements<Sheet>()
+            .First(item => string.Equals(item.Name?.Value, sheetName, StringComparison.OrdinalIgnoreCase));
+        var worksheetPart = (WorksheetPart)workbookPart.GetPartById(sheet.Id!);
+        var worksheet = worksheetPart.Worksheet;
+        var pageSetup = worksheet.GetFirstChild<PageSetup>();
+        return (
+            worksheet.GetFirstChild<SheetProperties>()?.PageSetupProperties?.FitToPage?.Value == true,
+            pageSetup?.PaperSize?.Value,
+            pageSetup?.FitToWidth?.Value,
+            pageSetup?.FitToHeight?.Value);
+    }
 
     private static bool HasWorksheetDrawing(CoaWorkbookDownload download, string sheetName)
     {

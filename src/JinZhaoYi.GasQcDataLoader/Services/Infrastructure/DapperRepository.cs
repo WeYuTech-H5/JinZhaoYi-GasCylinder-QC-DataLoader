@@ -228,8 +228,13 @@ public sealed class DapperRepository(
         FROM (
             SELECT ExcelExportSessionId, ExcelExportKey, Port, LotNo, SampleName
             FROM dbo.{0}
-            WHERE CAST(AnlzTime AS date) >= @StartDate
-              AND CAST(AnlzTime AS date) <= @EndDate
+            WHERE (
+                    @ExportSessionId IS NOT NULL
+                 OR (
+                        CAST(AnlzTime AS date) >= @StartDate
+                    AND CAST(AnlzTime AS date) <= @EndDate
+                    )
+              )
               AND AnlzTime IS NOT NULL
               AND ExcelPpbExportId IS NOT NULL
               AND (@ExportSessionId IS NULL OR ExcelExportSessionId = @ExportSessionId)
@@ -242,8 +247,13 @@ public sealed class DapperRepository(
         WITH PageGroups AS (
             SELECT ExcelExportSessionId, ExcelExportKey, Port, LotNo, SampleName
             FROM dbo.{0}
-            WHERE CAST(AnlzTime AS date) >= @StartDate
-              AND CAST(AnlzTime AS date) <= @EndDate
+            WHERE (
+                    @ExportSessionId IS NOT NULL
+                 OR (
+                        CAST(AnlzTime AS date) >= @StartDate
+                    AND CAST(AnlzTime AS date) <= @EndDate
+                    )
+              )
               AND AnlzTime IS NOT NULL
               AND ExcelPpbExportId IS NOT NULL
               AND (@ExportSessionId IS NULL OR ExcelExportSessionId = @ExportSessionId)
@@ -260,8 +270,13 @@ public sealed class DapperRepository(
            AND ISNULL(rows.Port, '') = ISNULL(pageGroups.Port, '')
            AND ISNULL(rows.LotNo, '') = ISNULL(pageGroups.LotNo, '')
            AND ISNULL(rows.SampleName, '') = ISNULL(pageGroups.SampleName, '')
-        WHERE CAST(rows.AnlzTime AS date) >= @StartDate
-          AND CAST(rows.AnlzTime AS date) <= @EndDate
+        WHERE (
+                @ExportSessionId IS NOT NULL
+             OR (
+                    CAST(rows.AnlzTime AS date) >= @StartDate
+                AND CAST(rows.AnlzTime AS date) <= @EndDate
+                )
+          )
           AND rows.AnlzTime IS NOT NULL
           AND rows.ExcelPpbExportId IS NOT NULL
           AND (@ExportSessionId IS NULL OR rows.ExcelExportSessionId = @ExportSessionId)
@@ -304,8 +319,13 @@ public sealed class DapperRepository(
                 parentLot.CREATE_TIME DESC,
                 parentLot.ID DESC
         ) parent
-        WHERE CAST(rows.AnlzTime AS date) >= @StartDate
-          AND CAST(rows.AnlzTime AS date) <= @EndDate
+        WHERE (
+                @HasExportSessionScopedIds = 1
+             OR (
+                    CAST(rows.AnlzTime AS date) >= @StartDate
+                AND CAST(rows.AnlzTime AS date) <= @EndDate
+                )
+          )
           AND (
                 rows.ExcelPpbExportId IN @SelectedIds
              OR CONCAT(CONVERT(NVARCHAR(36), rows.ExcelExportSessionId), N':', rows.ExcelPpbExportId) IN @SelectedIds
@@ -1489,7 +1509,13 @@ public sealed class DapperRepository(
         var rows = await connection.QueryAsync(
             new CommandDefinition(
                 sql,
-                new { StartDate = startDate.Date, EndDate = endDate.Date, SelectedIds = selectedSet.ToArray() },
+                new
+                {
+                    StartDate = startDate.Date,
+                    EndDate = endDate.Date,
+                    SelectedIds = selectedSet.ToArray(),
+                    HasExportSessionScopedIds = selectedSet.Any(id => id.Contains(':', StringComparison.Ordinal))
+                },
                 cancellationToken: cancellationToken));
 
         return rows
