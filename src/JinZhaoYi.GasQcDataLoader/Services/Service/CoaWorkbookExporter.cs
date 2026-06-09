@@ -612,6 +612,15 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
         pageMargins.Header = 0D;
         pageMargins.Footer = 0D;
 
+        var printOptions = worksheet.GetFirstChild<PrintOptions>();
+        if (printOptions is null)
+        {
+            printOptions = new PrintOptions();
+            worksheet.InsertBefore(printOptions, pageMargins);
+        }
+
+        printOptions.HorizontalCentered = true;
+
         var pageSetup = worksheet.GetFirstChild<PageSetup>();
         if (pageSetup is null)
         {
