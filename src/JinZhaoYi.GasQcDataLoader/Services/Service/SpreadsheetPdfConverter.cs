@@ -26,15 +26,25 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
         string workbookFileName,
         CancellationToken cancellationToken)
     {
-        var excelPdfContent = TryConvertWithExcel(workbookContent);
-        if (excelPdfContent is not null)
+        var isCoaLargeWorkbook = WorkbookContainsCoaLargeWorksheet(workbookContent);
+        if (!isCoaLargeWorkbook)
         {
-            return excelPdfContent;
+            var excelPdfContent = TryConvertWithExcel(workbookContent);
+            if (excelPdfContent is not null)
+            {
+                return excelPdfContent;
+            }
         }
 
         if (string.IsNullOrWhiteSpace(_options.LibreOfficePath) &&
             !IsExecutableAvailable("soffice"))
         {
+            if (isCoaLargeWorkbook)
+            {
+                throw new InvalidOperationException(
+                    "COA large PDF export requires LibreOffice to keep rendering consistent across machines.");
+            }
+
             return ConvertWithFallback(workbookContent, workbookFileName);
         }
 
@@ -104,6 +114,13 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
         }
         catch (System.ComponentModel.Win32Exception ex)
         {
+            if (isCoaLargeWorkbook)
+            {
+                throw new InvalidOperationException(
+                    "COA large PDF export requires LibreOffice to keep rendering consistent across machines.",
+                    ex);
+            }
+
             if (_options.UseBasicPdfFallback)
             {
                 return ConvertWithFallback(workbookContent, workbookFileName);
@@ -153,6 +170,11 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
             var pdfHeaderImagePath = ResolvePdfHeaderImagePath();
             foreach (var worksheetPart in workbookPart.WorksheetParts)
             {
+                if (IsCoaLargeWorksheet(workbookPart, worksheetPart))
+                {
+                    ApplyCoaLargePdfPrintLayout(worksheetPart);
+                }
+
                 ReplaceHeaderFooterWithPdfHeaderImage(workbookPart, worksheetPart, pdfHeaderImagePath);
             }
 
@@ -160,6 +182,39 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
         }
 
         return stream.ToArray();
+    }
+
+    private static void ApplyCoaLargePdfPrintLayout(WorksheetPart worksheetPart)
+    {
+        var worksheet = worksheetPart.Worksheet;
+        var pageMargins = worksheet.GetFirstChild<PageMargins>();
+        if (pageMargins is null)
+        {
+            pageMargins = new PageMargins
+            {
+                Left = 0.25D,
+                Right = 0.25D,
+                Top = 0.75D,
+                Bottom = 0.75D,
+                Header = 0.25D,
+                Footer = 0.05D
+            };
+            worksheet.Append(pageMargins);
+        }
+        else
+        {
+            pageMargins.Right = pageMargins.Left;
+        }
+
+        var printOptions = worksheet.GetFirstChild<PrintOptions>();
+        if (printOptions is null)
+        {
+            printOptions = new PrintOptions();
+            worksheet.InsertBefore(printOptions, pageMargins);
+        }
+
+        printOptions.HorizontalCentered = true;
+        worksheet.Save();
     }
 
     private static string? ResolvePdfHeaderImagePath()
