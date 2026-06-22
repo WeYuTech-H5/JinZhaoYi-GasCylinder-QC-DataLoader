@@ -30,7 +30,7 @@ COA 大卡與小卡都不直接讀匯入計算表 `ZZ_NF_GAS_QC_LOT_PORT_PPB`，
 | `B10` | Product Name | 一般版依 `Container` 覆寫：`1L_Cylinder` = `NF-SEMI STD`、`0.5L_Cylinder` = `STD Gas PC for Semiconductor`。亞東版維持 `COA(亞東)` 模板值。 |
 | `B11` | Product Number | 依 `SampleName` 前綴覆寫：`STD-N` / `STD-T` / `AZ` = `PG000-0006`、`TSMC` = `PG000-0016`、`VSMC` = `PG000-0010`、`STD-L` = `PG000-0100`。 |
 | `B12` | Certification Date | `ZZ_NF_GAS_QC_EXCEL_PPB_HISTORY.AnlzTime`，格式 `yyyy/M/d` |
-| `B13` | Expiration Date / Cylinder 到期日 | `0.5L_Cylinder` 優先用 `ZZ_NF_GAS_MFG_LOT_PARENT.ExpirationDate`，由 `ZZ_NF_GAS_MFG_LOT.Prod_Bomb1_LotNo = ZZ_NF_GAS_MFG_LOT_PARENT.LotNo` 對應；`1L_Cylinder` 用 `AnlzTime + 364 天`。查不到母瓶效期時 fallback 到 `AnlzTime + 364 天`。格式 `yyyy/M/d`。 |
+| `B13` | Expiration Date / Cylinder 到期日 | `0.5L_Cylinder` 優先用 `GAS_LOT_Bomb.ExpirationDate`，由 `ZZ_NF_GAS_MFG_LOT.Prod_Bomb1_LotNo = GAS_LOT_Bomb.LotNo` 對應；`1L_Cylinder` 用 `AnlzTime + 364 天`。查不到母瓶效期時 fallback 到 `AnlzTime + 364 天`。格式 `yyyy/M/d`。 |
 | `B14` | Cylinder Size | 一般版依 `Container` 覆寫：`1L_Cylinder` = `8.87 cm*27.7 cm`、`0.5L_Cylinder` = `5 cm*35cm`。 |
 | `B15` | Cylinder# | `ZZ_NF_GAS_QC_EXCEL_PPB_HISTORY.SampleName` |
 | `B16` | Cylinder Pressure | 一般版依 `Container` 覆寫：`1L_Cylinder` = `1000 psi`、`0.5L_Cylinder` = `950 psi`。 |
@@ -43,7 +43,7 @@ COA 大卡與小卡都不直接讀匯入計算表 `ZZ_NF_GAS_QC_LOT_PORT_PPB`，
 | `E16` | Specification | 一般版依 `Container` 覆寫：`1L_Cylinder` = `±15%`、`0.5L_Cylinder` = `±10%`。 |
 | sheet 名稱 | `COA_{SampleName}` | `ZZ_NF_GAS_QC_EXCEL_PPB_HISTORY.SampleName` |
 
-母瓶效期來源為 `ZZ_NF_GAS_MFG_LOT_PARENT`，其中 `LotNo` 是母瓶號，對應 `ZZ_NF_GAS_MFG_LOT.Prod_Bomb1_LotNo`。
+母瓶效期來源為 `GAS_LOT_Bomb`，其中 `LotNo` 是母瓶號，對應 `ZZ_NF_GAS_MFG_LOT.Prod_Bomb1_LotNo`。
 
 ### 大卡分析結果欄位
 

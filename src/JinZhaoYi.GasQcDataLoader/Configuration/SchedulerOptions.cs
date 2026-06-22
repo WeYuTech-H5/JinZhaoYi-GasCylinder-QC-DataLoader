@@ -213,7 +213,7 @@ public sealed class SchedulerTableOptions
     public string MfgLot { get; init; } = "ZZ_NF_GAS_MFG_LOT";
 
     // 母瓶效期資料表，LotNo 對應 MFG LOT 的 Prod_Bomb1_LotNo，供 0.5L COA 到期日使用。
-    public string MfgLotParent { get; init; } = "ZZ_NF_GAS_MFG_LOT_PARENT";
+    public string MfgLotParent { get; init; } = "GAS_LOT_Bomb";
 
     public string Rf { get; init; } = "ZZ_NF_GAS_QC_RF";
 

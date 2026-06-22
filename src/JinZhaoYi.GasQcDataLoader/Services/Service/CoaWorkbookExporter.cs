@@ -723,7 +723,7 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
 
     private static DateTime? ResolveExpirationDate(QcDataRow row)
     {
-        // 0.5L_Cylinder 的效期依母瓶效期表 ZZ_NF_GAS_MFG_LOT_PARENT；
+        // 0.5L_Cylinder 的效期依母瓶效期表 GAS_LOT_Bomb；
         // 舊資料或未建母瓶資料時才回到原本的 AnlzTime + 364 天規則。
         if (IsHalfLiterContainer(row) && row.ParentExpirationDate.HasValue)
         {

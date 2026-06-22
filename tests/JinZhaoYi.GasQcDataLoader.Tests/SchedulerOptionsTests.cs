@@ -41,6 +41,14 @@ public sealed class SchedulerOptionsTests
     }
 
     [Fact]
+    public void Mfg_lot_parent_table_defaults_to_gas_lot_bomb()
+    {
+        var options = new SchedulerOptions();
+
+        options.Tables.MfgLotParent.Should().Be("GAS_LOT_Bomb");
+    }
+
+    [Fact]
     public void Daily_schedule_options_default_to_yesterday_mode()
     {
         var options = new SchedulerOptions();
