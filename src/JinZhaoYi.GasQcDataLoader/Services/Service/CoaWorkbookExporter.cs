@@ -23,7 +23,7 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
     private const string SmallCardPrintArea = "$B$2:$AA$66";
 
     private static readonly LargeContainerFields LargeHalfLiterFields = new(
-        ProductName: "STD Gas PC for Semiconductor",
+        ProductName: "NF-SEMI STD",
         CylinderSize: "5 cm*35cm",
         CylinderPressure: "950 psi",
         CylinderVolume: "500 mL",
@@ -31,7 +31,7 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
         Specification: "±10%");
 
     private static readonly LargeContainerFields LargeOneLiterFields = new(
-        ProductName: "NF-SEMI STD",
+        ProductName: "STD Gas PC for Semiconductor",
         CylinderSize: "8.87 cm*27.7 cm",
         CylinderPressure: "1000 psi",
         CylinderVolume: "1000 mL",

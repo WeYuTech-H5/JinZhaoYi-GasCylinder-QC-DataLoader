@@ -33,8 +33,8 @@ public sealed class CoaWorkbookExporterTests
         workbook.Worksheets.Select(sheet => sheet.Name).Should().BeEquivalentTo("COA_STD-N050", "COA_STD-L100");
         workbook.Worksheet("COA_STD-N050").Cell("E52").GetDouble().Should().BeApproximately(101.2, 0.0001);
         workbook.Worksheet("COA_STD-L100").Cell("E52").GetDouble().Should().BeApproximately(98.6, 0.0001);
-        workbook.Worksheet("COA_STD-N050").Cell("B10").GetString().Should().Be("STD Gas PC for Semiconductor");
-        workbook.Worksheet("COA_STD-L100").Cell("B10").GetString().Should().Be("NF-SEMI STD");
+        workbook.Worksheet("COA_STD-N050").Cell("B10").GetString().Should().Be("NF-SEMI STD");
+        workbook.Worksheet("COA_STD-L100").Cell("B10").GetString().Should().Be("STD Gas PC for Semiconductor");
         workbook.Worksheet("COA_STD-N050").Cell("B11").GetString().Should().Be("PG000-0006");
         workbook.Worksheet("COA_STD-L100").Cell("B11").GetString().Should().Be("PG000-0100");
         workbook.Worksheet("COA_STD-N050").Cell("B13").GetString().Should().Be("2026/9/15");
