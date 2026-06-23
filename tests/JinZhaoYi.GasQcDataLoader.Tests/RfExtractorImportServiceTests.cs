@@ -252,6 +252,9 @@ public sealed class RfExtractorImportServiceTests : IDisposable
         public Task<IReadOnlyList<QcDataRow>> GetExcelPpbRowsForCsvAsync(DateTime startDate, DateTime endDate, IReadOnlyCollection<string> selectedIds, CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<QcDataRow>>([]);
 
+        public Task<IReadOnlyList<StdCylinderSummaryRow>> GetStdCylinderSummaryRowsAsync(CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<StdCylinderSummaryRow>>([]);
+
         public Task ExecuteImportAsync(ImportWriteSet writeSet, QcDataRow rf, DateTime importDate, CancellationToken cancellationToken) =>
             Task.CompletedTask;
 

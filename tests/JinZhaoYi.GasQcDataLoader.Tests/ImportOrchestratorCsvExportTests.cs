@@ -297,6 +297,9 @@ public sealed class ImportOrchestratorCsvExportTests
             CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<QcDataRow>>([]);
 
+        public Task<IReadOnlyList<StdCylinderSummaryRow>> GetStdCylinderSummaryRowsAsync(CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<StdCylinderSummaryRow>>([]);
+
         public Task UpsertImportErrorLogsAsync(
             IReadOnlyCollection<ImportErrorReportRow> rows,
             CancellationToken cancellationToken) =>

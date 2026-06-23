@@ -9,6 +9,7 @@ using JinZhaoYi.GasQcDataLoader.DataModels;
 using JinZhaoYi.GasQcDataLoader.Services.Interface;
 using JinZhaoYi.GasQcDataLoader.Services.Service;
 using Microsoft.Extensions.Options;
+using A = DocumentFormat.OpenXml.Drawing;
 using Xdr = DocumentFormat.OpenXml.Drawing.Spreadsheet;
 
 namespace JinZhaoYi.GasQcDataLoader.Tests;
@@ -257,6 +258,36 @@ public sealed class CoaWorkbookExporterTests
         IsHorizontallyCentered(preparedDownload, sheetName).Should().BeTrue();
         IsVerticallyCentered(preparedDownload, sheetName).Should().BeTrue();
         GetPrintArea(preparedDownload, sheetName).Should().Be($"'{sheetName}'!$B$2:$AA$66");
+    }
+
+    [Fact]
+    public void PdfConversionWorkbook_removes_unused_small_card_signature_rows_and_keeps_template_company_text()
+    {
+        var exporter = CreateExporter();
+        var download = exporter.ExportSmallForDownload([CreateRow("STD-N004", "1L_Cylinder")], "20260521", 9);
+        var sheetName = GetSheetNames(download)[0];
+
+        var preparedContent = PrepareWorkbookForPdfConversion(download.Content.ToArray());
+        var preparedDownload = new CoaWorkbookDownload(preparedContent, download.ContentType, download.FileName);
+
+        using var originalWorkbook = Open(download);
+        var originalSheet = originalWorkbook.Worksheet(sheetName);
+        originalSheet.Cell("K22").GetString().Should().NotBeEmpty();
+        originalSheet.Cell("O22").GetString().Should().NotBeEmpty();
+
+        using var preparedWorkbook = Open(preparedDownload);
+        var preparedSheet = preparedWorkbook.Worksheet(sheetName);
+        preparedSheet.Cell("B22").GetString().Should().NotBeEmpty();
+        preparedSheet.Cell("F22").GetString().Should().NotBeEmpty();
+        preparedSheet.Cell("K22").GetString().Should().BeEmpty();
+        preparedSheet.Cell("O22").GetString().Should().BeEmpty();
+        preparedSheet.Cell("T66").GetString().Should().BeEmpty();
+        preparedSheet.Cell("X66").GetString().Should().BeEmpty();
+        preparedSheet.Cell("K22").Style.Border.TopBorder.Should().Be(XLBorderStyleValues.None);
+
+        CountDrawingText(preparedDownload, sheetName, "金 兆 益 科 技 股 份 有 限 公 司").Should().Be(1);
+        HasDrawingInRange(preparedDownload, sheetName, "K2:R22").Should().BeFalse();
+        HasDrawingInRange(preparedDownload, sheetName, "T46:AA66").Should().BeFalse();
     }
 
     [Fact]
@@ -525,6 +556,19 @@ public sealed class CoaWorkbookExporterTests
         var targetRange = ParseCellRange(rangeReference);
         return drawingPart.WorksheetDrawing.ChildElements
             .Any(anchor => TryGetDrawingAnchorRange(anchor, out var anchorRange) && RangesIntersect(anchorRange, targetRange));
+    }
+
+    private static int CountDrawingText(CoaWorkbookDownload download, string sheetName, string text)
+    {
+        using var stream = new MemoryStream(download.Content);
+        using var document = SpreadsheetDocument.Open(stream, false);
+        var workbookPart = document.WorkbookPart!;
+        var sheet = workbookPart.Workbook.Sheets!.Elements<Sheet>()
+            .First(item => string.Equals(item.Name?.Value, sheetName, StringComparison.OrdinalIgnoreCase));
+        var worksheetPart = (WorksheetPart)workbookPart.GetPartById(sheet.Id!);
+        return worksheetPart.DrawingsPart?.WorksheetDrawing
+            .Descendants<A.Text>()
+            .Count(item => string.Equals(item.Text, text, StringComparison.Ordinal)) ?? 0;
     }
 
     private static bool TryGetDrawingAnchorRange(OpenXmlElement anchor, out CellRange range)
