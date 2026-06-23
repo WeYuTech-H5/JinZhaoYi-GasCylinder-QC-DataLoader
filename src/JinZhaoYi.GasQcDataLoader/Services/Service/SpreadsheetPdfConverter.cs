@@ -959,9 +959,9 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
     {
         private const string FontFaceName = "DFKai-SB";
         private const double CompanyTextBoxWidthPoints = 188.3D;
-        private const double CompanyTextCenterOffsetPoints = 164D;
-        private const double CompanyTextTopOffsetPoints = 47D;
-        private const double CompanyTextHorizontalScale = 0.87D;
+        private const double CompanyTextCenterOffsetPoints = 154D;
+        private const double CompanyTextTopOffsetPoints = 39D;
+        private const double CompanyTextHorizontalScale = 0.80D;
         private const double CompanyTextFontSizePoints = 12D;
         private static readonly object FontResolverLock = new();
 
