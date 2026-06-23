@@ -11,6 +11,7 @@ using JinZhaoYi.GasQcDataLoader.Configuration;
 using JinZhaoYi.GasQcDataLoader.Services.Interface;
 using Microsoft.Extensions.Options;
 using PdfSharp.Drawing;
+using PdfSharp.Fonts;
 using PdfSharp.Pdf;
 using PdfSharp.Pdf.IO;
 using A = DocumentFormat.OpenXml.Drawing;
@@ -20,10 +21,17 @@ namespace JinZhaoYi.GasQcDataLoader.Services.Service;
 
 public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) : ISpreadsheetPdfConverter
 {
+    private const string SmallCardCompanyName = "金 兆 益 科 技 股 份 有 限 公 司";
     private const string SmallCardPdfPrintArea = "$B$2:$AA$66";
+    private const string DfKaiFontPath = @"C:\Windows\Fonts\kaiu.ttf";
     private const double SmallCardMarginInches = 0.25D;
     private const uint SmallCardPdfPaperSize = 1U; // Letter, matching the approved Excel-rendered PDF.
     private const uint SmallCardPdfScale = 73U;
+    private const double SmallCardWidthPoints = 246.6D;
+    private const double SmallCardHeightPoints = 360.5D;
+    private const double SmallCardHorizontalGapPoints = 2.4D;
+    private const double SmallCardVerticalGapPoints = 3.75D;
+    private const int SmallCardColumnsPerPage = 3;
     private static readonly string[] SmallCardSampleCells =
     [
         "F6", "O6", "X6",
@@ -132,6 +140,11 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
 
             var pdfContent = await File.ReadAllBytesAsync(pdfPath, cancellationToken);
             pdfContent = OverlayPdfHeaderImageIfNeeded(pdfContent, pdfWorkbookContent);
+            if (isCoaSmallWorkbook)
+            {
+                pdfContent = SmallCardCompanyNameOverlay.Add(pdfContent, GetSmallCardCounts(pdfWorkbookContent));
+            }
+
             return pdfContent;
         }
         catch (System.ComponentModel.Win32Exception ex)
@@ -940,6 +953,133 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
             new Xdr.Extent { Cx = widthEmus, Cy = heightEmus },
             picture,
             new Xdr.ClientData());
+    }
+
+    private static class SmallCardCompanyNameOverlay
+    {
+        private const string FontFaceName = "DFKai-SB";
+        private const double CompanyTextBoxWidthPoints = 188.3D;
+        private const double CompanyTextCenterOffsetPoints = 164D;
+        private const double CompanyTextTopOffsetPoints = 47D;
+        private const double CompanyTextHorizontalScale = 0.87D;
+        private const double CompanyTextFontSizePoints = 12D;
+        private static readonly object FontResolverLock = new();
+
+        public static byte[] Add(byte[] pdfContent, IReadOnlyList<int> cardCounts)
+        {
+            if (!File.Exists(DfKaiFontPath) || cardCounts.Count == 0)
+            {
+                return pdfContent;
+            }
+
+            EnsureFontResolver();
+            using var pdfStream = new MemoryStream(pdfContent);
+            using var document = PdfReader.Open(pdfStream, PdfDocumentOpenMode.Modify);
+            if (document.PageCount != cardCounts.Count)
+            {
+                throw new InvalidOperationException(
+                    $"COA small PDF rendered {document.PageCount} pages for {cardCounts.Count} worksheet pages.");
+            }
+
+            var scale = SmallCardPdfScale / 100D;
+            var gridWidth = CalculateSmallCardGridWidthPoints() * scale;
+            var gridHeight = CalculateSmallCardGridHeightPoints() * scale;
+            var columnPitch = (SmallCardWidthPoints + SmallCardHorizontalGapPoints) * scale;
+            var rowPitch = (SmallCardHeightPoints + SmallCardVerticalGapPoints) * scale;
+            var textBoxWidth = CompanyTextBoxWidthPoints * scale;
+            var font = new XFont(
+                FontFaceName,
+                CompanyTextFontSizePoints * scale,
+                XFontStyleEx.Bold,
+                new XPdfFontOptions(PdfFontEncoding.Unicode));
+
+            for (var pageIndex = 0; pageIndex < document.PageCount; pageIndex++)
+            {
+                var page = document.Pages[pageIndex];
+                var gridLeft = (page.Width.Point - gridWidth) / 2D;
+                var gridTop = (page.Height.Point - gridHeight) / 2D;
+                using var graphics = XGraphics.FromPdfPage(page, XGraphicsPdfPageOptions.Append);
+
+                for (var cardIndex = 0; cardIndex < cardCounts[pageIndex]; cardIndex++)
+                {
+                    var column = cardIndex % SmallCardColumnsPerPage;
+                    var row = cardIndex / SmallCardColumnsPerPage;
+                    var centerX =
+                        gridLeft +
+                        (CompanyTextCenterOffsetPoints * scale) +
+                        column * columnPitch;
+                    var top =
+                        gridTop +
+                        (CompanyTextTopOffsetPoints * scale) +
+                        row * rowPitch;
+                    var bounds = new XRect(
+                        -textBoxWidth / 2D,
+                        top,
+                        textBoxWidth,
+                        14D * scale);
+
+                    var state = graphics.Save();
+                    graphics.TranslateTransform(centerX, 0D);
+                    graphics.ScaleTransform(CompanyTextHorizontalScale, 1D);
+                    graphics.DrawString(
+                        SmallCardCompanyName,
+                        font,
+                        XBrushes.Black,
+                        bounds,
+                        XStringFormats.Center);
+                    graphics.Restore(state);
+                }
+            }
+
+            using var output = new MemoryStream();
+            document.Save(output, closeStream: false);
+            return output.ToArray();
+        }
+
+        private static double CalculateSmallCardGridWidthPoints() =>
+            SmallCardColumnsPerPage * SmallCardWidthPoints +
+            (SmallCardColumnsPerPage - 1) * SmallCardHorizontalGapPoints;
+
+        private static double CalculateSmallCardGridHeightPoints()
+        {
+            const int rowsPerPage = 3;
+            return rowsPerPage * SmallCardHeightPoints +
+                (rowsPerPage - 1) * SmallCardVerticalGapPoints;
+        }
+
+        private static void EnsureFontResolver()
+        {
+            if (GlobalFontSettings.FontResolver is DfKaiFontResolver)
+            {
+                return;
+            }
+
+            lock (FontResolverLock)
+            {
+                if (GlobalFontSettings.FontResolver is null)
+                {
+                    GlobalFontSettings.FontResolver = new DfKaiFontResolver();
+                }
+            }
+        }
+
+        private sealed class DfKaiFontResolver : IFontResolver
+        {
+            private static readonly byte[] FontBytes = File.ReadAllBytes(DfKaiFontPath);
+
+            public byte[]? GetFont(string faceName) =>
+                string.Equals(faceName, FontFaceName, StringComparison.OrdinalIgnoreCase)
+                    ? FontBytes
+                    : null;
+
+            public FontResolverInfo? ResolveTypeface(
+                string familyName,
+                bool isBold,
+                bool isItalic) =>
+                string.Equals(familyName, FontFaceName, StringComparison.OrdinalIgnoreCase)
+                    ? new FontResolverInfo(FontFaceName, isBold, isItalic)
+                    : null;
+        }
     }
 
     private static class PdfHeaderImageOverlay
