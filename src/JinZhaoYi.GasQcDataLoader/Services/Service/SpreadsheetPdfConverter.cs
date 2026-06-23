@@ -21,9 +21,14 @@ namespace JinZhaoYi.GasQcDataLoader.Services.Service;
 public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) : ISpreadsheetPdfConverter
 {
     private const string SmallCardPdfPrintArea = "$B$2:$AA$66";
-    private const double SmallCardMarginInches = 0.25D;
+    private const double SmallCardLeftMarginInches = 0.72D;
+    private const double SmallCardRightMarginInches = 0.25D;
+    private const double SmallCardTopMarginInches = 0.8D;
+    private const double SmallCardBottomMarginInches = 0.75D;
+    private const double SmallCardRowHeightScale = 0.96D;
+    private const string SmallCardPdfFontName = "Times New Roman";
     private const uint SmallCardPdfPaperSize = 1U; // Letter, matching the approved Excel-rendered PDF.
-    private const uint SmallCardPdfScale = 73U;
+    private const uint SmallCardPdfScale = 65U;
     private const double SmallCardWidthPoints = 246.6D;
     private const double SmallCardHeightPoints = 360.5D;
     private const double SmallCardHorizontalGapPoints = 2.4D;
@@ -213,6 +218,7 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
                 else if (IsCoaSmallWorksheet(workbookPart, worksheetPart))
                 {
                     ApplyCoaSmallPdfPrintLayout(workbookPart, worksheetPart);
+                    ApplyCoaSmallPdfFonts(workbookPart);
                 }
 
                 ReplaceHeaderFooterWithPdfHeaderImage(workbookPart, worksheetPart, pdfHeaderImagePath);
@@ -278,14 +284,13 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
             worksheet.Append(pageMargins);
         }
 
-        // Use a fixed Letter layout to match the approved Excel-rendered PDF and avoid
-        // LibreOffice/Excel choosing different paper sizes on different machines.
-        pageMargins.Left = SmallCardMarginInches;
-        pageMargins.Right = SmallCardMarginInches;
-        pageMargins.Top = SmallCardMarginInches;
-        pageMargins.Bottom = SmallCardMarginInches;
-        pageMargins.Header = 0D;
-        pageMargins.Footer = 0D;
+        // Keep the template's Excel print geometry while pinning the physical page size.
+        pageMargins.Left = SmallCardLeftMarginInches;
+        pageMargins.Right = SmallCardRightMarginInches;
+        pageMargins.Top = SmallCardTopMarginInches;
+        pageMargins.Bottom = SmallCardBottomMarginInches;
+        pageMargins.Header = 0.3D;
+        pageMargins.Footer = 0.3D;
 
         var printOptions = worksheet.GetFirstChild<PrintOptions>();
         if (printOptions is null)
@@ -294,8 +299,8 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
             worksheet.InsertBefore(printOptions, pageMargins);
         }
 
-        printOptions.HorizontalCentered = true;
-        printOptions.VerticalCentered = true;
+        printOptions.HorizontalCentered = false;
+        printOptions.VerticalCentered = false;
 
         var pageSetup = worksheet.GetFirstChild<PageSetup>();
         if (pageSetup is null)
@@ -310,9 +315,47 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
         pageSetup.FitToWidth = null;
         pageSetup.FitToHeight = null;
 
+        ScaleSmallCardRowHeights(worksheet);
         SetPrintArea(workbookPart, worksheetPart, SmallCardPdfPrintArea);
         ClearUnusedSmallCardPdfSlots(workbookPart, worksheetPart);
         worksheet.Save();
+    }
+
+    private static void ScaleSmallCardRowHeights(Worksheet worksheet)
+    {
+        var sheetFormat = worksheet.GetFirstChild<SheetFormatProperties>();
+        if (sheetFormat?.DefaultRowHeight?.Value is { } defaultRowHeight)
+        {
+            sheetFormat.DefaultRowHeight = defaultRowHeight * SmallCardRowHeightScale;
+        }
+
+        foreach (var row in worksheet.Descendants<Row>())
+        {
+            if (row.Height?.Value is { } height)
+            {
+                row.Height = height * SmallCardRowHeightScale;
+            }
+        }
+    }
+
+    private static void ApplyCoaSmallPdfFonts(WorkbookPart workbookPart)
+    {
+        var fonts = workbookPart.WorkbookStylesPart?.Stylesheet.Fonts;
+        if (fonts is null)
+        {
+            return;
+        }
+
+        foreach (var font in fonts.Elements<Font>())
+        {
+            var fontName = font.GetFirstChild<FontName>();
+            if (string.Equals(fontName?.Val?.Value, "Microsoft JhengHei UI", StringComparison.OrdinalIgnoreCase))
+            {
+                fontName!.Val = SmallCardPdfFontName;
+            }
+        }
+
+        workbookPart.WorkbookStylesPart!.Stylesheet.Save();
     }
 
     private static string? ResolvePdfHeaderImagePath()
@@ -966,12 +1009,15 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
 
     private static class SmallCardCompanyNameOverlay
     {
-        private const double HeaderImageLeftPoints = 33.5D;
-        private const double HeaderImageTopPoints = 26.5D;
-        private const double HeaderImageColumnPitchPoints = 169D;
-        private const double HeaderImageRowPitchPoints = 264D;
-        private const double HeaderImageWidthPoints = 165D;
-        private const double HeaderWhiteoutWidthPoints = 180D;
+        private const double HeaderWhiteoutLeftPoints = 52D;
+        private const double HeaderWhiteoutTopPoints = 55D;
+        private const double HeaderImageLeftPoints = 52.5D;
+        private const double HeaderImageTopPoints = 64D;
+        private const double HeaderImageColumnPitchPoints = 150D;
+        private const double HeaderImageRowPitchPoints = 218D;
+        private const double HeaderImageWidthPoints = 135D;
+        private const double HeaderWhiteoutWidthPoints = 147D;
+        private const double HeaderWhiteoutHeightPoints = 31D;
 
         public static byte[] Add(
             byte[] pdfContent,
@@ -1008,18 +1054,22 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
                 {
                     var column = cardIndex % SmallCardColumnsPerPage;
                     var row = cardIndex / SmallCardColumnsPerPage;
-                    var left = HeaderImageLeftPoints + (column * HeaderImageColumnPitchPoints);
-                    var top = HeaderImageTopPoints + (row * HeaderImageRowPitchPoints);
                     graphics.DrawRectangle(
                         XBrushes.White,
-                        left,
-                        top,
+                        HeaderWhiteoutLeftPoints + (column * HeaderImageColumnPitchPoints),
+                        HeaderWhiteoutTopPoints + (row * HeaderImageRowPitchPoints),
                         HeaderWhiteoutWidthPoints,
-                        headerImageHeight + 2D);
+                        HeaderWhiteoutHeightPoints);
+                }
+
+                for (var cardIndex = 0; cardIndex < cardCounts[pageIndex]; cardIndex++)
+                {
+                    var column = cardIndex % SmallCardColumnsPerPage;
+                    var row = cardIndex / SmallCardColumnsPerPage;
                     graphics.DrawImage(
                         image,
-                        left,
-                        top,
+                        HeaderImageLeftPoints + (column * HeaderImageColumnPitchPoints),
+                        HeaderImageTopPoints + (row * HeaderImageRowPitchPoints),
                         HeaderImageWidthPoints,
                         headerImageHeight);
                 }

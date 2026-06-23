@@ -254,10 +254,17 @@ public sealed class CoaWorkbookExporterTests
         var preparedDownload = new CoaWorkbookDownload(preparedContent, download.ContentType, download.FileName);
 
         GetSmallSheetPageSetup(download, sheetName).Should().Be((false, 9U, null, null, 70U, 0.25D, 0.75D));
-        GetSmallSheetPageSetup(preparedDownload, sheetName).Should().Be((false, 1U, null, null, 73U, 0.25D, 0.25D));
-        IsHorizontallyCentered(preparedDownload, sheetName).Should().BeTrue();
-        IsVerticallyCentered(preparedDownload, sheetName).Should().BeTrue();
+        GetSmallSheetPageSetup(preparedDownload, sheetName).Should().Be((false, 1U, null, null, 65U, 0.72D, 0.8D));
+        IsHorizontallyCentered(preparedDownload, sheetName).Should().BeFalse();
+        IsVerticallyCentered(preparedDownload, sheetName).Should().BeFalse();
         GetPrintArea(preparedDownload, sheetName).Should().Be($"'{sheetName}'!$B$2:$AA$66");
+
+        using var originalWorkbook = Open(download);
+        using var preparedWorkbook = Open(preparedDownload);
+        originalWorkbook.Worksheet(sheetName).Cell("B8").Style.Font.FontName.Should().Be("Microsoft JhengHei UI");
+        preparedWorkbook.Worksheet(sheetName).Cell("B8").Style.Font.FontName.Should().Be("Times New Roman");
+        preparedWorkbook.Worksheet(sheetName).Row(8).Height.Should()
+            .BeApproximately(originalWorkbook.Worksheet(sheetName).Row(8).Height * 0.96D, 0.01D);
     }
 
     [Fact]
