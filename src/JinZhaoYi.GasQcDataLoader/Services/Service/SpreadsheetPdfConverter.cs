@@ -55,7 +55,7 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
             ? PrepareWorkbookForPdfConversion(workbookContent)
             : workbookContent;
 
-        if (!isCoaLargeWorkbook)
+        if (!isCoaLargeWorkbook && !isCoaSmallWorkbook)
         {
             var excelPdfContent = TryConvertWithExcel(pdfWorkbookContent);
             if (excelPdfContent is not null)
@@ -67,10 +67,10 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
         if (string.IsNullOrWhiteSpace(_options.LibreOfficePath) &&
             !IsExecutableAvailable("soffice"))
         {
-            if (isCoaLargeWorkbook)
+            if (isCoaLargeWorkbook || isCoaSmallWorkbook)
             {
                 throw new InvalidOperationException(
-                    "COA large PDF export requires LibreOffice to keep rendering consistent across machines.");
+                    "COA PDF export requires LibreOffice to keep rendering consistent across machines.");
             }
 
             return ConvertWithFallback(workbookContent, workbookFileName);
@@ -142,10 +142,10 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
         }
         catch (System.ComponentModel.Win32Exception ex)
         {
-            if (isCoaLargeWorkbook)
+            if (isCoaLargeWorkbook || isCoaSmallWorkbook)
             {
                 throw new InvalidOperationException(
-                    "COA large PDF export requires LibreOffice to keep rendering consistent across machines.",
+                    "COA PDF export requires LibreOffice to keep rendering consistent across machines.",
                     ex);
             }
 
