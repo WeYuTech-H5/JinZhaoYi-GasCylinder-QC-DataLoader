@@ -11,7 +11,6 @@ using JinZhaoYi.GasQcDataLoader.Configuration;
 using JinZhaoYi.GasQcDataLoader.Services.Interface;
 using Microsoft.Extensions.Options;
 using PdfSharp.Drawing;
-using PdfSharp.Fonts;
 using PdfSharp.Pdf;
 using PdfSharp.Pdf.IO;
 using A = DocumentFormat.OpenXml.Drawing;
@@ -21,9 +20,7 @@ namespace JinZhaoYi.GasQcDataLoader.Services.Service;
 
 public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) : ISpreadsheetPdfConverter
 {
-    private const string SmallCardCompanyName = "金 兆 益 科 技 股 份 有 限 公 司";
     private const string SmallCardPdfPrintArea = "$B$2:$AA$66";
-    private const string DfKaiFontPath = @"C:\Windows\Fonts\kaiu.ttf";
     private const double SmallCardMarginInches = 0.25D;
     private const uint SmallCardPdfPaperSize = 1U; // Letter, matching the approved Excel-rendered PDF.
     private const uint SmallCardPdfScale = 73U;
@@ -140,11 +137,13 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
 
             var pdfContent = await File.ReadAllBytesAsync(pdfPath, cancellationToken);
             pdfContent = OverlayPdfHeaderImageIfNeeded(pdfContent, pdfWorkbookContent);
-            if (isCoaSmallWorkbook)
+            var smallCardHeaderImagePath = isCoaSmallWorkbook ? ResolveSmallCardHeaderImagePath() : null;
+            if (smallCardHeaderImagePath is not null)
             {
                 pdfContent = SmallCardCompanyNameOverlay.Add(
                     pdfContent,
-                    GetSmallCardCompanyNameAnchors(pdfWorkbookContent));
+                    GetSmallCardCounts(pdfWorkbookContent),
+                    smallCardHeaderImagePath);
             }
 
             return pdfContent;
@@ -332,6 +331,14 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
             .FirstOrDefault();
     }
 
+    private static string? ResolveSmallCardHeaderImagePath()
+    {
+        var baseDirectory = Path.GetDirectoryName(typeof(SpreadsheetPdfConverter).Assembly.Location)
+            ?? AppContext.BaseDirectory;
+        var imagePath = Path.Combine(baseDirectory, "wwwroot", "image", "coa-small-card-header.png");
+        return File.Exists(imagePath) ? imagePath : null;
+    }
+
     private static void ReplaceHeaderFooterWithPdfHeaderImage(
         WorkbookPart workbookPart,
         WorksheetPart worksheetPart,
@@ -461,184 +468,6 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
         }
 
         return counts;
-    }
-
-    private static IReadOnlyList<IReadOnlyList<SmallCardCompanyNameAnchor>> GetSmallCardCompanyNameAnchors(byte[] workbookContent)
-    {
-        using var stream = new MemoryStream(workbookContent);
-        using var document = SpreadsheetDocument.Open(stream, false);
-        var workbookPart = document.WorkbookPart;
-        if (workbookPart?.Workbook.Sheets is null)
-        {
-            return [];
-        }
-
-        var pages = new List<IReadOnlyList<SmallCardCompanyNameAnchor>>();
-        foreach (var sheet in workbookPart.Workbook.Sheets.Elements<Sheet>())
-        {
-            if (sheet.Id?.Value is not { } relationshipId ||
-                workbookPart.GetPartById(relationshipId) is not WorksheetPart worksheetPart ||
-                !IsCoaSmallWorksheet(workbookPart, worksheetPart))
-            {
-                continue;
-            }
-
-            pages.Add(ReadSmallCardCompanyNameAnchors(worksheetPart));
-        }
-
-        return pages;
-    }
-
-    private static IReadOnlyList<SmallCardCompanyNameAnchor> ReadSmallCardCompanyNameAnchors(WorksheetPart worksheetPart)
-    {
-        var drawingXml = worksheetPart.DrawingsPart?.WorksheetDrawing?.OuterXml;
-        if (string.IsNullOrWhiteSpace(drawingXml))
-        {
-            return [];
-        }
-
-        XNamespace xdr = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing";
-        XNamespace a = "http://schemas.openxmlformats.org/drawingml/2006/main";
-        var document = XDocument.Parse(drawingXml);
-        var anchors = new List<SmallCardCompanyNameAnchor>();
-        foreach (var twoCellAnchor in document.Descendants(xdr + "twoCellAnchor"))
-        {
-            foreach (var shape in twoCellAnchor.Elements(xdr + "sp"))
-            {
-                AddCompanyNameAnchorIfPresent(shape, null, anchors, xdr, a);
-            }
-
-            foreach (var groupShape in twoCellAnchor.Elements(xdr + "grpSp"))
-            {
-                var groupTransform = groupShape.Element(xdr + "grpSpPr")?.Element(a + "xfrm");
-                foreach (var shape in groupShape.Elements(xdr + "sp"))
-                {
-                    AddCompanyNameAnchorIfPresent(shape, groupTransform, anchors, xdr, a);
-                }
-            }
-        }
-
-        return anchors
-            .OrderBy(anchor => anchor.TopPoints)
-            .ThenBy(anchor => anchor.LeftPoints)
-            .ToArray();
-    }
-
-    private static void AddCompanyNameAnchorIfPresent(
-        XElement shape,
-        XElement? groupTransform,
-        List<SmallCardCompanyNameAnchor> anchors,
-        XNamespace xdr,
-        XNamespace a)
-    {
-        var text = string.Concat(shape.Descendants(a + "t").Select(element => element.Value));
-        if (!text.Contains(SmallCardCompanyName, StringComparison.Ordinal))
-        {
-            return;
-        }
-
-        var transform = shape.Element(xdr + "spPr")?.Element(a + "xfrm");
-        if (transform is null ||
-            !TryReadTransform(transform, a, out var shapeLeft, out var shapeTop, out var shapeWidth, out var shapeHeight))
-        {
-            return;
-        }
-
-        if (groupTransform is not null)
-        {
-            if (!TryReadGroupTransform(
-                    groupTransform,
-                    a,
-                    out var groupLeft,
-                    out var groupTop,
-                    out var groupWidth,
-                    out var groupHeight,
-                    out var childLeft,
-                    out var childTop,
-                    out var childWidth,
-                    out var childHeight) ||
-                childWidth == 0L ||
-                childHeight == 0L)
-            {
-                return;
-            }
-
-            var scaleX = groupWidth / (double)childWidth;
-            var scaleY = groupHeight / (double)childHeight;
-            shapeWidth = (long)Math.Round(shapeWidth * scaleX);
-            shapeHeight = (long)Math.Round(shapeHeight * scaleY);
-            shapeLeft = (long)Math.Round(groupLeft + ((shapeLeft - childLeft) * scaleX));
-            shapeTop = (long)Math.Round(groupTop + ((shapeTop - childTop) * scaleY));
-        }
-
-        anchors.Add(new SmallCardCompanyNameAnchor(
-            shapeLeft / 12700D,
-            shapeTop / 12700D,
-            shapeWidth / 12700D,
-            shapeHeight / 12700D));
-    }
-
-    private static bool TryReadTransform(
-        XElement transform,
-        XNamespace a,
-        out long left,
-        out long top,
-        out long width,
-        out long height)
-    {
-        left = 0L;
-        top = 0L;
-        width = 0L;
-        height = 0L;
-
-        var offset = transform.Element(a + "off");
-        var extents = transform.Element(a + "ext");
-        return TryReadLong(offset, "x", out left) &&
-            TryReadLong(offset, "y", out top) &&
-            TryReadLong(extents, "cx", out width) &&
-            TryReadLong(extents, "cy", out height);
-    }
-
-    private static bool TryReadGroupTransform(
-        XElement transform,
-        XNamespace a,
-        out long left,
-        out long top,
-        out long width,
-        out long height,
-        out long childLeft,
-        out long childTop,
-        out long childWidth,
-        out long childHeight)
-    {
-        left = 0L;
-        top = 0L;
-        width = 0L;
-        height = 0L;
-        childLeft = 0L;
-        childTop = 0L;
-        childWidth = 0L;
-        childHeight = 0L;
-
-        var offset = transform.Element(a + "off");
-        var extents = transform.Element(a + "ext");
-        var childOffset = transform.Element(a + "chOff");
-        var childExtents = transform.Element(a + "chExt");
-        return TryReadLong(offset, "x", out left) &&
-            TryReadLong(offset, "y", out top) &&
-            TryReadLong(extents, "cx", out width) &&
-            TryReadLong(extents, "cy", out height) &&
-            TryReadLong(childOffset, "x", out childLeft) &&
-            TryReadLong(childOffset, "y", out childTop) &&
-            TryReadLong(childExtents, "cx", out childWidth) &&
-            TryReadLong(childExtents, "cy", out childHeight);
-    }
-
-    private static bool TryReadLong(XElement? element, string attributeName, out long value)
-    {
-        value = 0L;
-        return element?.Attribute(attributeName)?.Value is { } text &&
-            long.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out value);
     }
 
     private static int GetSmallCardCount(WorkbookPart workbookPart, WorksheetPart worksheetPart)
@@ -819,12 +648,6 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
         left.EndRow >= right.StartRow;
 
     private readonly record struct CellRange(int StartColumn, int EndColumn, uint StartRow, uint EndRow);
-
-    private readonly record struct SmallCardCompanyNameAnchor(
-        double LeftPoints,
-        double TopPoints,
-        double WidthPoints,
-        double HeightPoints);
 
     private static bool SharedStringsContainCoaLargeMarkers(WorkbookPart workbookPart)
     {
@@ -1143,131 +966,68 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
 
     private static class SmallCardCompanyNameOverlay
     {
-        private const string FontFaceName = "DFKai-SB";
-        private const double PrintAreaOriginXPoints = 5D;
-        private const double PrintAreaOriginYPoints = 3.5D;
-        private const double CompanyTextLeftAdjustPoints = 20D;
-        private const double CompanyTextTopAdjustPoints = 26D;
-        private const double CompanyTextHorizontalScale = 0.80D;
-        private const double CompanyTextFontSizePoints = 12D;
-        private static readonly object FontResolverLock = new();
+        private const double HeaderImageLeftPoints = 33.5D;
+        private const double HeaderImageTopPoints = 26.5D;
+        private const double HeaderImageColumnPitchPoints = 169D;
+        private const double HeaderImageRowPitchPoints = 264D;
+        private const double HeaderImageWidthPoints = 165D;
+        private const double HeaderWhiteoutWidthPoints = 180D;
 
         public static byte[] Add(
             byte[] pdfContent,
-            IReadOnlyList<IReadOnlyList<SmallCardCompanyNameAnchor>> anchorsByPage)
+            IReadOnlyList<int> cardCounts,
+            string headerImagePath)
         {
-            if (!File.Exists(DfKaiFontPath) || anchorsByPage.Count == 0)
+            if (!File.Exists(headerImagePath) || cardCounts.Count == 0)
             {
                 return pdfContent;
             }
 
-            EnsureFontResolver();
             using var pdfStream = new MemoryStream(pdfContent);
             using var document = PdfReader.Open(pdfStream, PdfDocumentOpenMode.Modify);
-            if (document.PageCount != anchorsByPage.Count)
+            if (document.PageCount != cardCounts.Count)
             {
                 throw new InvalidOperationException(
-                    $"COA small PDF rendered {document.PageCount} pages for {anchorsByPage.Count} worksheet pages.");
+                    $"COA small PDF rendered {document.PageCount} pages for {cardCounts.Count} worksheet pages.");
             }
 
-            var scale = SmallCardPdfScale / 100D;
-            var gridWidth = CalculateSmallCardGridWidthPoints() * scale;
-            var gridHeight = CalculateSmallCardGridHeightPoints() * scale;
-            var font = new XFont(
-                FontFaceName,
-                CompanyTextFontSizePoints * scale,
-                XFontStyleEx.Bold,
-                new XPdfFontOptions(PdfFontEncoding.Unicode));
+            using var image = XImage.FromFile(headerImagePath);
+            if (image.PixelWidth <= 0 || image.PixelHeight <= 0)
+            {
+                return pdfContent;
+            }
+
+            var headerImageHeight = HeaderImageWidthPoints * image.PixelHeight / image.PixelWidth;
 
             for (var pageIndex = 0; pageIndex < document.PageCount; pageIndex++)
             {
                 var page = document.Pages[pageIndex];
-                var contentLeft =
-                    ((page.Width.Point - gridWidth) / 2D) -
-                    (PrintAreaOriginXPoints * scale);
-                var contentTop =
-                    ((page.Height.Point - gridHeight) / 2D) -
-                    (PrintAreaOriginYPoints * scale) +
-                    CompanyTextTopAdjustPoints;
                 using var graphics = XGraphics.FromPdfPage(page, XGraphicsPdfPageOptions.Append);
 
-                foreach (var anchor in anchorsByPage[pageIndex])
+                for (var cardIndex = 0; cardIndex < cardCounts[pageIndex]; cardIndex++)
                 {
-                    var textBoxWidth = anchor.WidthPoints * scale;
-                    var centerX =
-                        contentLeft +
-                        ((anchor.LeftPoints + (anchor.WidthPoints / 2D)) * scale) +
-                        CompanyTextLeftAdjustPoints;
-                    var top =
-                        contentTop +
-                        (anchor.TopPoints * scale);
-                    var bounds = new XRect(
-                        -textBoxWidth / 2D,
+                    var column = cardIndex % SmallCardColumnsPerPage;
+                    var row = cardIndex / SmallCardColumnsPerPage;
+                    var left = HeaderImageLeftPoints + (column * HeaderImageColumnPitchPoints);
+                    var top = HeaderImageTopPoints + (row * HeaderImageRowPitchPoints);
+                    graphics.DrawRectangle(
+                        XBrushes.White,
+                        left,
                         top,
-                        textBoxWidth,
-                        14D * scale);
-
-                    var state = graphics.Save();
-                    graphics.TranslateTransform(centerX, 0D);
-                    graphics.ScaleTransform(CompanyTextHorizontalScale, 1D);
-                    graphics.DrawString(
-                        SmallCardCompanyName,
-                        font,
-                        XBrushes.Black,
-                        bounds,
-                        XStringFormats.Center);
-                    graphics.Restore(state);
+                        HeaderWhiteoutWidthPoints,
+                        headerImageHeight + 2D);
+                    graphics.DrawImage(
+                        image,
+                        left,
+                        top,
+                        HeaderImageWidthPoints,
+                        headerImageHeight);
                 }
             }
 
             using var output = new MemoryStream();
             document.Save(output, closeStream: false);
             return output.ToArray();
-        }
-
-        private static double CalculateSmallCardGridWidthPoints() =>
-            SmallCardColumnsPerPage * SmallCardWidthPoints +
-            (SmallCardColumnsPerPage - 1) * SmallCardHorizontalGapPoints;
-
-        private static double CalculateSmallCardGridHeightPoints()
-        {
-            const int rowsPerPage = 3;
-            return rowsPerPage * SmallCardHeightPoints +
-                (rowsPerPage - 1) * SmallCardVerticalGapPoints;
-        }
-
-        private static void EnsureFontResolver()
-        {
-            if (GlobalFontSettings.FontResolver is DfKaiFontResolver)
-            {
-                return;
-            }
-
-            lock (FontResolverLock)
-            {
-                if (GlobalFontSettings.FontResolver is null)
-                {
-                    GlobalFontSettings.FontResolver = new DfKaiFontResolver();
-                }
-            }
-        }
-
-        private sealed class DfKaiFontResolver : IFontResolver
-        {
-            private static readonly byte[] FontBytes = File.ReadAllBytes(DfKaiFontPath);
-
-            public byte[]? GetFont(string faceName) =>
-                string.Equals(faceName, FontFaceName, StringComparison.OrdinalIgnoreCase)
-                    ? FontBytes
-                    : null;
-
-            public FontResolverInfo? ResolveTypeface(
-                string familyName,
-                bool isBold,
-                bool isItalic) =>
-                string.Equals(familyName, FontFaceName, StringComparison.OrdinalIgnoreCase)
-                    ? new FontResolverInfo(FontFaceName, isBold, isItalic)
-                    : null;
         }
     }
 

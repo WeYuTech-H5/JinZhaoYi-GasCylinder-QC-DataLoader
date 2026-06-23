@@ -3,7 +3,6 @@ using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Spreadsheet;
 using FluentAssertions;
-using System.Collections;
 using System.Reflection;
 using JinZhaoYi.GasQcDataLoader.Configuration;
 using JinZhaoYi.GasQcDataLoader.DataModels;
@@ -292,25 +291,16 @@ public sealed class CoaWorkbookExporterTests
     }
 
     [Fact]
-    public void PdfConversionWorkbook_keeps_company_name_anchor_for_each_used_small_card_slot()
+    public void Project_contains_small_card_pdf_header_image_asset()
     {
-        var exporter = CreateExporter();
-        var rows = Enumerable.Range(1, 5)
-            .Select(index => CreateRow($"STD-N{index:000}", "1L_Cylinder"))
-            .ToArray();
-        var download = exporter.ExportSmallForDownload(rows, "20260521", 9);
+        var assetPath = Path.Combine(
+            AppContext.BaseDirectory,
+            "wwwroot",
+            "image",
+            "coa-small-card-header.png");
 
-        var preparedContent = PrepareWorkbookForPdfConversion(download.Content.ToArray());
-        var method = typeof(SpreadsheetPdfConverter).GetMethod(
-            "GetSmallCardCompanyNameAnchors",
-            BindingFlags.NonPublic | BindingFlags.Static);
-
-        var pages = ((IEnumerable)method!.Invoke(null, [preparedContent])!)
-            .Cast<IEnumerable>()
-            .ToArray();
-
-        pages.Should().HaveCount(1);
-        pages[0].Cast<object>().Should().HaveCount(5);
+        File.Exists(assetPath).Should().BeTrue();
+        new FileInfo(assetPath).Length.Should().BeGreaterThan(0);
     }
 
     [Fact]
