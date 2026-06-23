@@ -253,9 +253,10 @@ public sealed class CoaWorkbookExporterTests
         var preparedDownload = new CoaWorkbookDownload(preparedContent, download.ContentType, download.FileName);
 
         GetSmallSheetPageSetup(download, sheetName).Should().Be((false, 9U, null, null, 70U, 0.25D, 0.75D));
-        GetSmallSheetPageSetup(preparedDownload, sheetName).Should().Be((true, 9U, 1U, 1U, 105U, 0.25D, 0.25D));
+        GetSmallSheetPageSetup(preparedDownload, sheetName).Should().Be((false, 9U, null, null, 73U, 0.25D, 0.25D));
         IsHorizontallyCentered(preparedDownload, sheetName).Should().BeTrue();
-        GetPrintArea(preparedDownload, sheetName).Should().Be($"'{sheetName}'!$B$2:$AA$64");
+        IsVerticallyCentered(preparedDownload, sheetName).Should().BeTrue();
+        GetPrintArea(preparedDownload, sheetName).Should().Be($"'{sheetName}'!$B$2:$AA$66");
     }
 
     [Fact]
@@ -458,6 +459,17 @@ public sealed class CoaWorkbookExporterTests
             .First(item => string.Equals(item.Name?.Value, sheetName, StringComparison.OrdinalIgnoreCase));
         var worksheetPart = (WorksheetPart)workbookPart.GetPartById(sheet.Id!);
         return worksheetPart.Worksheet.GetFirstChild<PrintOptions>()?.HorizontalCentered?.Value == true;
+    }
+
+    private static bool IsVerticallyCentered(CoaWorkbookDownload download, string sheetName)
+    {
+        using var stream = new MemoryStream(download.Content);
+        using var document = SpreadsheetDocument.Open(stream, false);
+        var workbookPart = document.WorkbookPart!;
+        var sheet = workbookPart.Workbook.Sheets!.Elements<Sheet>()
+            .First(item => string.Equals(item.Name?.Value, sheetName, StringComparison.OrdinalIgnoreCase));
+        var worksheetPart = (WorksheetPart)workbookPart.GetPartById(sheet.Id!);
+        return worksheetPart.Worksheet.GetFirstChild<PrintOptions>()?.VerticalCentered?.Value == true;
     }
 
     private static bool HasLegacyHeaderFooterDrawing(CoaWorkbookDownload download, string sheetName)
