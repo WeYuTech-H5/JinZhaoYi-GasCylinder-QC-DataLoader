@@ -19,6 +19,8 @@ namespace JinZhaoYi.GasQcDataLoader.Services.Service;
 
 public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) : ISpreadsheetPdfConverter
 {
+    private const string SmallCardPdfPrintArea = "$B$2:$AA$64";
+    private const uint SmallCardPdfScale = 105U;
     private readonly SchedulerCoaExportOptions _options = options.Value.CoaExport;
 
     public async Task<byte[]> ConvertXlsxToPdfAsync(
@@ -27,9 +29,14 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
         CancellationToken cancellationToken)
     {
         var isCoaLargeWorkbook = WorkbookContainsCoaLargeWorksheet(workbookContent);
+        var isCoaSmallWorkbook = WorkbookContainsCoaSmallWorksheet(workbookContent);
+        var pdfWorkbookContent = isCoaLargeWorkbook || isCoaSmallWorkbook
+            ? PrepareWorkbookForPdfConversion(workbookContent)
+            : workbookContent;
+
         if (!isCoaLargeWorkbook)
         {
-            var excelPdfContent = TryConvertWithExcel(workbookContent);
+            var excelPdfContent = TryConvertWithExcel(pdfWorkbookContent);
             if (excelPdfContent is not null)
             {
                 return excelPdfContent;
@@ -54,7 +61,6 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
         try
         {
             var workbookPath = Path.Combine(tempDirectory, "input.xlsx");
-            var pdfWorkbookContent = PrepareWorkbookForPdfConversion(workbookContent);
             await File.WriteAllBytesAsync(workbookPath, pdfWorkbookContent, cancellationToken);
             var userProfileDirectory = Path.Combine(tempDirectory, "lo-profile");
             Directory.CreateDirectory(userProfileDirectory);
@@ -110,7 +116,7 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
             }
 
             var pdfContent = await File.ReadAllBytesAsync(pdfPath, cancellationToken);
-            return OverlayPdfHeaderImageIfNeeded(pdfContent, workbookContent);
+            return OverlayPdfHeaderImageIfNeeded(pdfContent, pdfWorkbookContent);
         }
         catch (System.ComponentModel.Win32Exception ex)
         {
@@ -174,6 +180,10 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
                 {
                     ApplyCoaLargePdfPrintLayout(worksheetPart);
                 }
+                else if (IsCoaSmallWorksheet(workbookPart, worksheetPart))
+                {
+                    ApplyCoaSmallPdfPrintLayout(workbookPart, worksheetPart);
+                }
 
                 ReplaceHeaderFooterWithPdfHeaderImage(workbookPart, worksheetPart, pdfHeaderImagePath);
             }
@@ -214,6 +224,61 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
         }
 
         printOptions.HorizontalCentered = true;
+        worksheet.Save();
+    }
+
+    private static void ApplyCoaSmallPdfPrintLayout(WorkbookPart workbookPart, WorksheetPart worksheetPart)
+    {
+        var worksheet = worksheetPart.Worksheet;
+        var sheetProperties = worksheet.GetFirstChild<SheetProperties>();
+        if (sheetProperties is null)
+        {
+            sheetProperties = new SheetProperties();
+            worksheet.InsertAt(sheetProperties, 0);
+        }
+
+        sheetProperties.PageSetupProperties ??= new PageSetupProperties();
+        sheetProperties.PageSetupProperties.FitToPage = true;
+
+        var pageMargins = worksheet.GetFirstChild<PageMargins>();
+        if (pageMargins is null)
+        {
+            pageMargins = new PageMargins();
+            worksheet.Append(pageMargins);
+        }
+
+        // 小卡 PDF 依客戶要求用舊版 Excel 版型再放大 150% 輸出；
+        // 舊版模板原本是 70%，因此 PDF 暫存檔使用 70% * 150% = 105%，並限制在單頁 9 格。
+        pageMargins.Left = 0.25D;
+        pageMargins.Right = 0.25D;
+        pageMargins.Top = 0.25D;
+        pageMargins.Bottom = 0.25D;
+        pageMargins.Header = 0D;
+        pageMargins.Footer = 0D;
+
+        var printOptions = worksheet.GetFirstChild<PrintOptions>();
+        if (printOptions is null)
+        {
+            printOptions = new PrintOptions();
+            worksheet.InsertBefore(printOptions, pageMargins);
+        }
+
+        printOptions.HorizontalCentered = true;
+
+        var pageSetup = worksheet.GetFirstChild<PageSetup>();
+        if (pageSetup is null)
+        {
+            pageSetup = new PageSetup();
+            worksheet.Append(pageSetup);
+        }
+
+        pageSetup.PaperSize = 9U; // A4
+        pageSetup.Orientation = OrientationValues.Portrait;
+        pageSetup.Scale = SmallCardPdfScale;
+        pageSetup.FitToWidth = 1U;
+        pageSetup.FitToHeight = 1U;
+
+        SetPrintArea(workbookPart, worksheetPart, SmallCardPdfPrintArea);
         worksheet.Save();
     }
 
@@ -263,6 +328,20 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
             .Any(text => text.Contains("Certificate Of Analysis", StringComparison.OrdinalIgnoreCase));
     }
 
+    private static bool IsCoaSmallWorksheet(WorkbookPart workbookPart, WorksheetPart worksheetPart)
+    {
+        var sheetTexts = worksheetPart.Worksheet
+            .Descendants<Row>()
+            .Where(row => (row.RowIndex?.Value ?? 0) <= 70)
+            .SelectMany(row => row.Elements<Cell>())
+            .Select(cell => GetCellText(workbookPart, cell))
+            .ToArray();
+
+        return sheetTexts.Any(text => text.Contains("NF-SEMI STD", StringComparison.OrdinalIgnoreCase)) &&
+            sheetTexts.Any(text => text.Contains("Compounds", StringComparison.OrdinalIgnoreCase)) &&
+            sheetTexts.Any(text => text.Contains("Analytical Results", StringComparison.OrdinalIgnoreCase));
+    }
+
     private static string GetCellText(WorkbookPart workbookPart, Cell cell)
     {
         if (cell.DataType?.Value == CellValues.SharedString &&
@@ -307,12 +386,65 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
                 SharedStringsContainCoaLargeMarkers(workbookPart));
     }
 
+    private static bool WorkbookContainsCoaSmallWorksheet(byte[] workbookContent)
+    {
+        using var stream = new MemoryStream(workbookContent);
+        using var document = SpreadsheetDocument.Open(stream, false);
+        var workbookPart = document.WorkbookPart;
+        return workbookPart is not null &&
+            (workbookPart.WorksheetParts.Any(worksheetPart => IsCoaSmallWorksheet(workbookPart, worksheetPart)) ||
+                SharedStringsContainCoaSmallMarkers(workbookPart));
+    }
+
     private static bool SharedStringsContainCoaLargeMarkers(WorkbookPart workbookPart)
     {
         var sharedText = workbookPart.SharedStringTablePart?.SharedStringTable?.InnerText ?? string.Empty;
         return sharedText.Contains("Certificate Of Analysis", StringComparison.OrdinalIgnoreCase) &&
             sharedText.Contains("General Information", StringComparison.OrdinalIgnoreCase) &&
             sharedText.Contains("CAS Number", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool SharedStringsContainCoaSmallMarkers(WorkbookPart workbookPart)
+    {
+        var sharedText = workbookPart.SharedStringTablePart?.SharedStringTable?.InnerText ?? string.Empty;
+        return sharedText.Contains("NF-SEMI STD", StringComparison.OrdinalIgnoreCase) &&
+            sharedText.Contains("Compounds", StringComparison.OrdinalIgnoreCase) &&
+            sharedText.Contains("Analytical Results", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void SetPrintArea(WorkbookPart workbookPart, WorksheetPart worksheetPart, string areaReference)
+    {
+        var sheets = workbookPart.Workbook.Sheets?.Elements<Sheet>().ToArray() ?? [];
+        var sheetIndex = Array.FindIndex(sheets, sheet => sheet.Id?.Value == workbookPart.GetIdOfPart(worksheetPart));
+        if (sheetIndex < 0)
+        {
+            return;
+        }
+
+        var sheetName = sheets[sheetIndex].Name?.Value;
+        if (string.IsNullOrWhiteSpace(sheetName))
+        {
+            return;
+        }
+
+        workbookPart.Workbook.DefinedNames ??= new DefinedNames();
+        var definedNames = workbookPart.Workbook.DefinedNames;
+        var localSheetId = (uint)sheetIndex;
+        foreach (var existing in definedNames
+            .Elements<DefinedName>()
+            .Where(name => name.Name?.Value == "_xlnm.Print_Area" && name.LocalSheetId?.Value == localSheetId)
+            .ToArray())
+        {
+            existing.Remove();
+        }
+
+        var escapedSheetName = sheetName.Replace("'", "''", StringComparison.Ordinal);
+        definedNames.Append(new DefinedName
+        {
+            Name = "_xlnm.Print_Area",
+            LocalSheetId = localSheetId,
+            Text = $"'{escapedSheetName}'!{areaReference}"
+        });
     }
 
     private static void ReplaceHeaderFooterImagesWithPdfHeaderImage(WorksheetPart worksheetPart, string pdfHeaderImagePath)

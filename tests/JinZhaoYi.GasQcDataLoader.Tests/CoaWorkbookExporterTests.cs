@@ -224,7 +224,7 @@ public sealed class CoaWorkbookExporterTests
     }
 
     [Fact]
-    public void ExportSmallForDownload_sets_each_sheet_to_nine_card_a4_print_area()
+    public void ExportSmallForDownload_preserves_legacy_small_card_excel_print_layout()
     {
         var exporter = CreateExporter();
         var rows = Enumerable.Range(1, 10)
@@ -234,9 +234,28 @@ public sealed class CoaWorkbookExporterTests
         var download = exporter.ExportSmallForDownload(rows, "20260521", 9);
         var sheetNames = GetSheetNames(download);
 
-        GetPrintArea(download, sheetNames[0]).Should().Be($"'{sheetNames[0]}'!$B$2:$AA$66");
-        GetPrintArea(download, sheetNames[1]).Should().Be($"'{sheetNames[1]}'!$B$2:$AA$66");
-        GetSmallSheetPageSetup(download, sheetNames[0]).Should().Be((true, 9U, 1U, 1U));
+        GetPrintArea(download, sheetNames[0]).Should().BeNull();
+        GetPrintArea(download, sheetNames[1]).Should().BeNull();
+        GetSmallSheetPageSetup(download, sheetNames[0]).Should().Be((false, 9U, null, null, 70U, 0.25D, 0.75D));
+    }
+
+    [Fact]
+    public void PdfConversionWorkbook_applies_small_card_pdf_scale_without_changing_excel_download_layout()
+    {
+        var exporter = CreateExporter();
+        var rows = Enumerable.Range(1, 2)
+            .Select(index => CreateRow($"STD-N{index:000}", "1L_Cylinder", index))
+            .ToArray();
+        var download = exporter.ExportSmallForDownload(rows, "20260521", 9);
+        var sheetName = GetSheetNames(download)[0];
+
+        var preparedContent = PrepareWorkbookForPdfConversion(download.Content.ToArray());
+        var preparedDownload = new CoaWorkbookDownload(preparedContent, download.ContentType, download.FileName);
+
+        GetSmallSheetPageSetup(download, sheetName).Should().Be((false, 9U, null, null, 70U, 0.25D, 0.75D));
+        GetSmallSheetPageSetup(preparedDownload, sheetName).Should().Be((true, 9U, 1U, 1U, 105U, 0.25D, 0.25D));
+        IsHorizontallyCentered(preparedDownload, sheetName).Should().BeTrue();
+        GetPrintArea(preparedDownload, sheetName).Should().Be($"'{sheetName}'!$B$2:$AA$64");
     }
 
     [Fact]
@@ -274,7 +293,7 @@ public sealed class CoaWorkbookExporterTests
     }
 
     [Fact]
-    public void ExportSmallForDownload_keeps_only_used_card_signature_rows()
+    public void ExportSmallForDownload_preserves_legacy_signature_rows_for_unused_slots()
     {
         var exporter = CreateExporter();
 
@@ -287,7 +306,7 @@ public sealed class CoaWorkbookExporterTests
 
         foreach (var cellReference in new[] { "K22", "O22", "T22", "X22", "B44", "F44", "K44", "O44", "T44", "X44", "B66", "F66", "K66", "O66", "T66", "X66" })
         {
-            sheet.Cell(cellReference).GetString().Should().BeEmpty();
+            sheet.Cell(cellReference).GetString().Should().NotBeEmpty();
         }
     }
 
@@ -388,7 +407,14 @@ public sealed class CoaWorkbookExporterTests
             ?.Text;
     }
 
-    private static (bool FitToPage, uint? PaperSize, uint? FitToWidth, uint? FitToHeight) GetSmallSheetPageSetup(
+    private static (
+        bool FitToPage,
+        uint? PaperSize,
+        uint? FitToWidth,
+        uint? FitToHeight,
+        uint? Scale,
+        double? LeftMargin,
+        double? TopMargin) GetSmallSheetPageSetup(
         CoaWorkbookDownload download,
         string sheetName)
     {
@@ -400,11 +426,15 @@ public sealed class CoaWorkbookExporterTests
         var worksheetPart = (WorksheetPart)workbookPart.GetPartById(sheet.Id!);
         var worksheet = worksheetPart.Worksheet;
         var pageSetup = worksheet.GetFirstChild<PageSetup>();
+        var pageMargins = worksheet.GetFirstChild<PageMargins>();
         return (
             worksheet.GetFirstChild<SheetProperties>()?.PageSetupProperties?.FitToPage?.Value == true,
             pageSetup?.PaperSize?.Value,
             pageSetup?.FitToWidth?.Value,
-            pageSetup?.FitToHeight?.Value);
+            pageSetup?.FitToHeight?.Value,
+            pageSetup?.Scale?.Value,
+            pageMargins?.Left?.Value,
+            pageMargins?.Top?.Value);
     }
 
     private static bool HasWorksheetDrawing(CoaWorkbookDownload download, string sheetName)
@@ -417,6 +447,17 @@ public sealed class CoaWorkbookExporterTests
         var worksheetPart = (WorksheetPart)workbookPart.GetPartById(sheet.Id!);
         return worksheetPart.DrawingsPart is not null &&
             worksheetPart.Worksheet.Descendants<Drawing>().Any();
+    }
+
+    private static bool IsHorizontallyCentered(CoaWorkbookDownload download, string sheetName)
+    {
+        using var stream = new MemoryStream(download.Content);
+        using var document = SpreadsheetDocument.Open(stream, false);
+        var workbookPart = document.WorkbookPart!;
+        var sheet = workbookPart.Workbook.Sheets!.Elements<Sheet>()
+            .First(item => string.Equals(item.Name?.Value, sheetName, StringComparison.OrdinalIgnoreCase));
+        var worksheetPart = (WorksheetPart)workbookPart.GetPartById(sheet.Id!);
+        return worksheetPart.Worksheet.GetFirstChild<PrintOptions>()?.HorizontalCentered?.Value == true;
     }
 
     private static bool HasLegacyHeaderFooterDrawing(CoaWorkbookDownload download, string sheetName)

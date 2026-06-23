@@ -20,7 +20,6 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
     private const string Large1LSheetName = "COA(1 L)";
     private const string LargeYadongSheetName = "COA(亞東)";
     private const string SmallBlankSheetName = "Report(空白)";
-    private const string SmallCardPrintArea = "$B$2:$AA$66";
 
     private static readonly LargeContainerFields LargeHalfLiterFields = new(
         ProductName: "NF-SEMI STD",
@@ -58,15 +57,15 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
 
     private static readonly IReadOnlyList<SmallCardLayout> SmallCardLayouts =
     [
-        new("F6", "F8", "B19", "F19", "B20", "B2:I22"),
-        new("O6", "O8", "K19", "O19", "K20", "K2:R22"),
-        new("X6", "X8", "T19", "X19", "T20", "T2:AA22"),
-        new("F28", "F30", "B41", "F41", "B42", "B24:I44"),
-        new("O28", "O30", "K41", "O41", "K42", "K24:R44"),
-        new("X28", "X30", "T41", "X41", "T42", "T24:AA44"),
-        new("F50", "F52", "B63", "F63", "B64", "B46:I66"),
-        new("O50", "O52", "K63", "O63", "K64", "K46:R66"),
-        new("X50", "X52", "T63", "X63", "T64", "T46:AA66")
+        new("F6", "F8", "B19", "F19", "B20", "B2:I20"),
+        new("O6", "O8", "K19", "O19", "K20", "K2:R20"),
+        new("X6", "X8", "T19", "X19", "T20", "T2:AA20"),
+        new("F28", "F30", "B41", "F41", "B42", "B24:I42"),
+        new("O28", "O30", "K41", "O41", "K42", "K24:R42"),
+        new("X28", "X30", "T41", "X41", "T42", "T24:AA42"),
+        new("F50", "F52", "B63", "F63", "B64", "B46:I64"),
+        new("O50", "O52", "K63", "O63", "K64", "K46:R64"),
+        new("X50", "X52", "T63", "X63", "T64", "T46:AA64")
     ];
 
     private readonly SchedulerOptions _options = options.Value;
@@ -99,7 +98,7 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
         var orderedRows = OrderRows(rows);
         var templatePath = ResolveTemplatePath(_options.CoaExport.SmallTemplatePath, "COA(小卡).xlsx");
 
-        // The old cardsPerPage request value is kept for API compatibility; the A4 template has 9 fixed slots.
+        // 小卡舊版模板固定是一頁 9 格；cardsPerPage 參數保留給既有 API 相容。
         var content = ExportSmallWorkbookToBytes(templatePath, orderedRows, SmallCardLayouts.Count);
         return new CoaWorkbookDownload(
             content,
@@ -196,11 +195,11 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
                 WriteSmallCard(worksheetPart, SmallCardLayouts[cardIndex], page.Rows[cardIndex]);
             }
 
-            ApplySmallCardPrintLayout(worksheetPart);
+            // 下載用 Excel 必須保留「修改前第一版」模板本身的列印比例與邊界；
+            // PDF 的 150% 放大與窄邊界只在 SpreadsheetPdfConverter 的暫存檔處理。
         }
 
         DeleteOpenXmlSheets(workbookPart, "Report(範本)", "欄位註解");
-        SetSmallCardPrintAreas(workbookPart);
         DeleteCalculationChain(workbookPart);
         ResetWorkbookView(workbookPart);
         workbookPart.Workbook.Save();
@@ -582,106 +581,6 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
         }
 
         return pages;
-    }
-
-    private static void ApplySmallCardPrintLayout(WorksheetPart worksheetPart)
-    {
-        var worksheet = worksheetPart.Worksheet;
-
-        var sheetProperties = worksheet.GetFirstChild<SheetProperties>();
-        if (sheetProperties is null)
-        {
-            sheetProperties = new SheetProperties();
-            worksheet.InsertAt(sheetProperties, 0);
-        }
-
-        sheetProperties.PageSetupProperties ??= new PageSetupProperties();
-        sheetProperties.PageSetupProperties.FitToPage = true;
-
-        var pageMargins = worksheet.GetFirstChild<PageMargins>();
-        if (pageMargins is null)
-        {
-            pageMargins = new PageMargins();
-            worksheet.Append(pageMargins);
-        }
-
-        pageMargins.Left = 0.25D;
-        pageMargins.Right = 0.25D;
-        pageMargins.Top = 0.25D;
-        pageMargins.Bottom = 0.25D;
-        pageMargins.Header = 0D;
-        pageMargins.Footer = 0D;
-
-        var printOptions = worksheet.GetFirstChild<PrintOptions>();
-        if (printOptions is null)
-        {
-            printOptions = new PrintOptions();
-            worksheet.InsertBefore(printOptions, pageMargins);
-        }
-
-        printOptions.HorizontalCentered = true;
-
-        var pageSetup = worksheet.GetFirstChild<PageSetup>();
-        if (pageSetup is null)
-        {
-            pageSetup = new PageSetup();
-            worksheet.Append(pageSetup);
-        }
-
-        pageSetup.PaperSize = 9U; // A4
-        pageSetup.Orientation = OrientationValues.Portrait;
-        pageSetup.FitToWidth = 1U;
-        pageSetup.FitToHeight = 1U;
-        pageSetup.Scale = null;
-
-        worksheet.Save();
-    }
-
-    private static void SetSmallCardPrintAreas(WorkbookPart workbookPart)
-    {
-        if (workbookPart.Workbook.DefinedNames is not null)
-        {
-            foreach (var existing in workbookPart.Workbook.DefinedNames
-                .Elements<DefinedName>()
-                .Where(name => name.Name?.Value == "_xlnm.Print_Area")
-                .ToArray())
-            {
-                existing.Remove();
-            }
-        }
-
-        var sheets = workbookPart.Workbook.Sheets?.Elements<Sheet>().ToArray() ?? [];
-        for (var index = 0; index < sheets.Length; index++)
-        {
-            var sheetName = sheets[index].Name?.Value;
-            if (!string.IsNullOrWhiteSpace(sheetName))
-            {
-                SetPrintArea(workbookPart, sheetName, (uint)index, SmallCardPrintArea);
-            }
-        }
-    }
-
-    private static void SetPrintArea(WorkbookPart workbookPart, string sheetName, uint localSheetIdValue, string areaReference)
-    {
-        workbookPart.Workbook.DefinedNames ??= new DefinedNames();
-        var definedNames = workbookPart.Workbook.DefinedNames;
-        var localSheetId = (UInt32Value)localSheetIdValue;
-
-        foreach (var existing in definedNames
-            .Elements<DefinedName>()
-            .Where(name => name.Name?.Value == "_xlnm.Print_Area" && name.LocalSheetId?.Value == localSheetId.Value)
-            .ToArray())
-        {
-            existing.Remove();
-        }
-
-        var escapedSheetName = sheetName.Replace("'", "''", StringComparison.Ordinal);
-        definedNames.Append(new DefinedName
-        {
-            Name = "_xlnm.Print_Area",
-            LocalSheetId = localSheetId,
-            Text = $"'{escapedSheetName}'!{areaReference}"
-        });
     }
 
     private static IReadOnlyList<QcDataRow> OrderRows(IReadOnlyCollection<QcDataRow> rows) =>
