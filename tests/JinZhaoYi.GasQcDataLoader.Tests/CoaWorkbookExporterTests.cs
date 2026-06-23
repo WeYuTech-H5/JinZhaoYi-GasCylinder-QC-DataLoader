@@ -3,6 +3,7 @@ using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Spreadsheet;
 using FluentAssertions;
+using System.Collections;
 using System.Reflection;
 using JinZhaoYi.GasQcDataLoader.Configuration;
 using JinZhaoYi.GasQcDataLoader.DataModels;
@@ -288,6 +289,28 @@ public sealed class CoaWorkbookExporterTests
         CountDrawingText(preparedDownload, sheetName, "金 兆 益 科 技 股 份 有 限 公 司").Should().Be(1);
         HasDrawingInRange(preparedDownload, sheetName, "K2:R22").Should().BeFalse();
         HasDrawingInRange(preparedDownload, sheetName, "T46:AA66").Should().BeFalse();
+    }
+
+    [Fact]
+    public void PdfConversionWorkbook_keeps_company_name_anchor_for_each_used_small_card_slot()
+    {
+        var exporter = CreateExporter();
+        var rows = Enumerable.Range(1, 5)
+            .Select(index => CreateRow($"STD-N{index:000}", "1L_Cylinder"))
+            .ToArray();
+        var download = exporter.ExportSmallForDownload(rows, "20260521", 9);
+
+        var preparedContent = PrepareWorkbookForPdfConversion(download.Content.ToArray());
+        var method = typeof(SpreadsheetPdfConverter).GetMethod(
+            "GetSmallCardCompanyNameAnchors",
+            BindingFlags.NonPublic | BindingFlags.Static);
+
+        var pages = ((IEnumerable)method!.Invoke(null, [preparedContent])!)
+            .Cast<IEnumerable>()
+            .ToArray();
+
+        pages.Should().HaveCount(1);
+        pages[0].Cast<object>().Should().HaveCount(5);
     }
 
     [Fact]

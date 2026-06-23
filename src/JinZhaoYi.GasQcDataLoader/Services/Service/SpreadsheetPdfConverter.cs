@@ -142,7 +142,9 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
             pdfContent = OverlayPdfHeaderImageIfNeeded(pdfContent, pdfWorkbookContent);
             if (isCoaSmallWorkbook)
             {
-                pdfContent = SmallCardCompanyNameOverlay.Add(pdfContent, GetSmallCardCounts(pdfWorkbookContent));
+                pdfContent = SmallCardCompanyNameOverlay.Add(
+                    pdfContent,
+                    GetSmallCardCompanyNameAnchors(pdfWorkbookContent));
             }
 
             return pdfContent;
@@ -461,6 +463,184 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
         return counts;
     }
 
+    private static IReadOnlyList<IReadOnlyList<SmallCardCompanyNameAnchor>> GetSmallCardCompanyNameAnchors(byte[] workbookContent)
+    {
+        using var stream = new MemoryStream(workbookContent);
+        using var document = SpreadsheetDocument.Open(stream, false);
+        var workbookPart = document.WorkbookPart;
+        if (workbookPart?.Workbook.Sheets is null)
+        {
+            return [];
+        }
+
+        var pages = new List<IReadOnlyList<SmallCardCompanyNameAnchor>>();
+        foreach (var sheet in workbookPart.Workbook.Sheets.Elements<Sheet>())
+        {
+            if (sheet.Id?.Value is not { } relationshipId ||
+                workbookPart.GetPartById(relationshipId) is not WorksheetPart worksheetPart ||
+                !IsCoaSmallWorksheet(workbookPart, worksheetPart))
+            {
+                continue;
+            }
+
+            pages.Add(ReadSmallCardCompanyNameAnchors(worksheetPart));
+        }
+
+        return pages;
+    }
+
+    private static IReadOnlyList<SmallCardCompanyNameAnchor> ReadSmallCardCompanyNameAnchors(WorksheetPart worksheetPart)
+    {
+        var drawingXml = worksheetPart.DrawingsPart?.WorksheetDrawing?.OuterXml;
+        if (string.IsNullOrWhiteSpace(drawingXml))
+        {
+            return [];
+        }
+
+        XNamespace xdr = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing";
+        XNamespace a = "http://schemas.openxmlformats.org/drawingml/2006/main";
+        var document = XDocument.Parse(drawingXml);
+        var anchors = new List<SmallCardCompanyNameAnchor>();
+        foreach (var twoCellAnchor in document.Descendants(xdr + "twoCellAnchor"))
+        {
+            foreach (var shape in twoCellAnchor.Elements(xdr + "sp"))
+            {
+                AddCompanyNameAnchorIfPresent(shape, null, anchors, xdr, a);
+            }
+
+            foreach (var groupShape in twoCellAnchor.Elements(xdr + "grpSp"))
+            {
+                var groupTransform = groupShape.Element(xdr + "grpSpPr")?.Element(a + "xfrm");
+                foreach (var shape in groupShape.Elements(xdr + "sp"))
+                {
+                    AddCompanyNameAnchorIfPresent(shape, groupTransform, anchors, xdr, a);
+                }
+            }
+        }
+
+        return anchors
+            .OrderBy(anchor => anchor.TopPoints)
+            .ThenBy(anchor => anchor.LeftPoints)
+            .ToArray();
+    }
+
+    private static void AddCompanyNameAnchorIfPresent(
+        XElement shape,
+        XElement? groupTransform,
+        List<SmallCardCompanyNameAnchor> anchors,
+        XNamespace xdr,
+        XNamespace a)
+    {
+        var text = string.Concat(shape.Descendants(a + "t").Select(element => element.Value));
+        if (!text.Contains(SmallCardCompanyName, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var transform = shape.Element(xdr + "spPr")?.Element(a + "xfrm");
+        if (transform is null ||
+            !TryReadTransform(transform, a, out var shapeLeft, out var shapeTop, out var shapeWidth, out var shapeHeight))
+        {
+            return;
+        }
+
+        if (groupTransform is not null)
+        {
+            if (!TryReadGroupTransform(
+                    groupTransform,
+                    a,
+                    out var groupLeft,
+                    out var groupTop,
+                    out var groupWidth,
+                    out var groupHeight,
+                    out var childLeft,
+                    out var childTop,
+                    out var childWidth,
+                    out var childHeight) ||
+                childWidth == 0L ||
+                childHeight == 0L)
+            {
+                return;
+            }
+
+            var scaleX = groupWidth / (double)childWidth;
+            var scaleY = groupHeight / (double)childHeight;
+            shapeWidth = (long)Math.Round(shapeWidth * scaleX);
+            shapeHeight = (long)Math.Round(shapeHeight * scaleY);
+            shapeLeft = (long)Math.Round(groupLeft + ((shapeLeft - childLeft) * scaleX));
+            shapeTop = (long)Math.Round(groupTop + ((shapeTop - childTop) * scaleY));
+        }
+
+        anchors.Add(new SmallCardCompanyNameAnchor(
+            shapeLeft / 12700D,
+            shapeTop / 12700D,
+            shapeWidth / 12700D,
+            shapeHeight / 12700D));
+    }
+
+    private static bool TryReadTransform(
+        XElement transform,
+        XNamespace a,
+        out long left,
+        out long top,
+        out long width,
+        out long height)
+    {
+        left = 0L;
+        top = 0L;
+        width = 0L;
+        height = 0L;
+
+        var offset = transform.Element(a + "off");
+        var extents = transform.Element(a + "ext");
+        return TryReadLong(offset, "x", out left) &&
+            TryReadLong(offset, "y", out top) &&
+            TryReadLong(extents, "cx", out width) &&
+            TryReadLong(extents, "cy", out height);
+    }
+
+    private static bool TryReadGroupTransform(
+        XElement transform,
+        XNamespace a,
+        out long left,
+        out long top,
+        out long width,
+        out long height,
+        out long childLeft,
+        out long childTop,
+        out long childWidth,
+        out long childHeight)
+    {
+        left = 0L;
+        top = 0L;
+        width = 0L;
+        height = 0L;
+        childLeft = 0L;
+        childTop = 0L;
+        childWidth = 0L;
+        childHeight = 0L;
+
+        var offset = transform.Element(a + "off");
+        var extents = transform.Element(a + "ext");
+        var childOffset = transform.Element(a + "chOff");
+        var childExtents = transform.Element(a + "chExt");
+        return TryReadLong(offset, "x", out left) &&
+            TryReadLong(offset, "y", out top) &&
+            TryReadLong(extents, "cx", out width) &&
+            TryReadLong(extents, "cy", out height) &&
+            TryReadLong(childOffset, "x", out childLeft) &&
+            TryReadLong(childOffset, "y", out childTop) &&
+            TryReadLong(childExtents, "cx", out childWidth) &&
+            TryReadLong(childExtents, "cy", out childHeight);
+    }
+
+    private static bool TryReadLong(XElement? element, string attributeName, out long value)
+    {
+        value = 0L;
+        return element?.Attribute(attributeName)?.Value is { } text &&
+            long.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out value);
+    }
+
     private static int GetSmallCardCount(WorkbookPart workbookPart, WorksheetPart worksheetPart)
     {
         var cells = worksheetPart.Worksheet.Descendants<Cell>()
@@ -639,6 +819,12 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
         left.EndRow >= right.StartRow;
 
     private readonly record struct CellRange(int StartColumn, int EndColumn, uint StartRow, uint EndRow);
+
+    private readonly record struct SmallCardCompanyNameAnchor(
+        double LeftPoints,
+        double TopPoints,
+        double WidthPoints,
+        double HeightPoints);
 
     private static bool SharedStringsContainCoaLargeMarkers(WorkbookPart workbookPart)
     {
@@ -958,16 +1144,19 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
     private static class SmallCardCompanyNameOverlay
     {
         private const string FontFaceName = "DFKai-SB";
-        private const double CompanyTextBoxWidthPoints = 188.3D;
-        private const double CompanyTextCenterOffsetPoints = 154D;
-        private const double CompanyTextTopOffsetPoints = 39D;
+        private const double PrintAreaOriginXPoints = 5D;
+        private const double PrintAreaOriginYPoints = 3.5D;
+        private const double CompanyTextLeftAdjustPoints = 20D;
+        private const double CompanyTextTopAdjustPoints = 26D;
         private const double CompanyTextHorizontalScale = 0.80D;
         private const double CompanyTextFontSizePoints = 12D;
         private static readonly object FontResolverLock = new();
 
-        public static byte[] Add(byte[] pdfContent, IReadOnlyList<int> cardCounts)
+        public static byte[] Add(
+            byte[] pdfContent,
+            IReadOnlyList<IReadOnlyList<SmallCardCompanyNameAnchor>> anchorsByPage)
         {
-            if (!File.Exists(DfKaiFontPath) || cardCounts.Count == 0)
+            if (!File.Exists(DfKaiFontPath) || anchorsByPage.Count == 0)
             {
                 return pdfContent;
             }
@@ -975,18 +1164,15 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
             EnsureFontResolver();
             using var pdfStream = new MemoryStream(pdfContent);
             using var document = PdfReader.Open(pdfStream, PdfDocumentOpenMode.Modify);
-            if (document.PageCount != cardCounts.Count)
+            if (document.PageCount != anchorsByPage.Count)
             {
                 throw new InvalidOperationException(
-                    $"COA small PDF rendered {document.PageCount} pages for {cardCounts.Count} worksheet pages.");
+                    $"COA small PDF rendered {document.PageCount} pages for {anchorsByPage.Count} worksheet pages.");
             }
 
             var scale = SmallCardPdfScale / 100D;
             var gridWidth = CalculateSmallCardGridWidthPoints() * scale;
             var gridHeight = CalculateSmallCardGridHeightPoints() * scale;
-            var columnPitch = (SmallCardWidthPoints + SmallCardHorizontalGapPoints) * scale;
-            var rowPitch = (SmallCardHeightPoints + SmallCardVerticalGapPoints) * scale;
-            var textBoxWidth = CompanyTextBoxWidthPoints * scale;
             var font = new XFont(
                 FontFaceName,
                 CompanyTextFontSizePoints * scale,
@@ -996,22 +1182,25 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
             for (var pageIndex = 0; pageIndex < document.PageCount; pageIndex++)
             {
                 var page = document.Pages[pageIndex];
-                var gridLeft = (page.Width.Point - gridWidth) / 2D;
-                var gridTop = (page.Height.Point - gridHeight) / 2D;
+                var contentLeft =
+                    ((page.Width.Point - gridWidth) / 2D) -
+                    (PrintAreaOriginXPoints * scale);
+                var contentTop =
+                    ((page.Height.Point - gridHeight) / 2D) -
+                    (PrintAreaOriginYPoints * scale) +
+                    CompanyTextTopAdjustPoints;
                 using var graphics = XGraphics.FromPdfPage(page, XGraphicsPdfPageOptions.Append);
 
-                for (var cardIndex = 0; cardIndex < cardCounts[pageIndex]; cardIndex++)
+                foreach (var anchor in anchorsByPage[pageIndex])
                 {
-                    var column = cardIndex % SmallCardColumnsPerPage;
-                    var row = cardIndex / SmallCardColumnsPerPage;
+                    var textBoxWidth = anchor.WidthPoints * scale;
                     var centerX =
-                        gridLeft +
-                        (CompanyTextCenterOffsetPoints * scale) +
-                        column * columnPitch;
+                        contentLeft +
+                        ((anchor.LeftPoints + (anchor.WidthPoints / 2D)) * scale) +
+                        CompanyTextLeftAdjustPoints;
                     var top =
-                        gridTop +
-                        (CompanyTextTopOffsetPoints * scale) +
-                        row * rowPitch;
+                        contentTop +
+                        (anchor.TopPoints * scale);
                     var bounds = new XRect(
                         -textBoxWidth / 2D,
                         top,
