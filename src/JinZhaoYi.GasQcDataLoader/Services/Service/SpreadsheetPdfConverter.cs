@@ -21,14 +21,11 @@ namespace JinZhaoYi.GasQcDataLoader.Services.Service;
 public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) : ISpreadsheetPdfConverter
 {
     private const string SmallCardPdfPrintArea = "$B$2:$AA$66";
-    private const double SmallCardLeftMarginInches = 0.72D;
-    private const double SmallCardRightMarginInches = 0.25D;
-    private const double SmallCardTopMarginInches = 0.8D;
-    private const double SmallCardBottomMarginInches = 0.75D;
+    private const double SmallCardMarginInches = 0.25D;
     private const double SmallCardRowHeightScale = 0.96D;
     private const string SmallCardPdfFontName = "Times New Roman";
     private const uint SmallCardPdfPaperSize = 1U; // Letter, matching the approved Excel-rendered PDF.
-    private const uint SmallCardPdfScale = 65U;
+    private const uint SmallCardPdfScale = 74U;
     private const double SmallCardWidthPoints = 246.6D;
     private const double SmallCardHeightPoints = 360.5D;
     private const double SmallCardHorizontalGapPoints = 2.4D;
@@ -284,11 +281,10 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
             worksheet.Append(pageMargins);
         }
 
-        // Keep the template's Excel print geometry while pinning the physical page size.
-        pageMargins.Left = SmallCardLeftMarginInches;
-        pageMargins.Right = SmallCardRightMarginInches;
-        pageMargins.Top = SmallCardTopMarginInches;
-        pageMargins.Bottom = SmallCardBottomMarginInches;
+        pageMargins.Left = SmallCardMarginInches;
+        pageMargins.Right = SmallCardMarginInches;
+        pageMargins.Top = SmallCardMarginInches;
+        pageMargins.Bottom = SmallCardMarginInches;
         pageMargins.Header = 0.3D;
         pageMargins.Footer = 0.3D;
 
@@ -299,8 +295,8 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
             worksheet.InsertBefore(printOptions, pageMargins);
         }
 
-        printOptions.HorizontalCentered = false;
-        printOptions.VerticalCentered = false;
+        printOptions.HorizontalCentered = true;
+        printOptions.VerticalCentered = true;
 
         var pageSetup = worksheet.GetFirstChild<PageSetup>();
         if (pageSetup is null)
@@ -1009,12 +1005,13 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
 
     private static class SmallCardCompanyNameOverlay
     {
-        private const double HeaderWhiteoutLeftPoints = 52D;
-        private const double HeaderWhiteoutTopPoints = 55D;
-        private const double HeaderImageLeftPoints = 52.5D;
-        private const double HeaderImageTopPoints = 64D;
-        private const double HeaderImageColumnPitchPoints = 150D;
-        private const double HeaderImageRowPitchPoints = 218D;
+        private const double BaselineScale = 65D;
+        private const double CardBlockWidthPoints = 146D;
+        private const double CardBlockHeightPoints = 220D;
+        private const double CardColumnPitchPoints = 150D;
+        private const double CardRowPitchPoints = 218D;
+        private const double HeaderImageLeftOffsetPoints = 0.5D;
+        private const double HeaderImageTopOffsetPoints = 9D;
         private const double HeaderImageWidthPoints = 135D;
         private const double HeaderWhiteoutWidthPoints = 147D;
         private const double HeaderWhiteoutHeightPoints = 31D;
@@ -1044,34 +1041,44 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
             }
 
             var headerImageHeight = HeaderImageWidthPoints * image.PixelHeight / image.PixelWidth;
+            var scale = SmallCardPdfScale / BaselineScale;
 
             for (var pageIndex = 0; pageIndex < document.PageCount; pageIndex++)
             {
                 var page = document.Pages[pageIndex];
                 using var graphics = XGraphics.FromPdfPage(page, XGraphicsPdfPageOptions.Append);
+                var cardCount = cardCounts[pageIndex];
+                const int usedColumns = SmallCardColumnsPerPage;
+                const int usedRows = 3;
+                var blockWidth =
+                    (CardBlockWidthPoints + ((usedColumns - 1) * CardColumnPitchPoints)) * scale;
+                var blockHeight =
+                    (CardBlockHeightPoints + ((usedRows - 1) * CardRowPitchPoints)) * scale;
+                var blockLeft = (page.Width.Point - blockWidth) / 2D;
+                var blockTop = (page.Height.Point - blockHeight) / 2D;
 
-                for (var cardIndex = 0; cardIndex < cardCounts[pageIndex]; cardIndex++)
+                for (var cardIndex = 0; cardIndex < cardCount; cardIndex++)
                 {
                     var column = cardIndex % SmallCardColumnsPerPage;
                     var row = cardIndex / SmallCardColumnsPerPage;
                     graphics.DrawRectangle(
                         XBrushes.White,
-                        HeaderWhiteoutLeftPoints + (column * HeaderImageColumnPitchPoints),
-                        HeaderWhiteoutTopPoints + (row * HeaderImageRowPitchPoints),
-                        HeaderWhiteoutWidthPoints,
-                        HeaderWhiteoutHeightPoints);
+                        blockLeft + (column * CardColumnPitchPoints * scale),
+                        blockTop + (row * CardRowPitchPoints * scale),
+                        HeaderWhiteoutWidthPoints * scale,
+                        HeaderWhiteoutHeightPoints * scale);
                 }
 
-                for (var cardIndex = 0; cardIndex < cardCounts[pageIndex]; cardIndex++)
+                for (var cardIndex = 0; cardIndex < cardCount; cardIndex++)
                 {
                     var column = cardIndex % SmallCardColumnsPerPage;
                     var row = cardIndex / SmallCardColumnsPerPage;
                     graphics.DrawImage(
                         image,
-                        HeaderImageLeftPoints + (column * HeaderImageColumnPitchPoints),
-                        HeaderImageTopPoints + (row * HeaderImageRowPitchPoints),
-                        HeaderImageWidthPoints,
-                        headerImageHeight);
+                        blockLeft + ((HeaderImageLeftOffsetPoints + (column * CardColumnPitchPoints)) * scale),
+                        blockTop + ((HeaderImageTopOffsetPoints + (row * CardRowPitchPoints)) * scale),
+                        HeaderImageWidthPoints * scale,
+                        headerImageHeight * scale);
                 }
             }
 

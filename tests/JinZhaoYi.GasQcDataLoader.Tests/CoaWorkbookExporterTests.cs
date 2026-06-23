@@ -254,9 +254,9 @@ public sealed class CoaWorkbookExporterTests
         var preparedDownload = new CoaWorkbookDownload(preparedContent, download.ContentType, download.FileName);
 
         GetSmallSheetPageSetup(download, sheetName).Should().Be((false, 9U, null, null, 70U, 0.25D, 0.75D));
-        GetSmallSheetPageSetup(preparedDownload, sheetName).Should().Be((false, 1U, null, null, 65U, 0.72D, 0.8D));
-        IsHorizontallyCentered(preparedDownload, sheetName).Should().BeFalse();
-        IsVerticallyCentered(preparedDownload, sheetName).Should().BeFalse();
+        GetSmallSheetPageSetup(preparedDownload, sheetName).Should().Be((false, 1U, null, null, 74U, 0.25D, 0.25D));
+        IsHorizontallyCentered(preparedDownload, sheetName).Should().BeTrue();
+        IsVerticallyCentered(preparedDownload, sheetName).Should().BeTrue();
         GetPrintArea(preparedDownload, sheetName).Should().Be($"'{sheetName}'!$B$2:$AA$66");
 
         using var originalWorkbook = Open(download);
@@ -265,6 +265,24 @@ public sealed class CoaWorkbookExporterTests
         preparedWorkbook.Worksheet(sheetName).Cell("B8").Style.Font.FontName.Should().Be("Times New Roman");
         preparedWorkbook.Worksheet(sheetName).Row(8).Height.Should()
             .BeApproximately(originalWorkbook.Worksheet(sheetName).Row(8).Height * 0.96D, 0.01D);
+    }
+
+    [Fact]
+    public void PdfConversionWorkbook_keeps_nine_small_cards_in_full_three_by_three_print_area()
+    {
+        var exporter = CreateExporter();
+        var rows = Enumerable.Range(1, 9)
+            .Select(index => CreateRow($"STD-N{index:000}", "1L_Cylinder", index))
+            .ToArray();
+        var download = exporter.ExportSmallForDownload(rows, "20260521", 9);
+        var sheetName = GetSheetNames(download)[0];
+
+        var preparedContent = PrepareWorkbookForPdfConversion(download.Content.ToArray());
+        var preparedDownload = new CoaWorkbookDownload(preparedContent, download.ContentType, download.FileName);
+
+        GetPrintArea(preparedDownload, sheetName).Should().Be($"'{sheetName}'!$B$2:$AA$66");
+        IsHorizontallyCentered(preparedDownload, sheetName).Should().BeTrue();
+        IsVerticallyCentered(preparedDownload, sheetName).Should().BeTrue();
     }
 
     [Fact]
