@@ -21,15 +21,9 @@ namespace JinZhaoYi.GasQcDataLoader.Services.Service;
 public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) : ISpreadsheetPdfConverter
 {
     private const string SmallCardPdfPrintArea = "$B$2:$AA$66";
-    private const double A4PageWidthPoints = 595.275590551D;
-    private const double A4PageHeightPoints = 841.88976378D;
     private const double SmallCardMarginInches = 0.25D;
-    private const double SmallCardWidthPoints = 246.6D;
-    private const double SmallCardHeightPoints = 360.5D;
-    private const double SmallCardHorizontalGapPoints = 2.4D;
-    private const double SmallCardVerticalGapPoints = 3.75D;
-    private const int SmallCardColumnsPerPage = 3;
-    private const int SmallCardRowsPerPage = 3;
+    private const uint SmallCardPdfPaperSize = 1U; // Letter, matching the approved Excel-rendered PDF.
+    private const uint SmallCardPdfScale = 73U;
     private static readonly string[] SmallCardSampleCells =
     [
         "F6", "O6", "X6",
@@ -270,8 +264,8 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
             worksheet.Append(pageMargins);
         }
 
-        // Use one explicit scale calculated from A4, margins, card size, and gaps.
-        // Each worksheet is one 3 x 3 page; rows through 66 include the bottom signature line.
+        // Use a fixed Letter layout to match the approved Excel-rendered PDF and avoid
+        // LibreOffice/Excel choosing different paper sizes on different machines.
         pageMargins.Left = SmallCardMarginInches;
         pageMargins.Right = SmallCardMarginInches;
         pageMargins.Top = SmallCardMarginInches;
@@ -296,9 +290,9 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
             worksheet.Append(pageSetup);
         }
 
-        pageSetup.PaperSize = 9U; // A4
+        pageSetup.PaperSize = SmallCardPdfPaperSize;
         pageSetup.Orientation = OrientationValues.Portrait;
-        pageSetup.Scale = CalculateSmallCardPdfScale();
+        pageSetup.Scale = SmallCardPdfScale;
         pageSetup.FitToWidth = null;
         pageSetup.FitToHeight = null;
 
@@ -306,27 +300,6 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
         ClearUnusedSmallCardPdfSlots(workbookPart, worksheetPart);
         worksheet.Save();
     }
-
-    private static uint CalculateSmallCardPdfScale()
-    {
-        var printableWidth = A4PageWidthPoints - SmallCardMarginInches * 2D * 72D;
-        var printableHeight = A4PageHeightPoints - SmallCardMarginInches * 2D * 72D;
-        var gridWidth = CalculateSmallCardGridWidthPoints();
-        var gridHeight = CalculateSmallCardGridHeightPoints();
-        var widthScale = printableWidth / gridWidth * 100D;
-        var heightScale = printableHeight / gridHeight * 100D;
-
-        // Reserve one percentage point for LibreOffice printer-unit rounding.
-        return (uint)Math.Max(10D, Math.Floor(Math.Min(widthScale, heightScale)) - 1D);
-    }
-
-    private static double CalculateSmallCardGridWidthPoints() =>
-        SmallCardColumnsPerPage * SmallCardWidthPoints +
-        (SmallCardColumnsPerPage - 1) * SmallCardHorizontalGapPoints;
-
-    private static double CalculateSmallCardGridHeightPoints() =>
-        SmallCardRowsPerPage * SmallCardHeightPoints +
-        (SmallCardRowsPerPage - 1) * SmallCardVerticalGapPoints;
 
     private static string? ResolvePdfHeaderImagePath()
     {

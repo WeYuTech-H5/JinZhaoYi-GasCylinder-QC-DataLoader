@@ -254,7 +254,7 @@ public sealed class CoaWorkbookExporterTests
         var preparedDownload = new CoaWorkbookDownload(preparedContent, download.ContentType, download.FileName);
 
         GetSmallSheetPageSetup(download, sheetName).Should().Be((false, 9U, null, null, 70U, 0.25D, 0.75D));
-        GetSmallSheetPageSetup(preparedDownload, sheetName).Should().Be((false, 9U, null, null, 73U, 0.25D, 0.25D));
+        GetSmallSheetPageSetup(preparedDownload, sheetName).Should().Be((false, 1U, null, null, 73U, 0.25D, 0.25D));
         IsHorizontallyCentered(preparedDownload, sheetName).Should().BeTrue();
         IsVerticallyCentered(preparedDownload, sheetName).Should().BeTrue();
         GetPrintArea(preparedDownload, sheetName).Should().Be($"'{sheetName}'!$B$2:$AA$66");
