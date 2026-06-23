@@ -333,6 +333,84 @@ public sealed class DapperRepository(
         ORDER BY rows.AnlzTime, rows.SampleNo, rows.SourceFolderName, rows.SampleName
         """;
 
+    private const string StdCylinderSummaryRowsSqlFormat = """
+        SELECT
+            COALESCE(TRY_CONVERT(decimal(18, 0), mfg.ID), TRY_CONVERT(decimal(18, 0), rows.si0_id)) AS [id],
+            COALESCE(mfg.SamplName, rows.SampleName) AS [SampleName],
+            mfg.ProdDate AS [ProdDate],
+            COALESCE(mfg.LotNo, rows.LotNo) AS [LotNo],
+            mfg.ProdType AS [ProdType],
+            mfg.Prod_Operator AS [Prod_Operator],
+            mfg.Prod_IniPrs AS [Prod_IniPrs],
+            mfg.Prod_LeakTest1 AS [Prod_LeakTest1],
+            mfg.Prod_vacumPrs AS [Prod_VacuumPrs],
+            mfg.Prod_Can1_FillingPrs AS [Prod_Can1_FillingPrs],
+            mfg.Prod_Can2_FillingPrs AS [Prod_Can2_FillingPrs],
+            mfg.Prod_Bomb2_FillingPrs AS [Prod_Bomb2_FillingPrs],
+            mfg.Prod_Bomb1_FillingPrs AS [Prod_Bomb1_FillingPrs],
+            mfg.Prod_Bomb3_FillingPrs AS [Prod_Bomb3_FillingPrs],
+            mfg.Prod_LeakTest2 AS [Prod_LeakTest2],
+            mfg.Prod_Can1_LotNo AS [Prod_Can1_LotNo],
+            mfg.Prod_Can1_Flow AS [Prod_Can1_Flow],
+            mfg.Prod_Can1_Sec AS [Prod_Can1_Sec],
+            mfg.Prod_Can1_Prs AS [Prod_Can1_Prs],
+            mfg.Prod_Can2_LotNo AS [Prod_Can2_LotNo],
+            mfg.Prod_Can2_Flow AS [Prod_Can2_Flow],
+            mfg.Prod_Can2_Sec AS [Prod_Can2_Sec],
+            mfg.Prod_Can2_Prs AS [Prod_Can2_Prs],
+            mfg.Prod_Bomb2_LotNo AS [Prod_Bomb2_LotNo],
+            mfg.Prod_Bomb2_Flow AS [Prod_Bomb2_Flow],
+            mfg.Prod_Bomb2_Sec AS [Prod_Bomb2_Sec],
+            mfg.Prod_Bomb2_Prs AS [Prod_Bomb2_Prs],
+            mfg.Prod_Bomb1_LotNo AS [Prod_Bomb1_LotNo],
+            mfg.Prod_Bomb1_SetFillingPrs AS [Prod_Bomb1_SetFillingPrs],
+            mfg.Prod_Bomb1_Prs AS [Prod_Bomb1_Prs],
+            mfg.Prod_Bomb3_LotNo AS [Prod_Bomb3_LotNo],
+            mfg.Prod_Bomb3_SetFillingPrs AS [Prod_Bomb3_SetFillingPrs],
+            mfg.Prod_Bomb3_Prs AS [Prod_Bomb3_Prs],
+            COALESCE(TRY_CONVERT(decimal(18, 0), mfg.SampleNo), TRY_CONVERT(decimal(18, 0), rows.SampleNo)) AS [SampleNo],
+            COALESCE(mfg.SampleType, rows.SampleType) AS [SampleType],
+            COALESCE(mfg.Container, rows.Container) AS [Container],
+            mfg.ProdOrder AS [ProdOrder],
+            mfg.FnlPrs AS [FnlPrs],
+            mfg.IniPrs AS [IniPrs],
+            COALESCE(mfg.QCTime, rows.AnlzTime) AS [QCTime],
+            COALESCE(mfg.QCInst, rows.Inst) AS [QCInst],
+            COALESCE(mfg.QCPort, rows.Port) AS [QCPort],
+            COALESCE(mfg.Cal_id, rows.ID) AS [Cal_id],
+            COALESCE(mfg.RF_ID, rows.ExcelRfId) AS [RF_ID],
+            mfg.QCComplete AS [QCComplete],
+            mfg.CalType AS [CalType],
+            mfg.Result AS [Result],
+            {2},
+            CAST(NULL AS nvarchar(4000)) AS [Note],
+            rows.ExcelExportSessionId AS [ExcelExportSessionId]
+        FROM dbo.{0} rows
+        OUTER APPLY
+        (
+            SELECT TOP (1)
+                lot.*
+            FROM dbo.{1} lot
+            WHERE (rows.LotNo IS NOT NULL AND lot.LotNo = rows.LotNo)
+               OR (rows.si0_id IS NOT NULL AND TRY_CONVERT(int, lot.si0_id) = rows.si0_id)
+               OR (rows.SampleName IS NOT NULL AND lot.SamplName = rows.SampleName)
+            ORDER BY
+                CASE
+                    WHEN rows.LotNo IS NOT NULL AND lot.LotNo = rows.LotNo THEN 0
+                    WHEN rows.si0_id IS NOT NULL AND TRY_CONVERT(int, lot.si0_id) = rows.si0_id THEN 1
+                    ELSE 2
+                END,
+                lot.CREATE_TIME DESC,
+                lot.ID DESC
+        ) mfg
+        ORDER BY
+            COALESCE(mfg.ProdDate, rows.AnlzTime),
+            COALESCE(TRY_CONVERT(decimal(18, 0), mfg.SampleNo), TRY_CONVERT(decimal(18, 0), rows.SampleNo)),
+            COALESCE(mfg.SamplName, rows.SampleName),
+            rows.ExcelExportedAt,
+            rows.ExcelPpbExportId
+        """;
+
     private const string AllRfRowsSqlFormat = """
         SELECT *
         FROM dbo.{0}
@@ -1527,6 +1605,23 @@ public sealed class DapperRepository(
             .ToArray();
     }
 
+    public async Task<IReadOnlyList<StdCylinderSummaryRow>> GetStdCylinderSummaryRowsAsync(CancellationToken cancellationToken)
+    {
+        var areaColumns = string.Join(
+            "," + Environment.NewLine,
+            CompoundMap.Analytes.Select(analyte =>
+                $"            rows.{Quote(analyte.AreaColumn)} AS {Quote(analyte.AreaColumn)}"));
+        var sql = string.Format(
+            StdCylinderSummaryRowsSqlFormat,
+            Quote(_tables.ExcelPpbHistory),
+            Quote(_tables.MfgLot),
+            areaColumns);
+
+        await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
+        var rows = await connection.QueryAsync(new CommandDefinition(sql, cancellationToken: cancellationToken));
+        return rows.Select(DynamicToStdCylinderSummaryRow).ToArray();
+    }
+
     public async Task UpsertImportErrorLogsAsync(
         IReadOnlyCollection<ImportErrorReportRow> rows,
         CancellationToken cancellationToken)
@@ -2347,6 +2442,27 @@ public sealed class DapperRepository(
             result.Areas[analyte.Suffix] = ReadDecimal(dictionary, analyte.AreaColumn);
             result.Ppbs[analyte.Suffix] = ReadDecimal(dictionary, analyte.PpbColumn);
             result.RetentionTimes[analyte.Suffix] = ReadDecimal(dictionary, analyte.RtColumn);
+        }
+
+        return result;
+    }
+
+    private static StdCylinderSummaryRow DynamicToStdCylinderSummaryRow(dynamic row)
+    {
+        var dictionary = (IDictionary<string, object?>)row;
+        var result = new StdCylinderSummaryRow
+        {
+            ExcelExportSessionId = ReadGuid(dictionary, "ExcelExportSessionId")
+        };
+
+        foreach (var (key, value) in dictionary)
+        {
+            result.Values[key] = value;
+        }
+
+        foreach (var analyte in CompoundMap.Analytes)
+        {
+            result.Areas[analyte.Suffix] = ReadDecimal(dictionary, analyte.AreaColumn);
         }
 
         return result;

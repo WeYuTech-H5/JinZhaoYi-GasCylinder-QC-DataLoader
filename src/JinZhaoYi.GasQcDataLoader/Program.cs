@@ -41,6 +41,7 @@ try
     builder.Services.AddSingleton<IQuery2PreviewService, Query2PreviewService>();
     builder.Services.AddSingleton<IQuery2WorkbookExporter, Query2WorkbookExporter>();
     builder.Services.AddSingleton<IPortPpbCsvExporter, PortPpbCsvExporter>();
+    builder.Services.AddSingleton<IStdCylinderSummaryExporter, StdCylinderSummaryExporter>();
     builder.Services.AddSingleton<ICoaWorkbookExporter, CoaWorkbookExporter>();
     builder.Services.AddSingleton<ISpreadsheetPdfConverter, SpreadsheetPdfConverter>();
     builder.Services.AddSingleton<ICoaPackageExporter, CoaPackageExporter>();
@@ -596,6 +597,24 @@ static void MapDownloadEndpoints(WebApplication app)
 
         var dateRangeText = FormatDateRange(startDate, endDate);
         var download = exporter.ExportForDownload(rows, dateRangeText);
+        return Results.File(
+            download.Content,
+            download.ContentType,
+            download.FileName);
+    });
+
+    app.MapGet("/api/exports/std-cylinder-summary", async (
+        IDapperRepository repository,
+        IStdCylinderSummaryExporter exporter,
+        CancellationToken cancellationToken) =>
+    {
+        var rows = await repository.GetStdCylinderSummaryRowsAsync(cancellationToken);
+        if (rows.Count == 0)
+        {
+            return Results.NotFound(new { message = "No Excel PPB history rows found for STD Cylinder summary export." });
+        }
+
+        var download = exporter.ExportForDownload(rows);
         return Results.File(
             download.Content,
             download.ContentType,

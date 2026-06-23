@@ -125,6 +125,8 @@ public interface IDapperRepository
         IReadOnlyCollection<string> selectedIds,
         CancellationToken cancellationToken);
 
+    Task<IReadOnlyList<StdCylinderSummaryRow>> GetStdCylinderSummaryRowsAsync(CancellationToken cancellationToken);
+
     Task ExecuteImportAsync(ImportWriteSet writeSet, QcDataRow rf, DateTime importDate, CancellationToken cancellationToken);
 
     Task UpsertImportErrorLogsAsync(
