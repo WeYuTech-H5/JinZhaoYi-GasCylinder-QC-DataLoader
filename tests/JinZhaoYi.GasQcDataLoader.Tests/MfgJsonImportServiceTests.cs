@@ -50,6 +50,54 @@ public sealed class MfgJsonImportServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ProcessFile_skips_records_with_explicit_null_fields_and_upserts_valid_records()
+    {
+        var path = Path.Combine(_tempDirectory, "MFGExport_20260522_093603.json");
+        await File.WriteAllTextAsync(
+            path,
+            """
+            [
+              { "si0_id": 6377, "LotNo": "20260508002", "Result": "Pass" },
+              { "si0_id": 6378, "LotNo": "20260508003", "Result": null, "RF_ID": null }
+            ]
+            """);
+        var repository = new FakeRepository();
+        var stateStore = new InMemoryStateStore();
+        var service = CreateService(repository, stateStore);
+
+        await service.ProcessFileAsync(path, CancellationToken.None);
+
+        repository.UpsertCallCount.Should().Be(1);
+        repository.LastRecords.Should().ContainSingle(row => row.LotNo == "20260508002");
+        stateStore.State.Files["MFGExport_20260522_093603.json"].Status.Should().Be("Succeeded");
+        stateStore.State.Files["MFGExport_20260522_093603.json"].InsertedCount.Should().Be(1);
+        stateStore.State.Files["MFGExport_20260522_093603.json"].SkippedCount.Should().Be(1);
+        stateStore.State.Lots["20260508002"].Status.Should().Be("Succeeded");
+        stateStore.State.Lots["20260508003"].Status.Should().Be("Skipped");
+        stateStore.State.Lots["20260508003"].Action.Should().Be("SkippedNullField");
+        stateStore.State.Lots["20260508003"].ErrorMessage.Should().Be("MFG JSON contains null field(s): Result, RF_ID.");
+    }
+
+    [Fact]
+    public async Task ProcessFile_records_success_without_upsert_when_all_records_are_skipped()
+    {
+        var path = Path.Combine(_tempDirectory, "MFGExport_20260522_093603.json");
+        await File.WriteAllTextAsync(path, """[{ "si0_id": 6377, "LotNo": "20260508002", "Result": null }]""");
+        var repository = new FakeRepository();
+        var stateStore = new InMemoryStateStore();
+        var service = CreateService(repository, stateStore);
+
+        await service.ProcessFileAsync(path, CancellationToken.None);
+
+        repository.UpsertCallCount.Should().Be(0);
+        stateStore.State.Files["MFGExport_20260522_093603.json"].Status.Should().Be("Succeeded");
+        stateStore.State.Files["MFGExport_20260522_093603.json"].InsertedCount.Should().Be(0);
+        stateStore.State.Files["MFGExport_20260522_093603.json"].UpdatedCount.Should().Be(0);
+        stateStore.State.Files["MFGExport_20260522_093603.json"].SkippedCount.Should().Be(1);
+        stateStore.State.Lots["20260508002"].Status.Should().Be("Skipped");
+    }
+
+    [Fact]
     public async Task ProcessFile_records_failed_state_for_invalid_json()
     {
         var path = Path.Combine(_tempDirectory, "MFGExport_20260522_093603.json");
@@ -95,12 +143,15 @@ public sealed class MfgJsonImportServiceTests : IDisposable
     {
         public int UpsertCallCount { get; private set; }
 
+        public IReadOnlyCollection<MfgJsonLotRecord> LastRecords { get; private set; } = Array.Empty<MfgJsonLotRecord>();
+
         public Task<MfgJsonImportResult> UpsertMfgJsonLotsAsync(
             IReadOnlyCollection<MfgJsonLotRecord> records,
             string sourceFileName,
             CancellationToken cancellationToken)
         {
             UpsertCallCount++;
+            LastRecords = records;
             return Task.FromResult(new MfgJsonImportResult
             {
                 InsertedCount = records.Count,

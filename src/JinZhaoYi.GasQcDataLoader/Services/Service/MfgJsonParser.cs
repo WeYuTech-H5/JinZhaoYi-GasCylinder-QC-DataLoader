@@ -29,6 +29,7 @@ public sealed class MfgJsonParser : IMfgJsonParser
             var lotNo = ReadRequiredString(item, "LotNo", index);
             rows.Add(new MfgJsonLotRecord
             {
+                NullFields = GetExplicitNullFields(item),
                 Id = ReadRequiredDecimal(item, "si0_id", index),
                 Si0Id = si0Id,
                 LotNo = lotNo,
@@ -84,6 +85,12 @@ public sealed class MfgJsonParser : IMfgJsonParser
         EnsureNoDuplicate(rows, row => row.LotNo, "LotNo");
         return rows;
     }
+
+    private static IReadOnlyList<string> GetExplicitNullFields(JsonElement item) =>
+        item.EnumerateObject()
+            .Where(property => property.Value.ValueKind == JsonValueKind.Null)
+            .Select(property => property.Name)
+            .ToArray();
 
     private static void EnsureNoDuplicate(
         IReadOnlyList<MfgJsonLotRecord> rows,

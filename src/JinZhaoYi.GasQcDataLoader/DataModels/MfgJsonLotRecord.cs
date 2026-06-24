@@ -2,6 +2,8 @@ namespace JinZhaoYi.GasQcDataLoader.DataModels;
 
 public sealed class MfgJsonLotRecord
 {
+    public IReadOnlyList<string> NullFields { get; init; } = Array.Empty<string>();
+
     public decimal Id { get; init; }
 
     public string Si0Id { get; init; } = string.Empty;

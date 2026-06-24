@@ -42,6 +42,25 @@ public sealed class MfgJsonParserTests
     }
 
     [Fact]
+    public void Parse_tracks_explicit_null_fields()
+    {
+        var rows = new MfgJsonParser().Parse(
+            """
+            [
+              {
+                "si0_id": 6377,
+                "LotNo": "20260508002",
+                "SampleType": null,
+                "Result": null
+              }
+            ]
+            """);
+
+        rows.Should().ContainSingle();
+        rows[0].NullFields.Should().Equal("SampleType", "Result");
+    }
+
+    [Fact]
     public void Parse_rejects_missing_required_fields()
     {
         var act = () => new MfgJsonParser().Parse("""[{ "si0_id": 6377 }]""");

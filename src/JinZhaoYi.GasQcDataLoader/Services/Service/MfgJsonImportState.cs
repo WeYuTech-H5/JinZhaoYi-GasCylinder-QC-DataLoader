@@ -21,6 +21,8 @@ public sealed class MfgJsonFileState
 
     public int UpdatedCount { get; init; }
 
+    public int SkippedCount { get; init; }
+
     public string? ErrorMessage { get; init; }
 }
 
