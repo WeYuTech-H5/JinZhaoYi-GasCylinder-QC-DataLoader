@@ -266,7 +266,7 @@ public sealed class CoaWorkbookExporterTests
         var preparedDownload = new CoaWorkbookDownload(preparedContent, download.ContentType, download.FileName);
 
         GetSmallSheetPageSetup(download, sheetName).Should().Be((false, 9U, null, null, 70U, 0.25D, 0.75D));
-        GetSmallSheetPageSetup(preparedDownload, sheetName).Should().Be((false, 1U, null, null, 74U, 0.25D, 0.25D));
+        GetSmallSheetPageSetup(preparedDownload, sheetName).Should().Be((false, 1U, null, null, 74U, 0.486D, 0.263D));
         IsHorizontallyCentered(preparedDownload, sheetName).Should().BeTrue();
         IsVerticallyCentered(preparedDownload, sheetName).Should().BeTrue();
         GetPrintArea(preparedDownload, sheetName).Should().Be($"'{sheetName}'!$A$1:$AB$67");
@@ -388,6 +388,19 @@ public sealed class CoaWorkbookExporterTests
         width.Should().BeGreaterThanOrEqualTo(611, "the Excel-rendered header must provide at least 300 DPI");
         height.Should().BeGreaterThanOrEqualTo(89, "the header should retain sufficient vertical detail at print size");
         (width / (double)height).Should().BeApproximately(1222D / 179D, 0.05D);
+
+        var logoAssetPath = Path.Combine(
+            AppContext.BaseDirectory,
+            "wwwroot",
+            "image",
+            "coa-small-card-header-logo.png");
+        var textAssetPath = Path.Combine(
+            AppContext.BaseDirectory,
+            "wwwroot",
+            "image",
+            "coa-small-card-header-text.png");
+        ReadPngDimensions(logoAssetPath).Should().Be((220, 179));
+        ReadPngDimensions(textAssetPath).Should().Be((1002, 179));
     }
 
     [Fact]

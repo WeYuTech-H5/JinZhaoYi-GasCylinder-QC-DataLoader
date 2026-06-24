@@ -33,7 +33,12 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
     private const double CoaLargePdfHeaderTopPoints = 6D;
     private const double CoaLargePdfHeaderWhiteoutHeightPoints = 100D;
     private const string SmallCardPdfPrintArea = "$A$1:$AB$67";
-    private const double SmallCardMarginInches = 0.25D;
+    private const double SmallCardLeftMarginInches = 0.486D;
+    private const double SmallCardRightMarginInches = 0.014D;
+    private const double SmallCardTopMarginInches = 0.263D;
+    private const double SmallCardBottomMarginInches = 0.237D;
+    private const double SmallCardHorizontalPageShiftPoints = 17D;
+    private const double SmallCardVerticalPageShiftPoints = 1D;
     private const double SmallCardDefaultRowHeightPoints = 16.2D;
     private const double SmallCardFooterRowHeightPoints = 16.5D;
     private const double SmallCardRowHeightScale = 0.96D;
@@ -316,10 +321,10 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
             worksheet.Append(pageMargins);
         }
 
-        pageMargins.Left = SmallCardMarginInches;
-        pageMargins.Right = SmallCardMarginInches;
-        pageMargins.Top = SmallCardMarginInches;
-        pageMargins.Bottom = SmallCardMarginInches;
+        pageMargins.Left = SmallCardLeftMarginInches;
+        pageMargins.Right = SmallCardRightMarginInches;
+        pageMargins.Top = SmallCardTopMarginInches;
+        pageMargins.Bottom = SmallCardBottomMarginInches;
         pageMargins.Header = 0.3D;
         pageMargins.Footer = 0.3D;
 
@@ -1074,9 +1079,11 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
         private const double CardBlockHeightPoints = 220D;
         private const double CardColumnPitchPoints = 150D;
         private const double CardRowPitchPoints = 218D;
-        private const double HeaderImageLeftOffsetPoints = -14D;
+        private const double HeaderImageLeftOffsetPoints = -12D;
         private const double HeaderImageTopOffsetPoints = 5.5D;
         private const double HeaderImageWidthPoints = 128.8D;
+        private const double HeaderLogoSourceWidthPixels = 220D;
+        private const double HeaderTextShiftPoints = 6D;
         private const double HeaderWhiteoutLeftOffsetPoints = -26D;
         private const double HeaderWhiteoutTopOffsetPoints = 4D;
         private const double HeaderWhiteoutWidthPoints = 181D;
@@ -1100,8 +1107,23 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
                     $"COA small PDF rendered {document.PageCount} pages for {cardCounts.Count} worksheet pages.");
             }
 
+            var imageDirectory = Path.GetDirectoryName(headerImagePath)!;
+            var imageName = Path.GetFileNameWithoutExtension(headerImagePath);
+            var logoImagePath = Path.Combine(imageDirectory, $"{imageName}-logo.png");
+            var textImagePath = Path.Combine(imageDirectory, $"{imageName}-text.png");
+            if (!File.Exists(logoImagePath) || !File.Exists(textImagePath))
+            {
+                throw new InvalidOperationException(
+                    "COA small PDF header requires the losslessly cropped logo and text image assets.");
+            }
+
             using var image = XImage.FromFile(headerImagePath);
-            if (image.PixelWidth <= 0 || image.PixelHeight <= 0)
+            using var logoImage = XImage.FromFile(logoImagePath);
+            using var textImage = XImage.FromFile(textImagePath);
+            if (image.PixelWidth <= 0 ||
+                image.PixelHeight <= 0 ||
+                logoImage.PixelWidth <= 0 ||
+                textImage.PixelWidth <= 0)
             {
                 return pdfContent;
             }
@@ -1120,8 +1142,10 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
                     (CardBlockWidthPoints + ((usedColumns - 1) * CardColumnPitchPoints)) * scale;
                 var blockHeight =
                     (CardBlockHeightPoints + ((usedRows - 1) * CardRowPitchPoints)) * scale;
-                var blockLeft = (page.Width.Point - blockWidth) / 2D;
-                var blockTop = (page.Height.Point - blockHeight) / 2D;
+                var blockLeft =
+                    ((page.Width.Point - blockWidth) / 2D) + SmallCardHorizontalPageShiftPoints;
+                var blockTop =
+                    ((page.Height.Point - blockHeight) / 2D) + SmallCardVerticalPageShiftPoints;
 
                 for (var cardIndex = 0; cardIndex < cardCount; cardIndex++)
                 {
@@ -1139,12 +1163,27 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
                 {
                     var column = cardIndex % SmallCardColumnsPerPage;
                     var row = cardIndex / SmallCardColumnsPerPage;
+                    var imageLeft =
+                        blockLeft + ((HeaderImageLeftOffsetPoints + (column * CardColumnPitchPoints)) * scale);
+                    var imageTop =
+                        blockTop + ((HeaderImageTopOffsetPoints + (row * CardRowPitchPoints)) * scale);
+                    var imageWidth = HeaderImageWidthPoints * scale;
+                    var imageHeight = headerImageHeight * scale;
+                    var logoWidth = imageWidth * HeaderLogoSourceWidthPixels / image.PixelWidth;
+                    var textWidth = imageWidth - logoWidth;
+
                     graphics.DrawImage(
-                        image,
-                        blockLeft + ((HeaderImageLeftOffsetPoints + (column * CardColumnPitchPoints)) * scale),
-                        blockTop + ((HeaderImageTopOffsetPoints + (row * CardRowPitchPoints)) * scale),
-                        HeaderImageWidthPoints * scale,
-                        headerImageHeight * scale);
+                        logoImage,
+                        imageLeft,
+                        imageTop,
+                        logoWidth,
+                        imageHeight);
+                    graphics.DrawImage(
+                        textImage,
+                        imageLeft + logoWidth + HeaderTextShiftPoints,
+                        imageTop,
+                        textWidth,
+                        imageHeight);
                 }
             }
 

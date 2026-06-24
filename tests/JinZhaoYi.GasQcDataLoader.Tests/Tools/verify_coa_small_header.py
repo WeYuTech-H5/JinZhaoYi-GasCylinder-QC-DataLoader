@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import itertools
 import json
 import subprocess
 from pathlib import Path
@@ -71,7 +72,12 @@ def find_header(page: Image.Image) -> tuple[tuple[int, int, int, int], tuple[int
     return header, (baseline_left, baseline_top)
 
 
-def compare(reference_path: Path, actual_path: Path, output_dir: Path) -> dict[str, float | int | list[int]]:
+def compare(
+    reference_path: Path,
+    actual_path: Path,
+    output_dir: Path,
+    text_shift_pixels: int,
+) -> dict[str, float | int | list[int]]:
     reference_page = Image.open(reference_path).convert("RGB")
     actual_page = Image.open(actual_path).convert("RGB")
     reference_box, reference_baseline = find_header(reference_page)
@@ -79,6 +85,24 @@ def compare(reference_path: Path, actual_path: Path, output_dir: Path) -> dict[s
 
     reference_header = reference_page.crop(reference_box)
     actual_header = actual_page.crop(actual_box)
+    if text_shift_pixels:
+        logo_width = round(reference_header.width * 220 / 1222)
+        shifted_reference = Image.new(
+            "RGB",
+            (reference_header.width + text_shift_pixels, reference_header.height),
+            "white",
+        )
+        shifted_reference.paste(
+            reference_header.crop((0, 0, logo_width, reference_header.height)),
+            (0, 0),
+        )
+        shifted_reference.paste(
+            reference_header.crop(
+                (logo_width, 0, reference_header.width, reference_header.height)
+            ),
+            (logo_width + text_shift_pixels, 0),
+        )
+        reference_header = shifted_reference
     output_dir.mkdir(parents=True, exist_ok=True)
     reference_header.save(output_dir / "excel-reference-header.png")
     actual_header.save(output_dir / "libreoffice-header.png")
@@ -167,18 +191,9 @@ def verify_crop_marks(page_path: Path) -> dict[str, int | list[int]]:
     pixels = page.load()
     width, height = page.size
 
-    left_zone_start = round(width * 0.043)
-    left_zone_end = round(width * 0.057)
     top_zone_start = round(height * 0.018)
     top_zone_end = round(height * 0.034)
 
-    y_runs = grouped_runs(
-        [
-            y
-            for y in range(height)
-            if any(pixels[x, y] < 150 for x in range(left_zone_start, left_zone_end))
-        ]
-    )
     x_runs = grouped_runs(
         [
             x
@@ -186,16 +201,53 @@ def verify_crop_marks(page_path: Path) -> dict[str, int | list[int]]:
             if any(pixels[x, y] < 150 for y in range(top_zone_start, top_zone_end))
         ]
     )
-    crop_y = [
-        round((run[0] + run[-1]) / 2)
-        for run in y_runs
-        if len(run) <= 8
-    ]
     crop_x = [
         round((run[0] + run[-1]) / 2)
         for run in x_runs
         if len(run) <= 8
     ]
+    if len(crop_x) != 4:
+        raise RuntimeError(f"Expected four vertical crop-mark lines, found {crop_x}.")
+
+    y_runs = grouped_runs(
+        [
+            y
+            for y in range(height)
+            if all(
+                any(
+                    pixels[x, y] < 150
+                    for x in range(max(0, crop_mark_x - 7), min(width, crop_mark_x + 8))
+                )
+                for crop_mark_x in crop_x
+            )
+        ]
+    )
+    crop_y_candidates = [
+        round((run[0] + run[-1]) / 2)
+        for run in y_runs
+        if len(run) <= 8
+    ]
+    crop_y_sequences = [
+        sequence
+        for sequence in itertools.combinations(crop_y_candidates, 4)
+        if all(450 <= right - left <= 600 for left, right in zip(sequence, sequence[1:]))
+    ]
+    if not crop_y_sequences:
+        raise RuntimeError(
+            f"Expected four evenly spaced horizontal crop-mark lines, found {crop_y_candidates}."
+        )
+    crop_y = list(
+        min(
+            crop_y_sequences,
+            key=lambda sequence: (
+                max(
+                    abs((right - left) - ((sequence[-1] - sequence[0]) / 3))
+                    for left, right in zip(sequence, sequence[1:])
+                ),
+                abs(((sequence[0] + sequence[-1]) / 2) - (height / 2)),
+            ),
+        )
+    )
 
     intersections = []
     for y in crop_y:
@@ -213,12 +265,22 @@ def verify_crop_marks(page_path: Path) -> dict[str, int | list[int]]:
             f"Expected 16 crop-mark intersections, found x={crop_x}, y={crop_y}, present={present}."
         )
 
+    group_center_offset = (
+        ((crop_x[0] + crop_x[-1]) / 2) - (width / 2),
+        ((crop_y[0] + crop_y[-1]) / 2) - (height / 2),
+    )
+    if max(abs(offset) for offset in group_center_offset) > 2:
+        raise RuntimeError(
+            f"3x3 card group is not centered; center offset is {group_center_offset} pixels."
+        )
+
     return {
         "crop_x": crop_x,
         "crop_y": crop_y,
         "intersection_count": len(intersections),
         "present_intersection_count": present,
         "intersection_ink_counts": intersections,
+        "group_center_offset": list(group_center_offset),
     }
 
 
@@ -261,6 +323,8 @@ def main() -> int:
     parser.add_argument("--max-changed-ratio", type=float, default=0.08)
     parser.add_argument("--max-size-delta", type=int, default=2)
     parser.add_argument("--max-position-delta", type=int, default=2)
+    parser.add_argument("--target-horizontal-shift", type=float, default=10.0)
+    parser.add_argument("--text-shift-pixels", type=int, default=25)
     args = parser.parse_args()
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -270,7 +334,17 @@ def main() -> int:
     result: dict[str, object] = {}
     if args.reference_page is not None:
         actual_page = render_pdf_page(args.pdftoppm, args.actual_pdf, args.output_dir, 300)
-        result["header"] = compare(args.reference_page, actual_page, args.output_dir)
+        header_result = compare(
+            args.reference_page,
+            actual_page,
+            args.output_dir,
+            args.text_shift_pixels,
+        )
+        header_result["horizontal_shift"] = (
+            header_result["actual_relative_to_nf_semi"][0]
+            - header_result["reference_relative_to_nf_semi"][0]
+        )
+        result["header"] = header_result
     if args.verify_crop_marks:
         crop_mark_page = render_pdf_page(args.pdftoppm, args.actual_pdf, args.output_dir, 150)
         result["crop_marks"] = verify_crop_marks(crop_mark_page)
@@ -299,9 +373,19 @@ def main() -> int:
             failures.append(
                 f"size delta {header_result['size_delta']} > {args.max_size_delta}"
             )
-        if max(header_result["position_delta"]) > args.max_position_delta:
+        if header_result["position_delta"][1] > args.max_position_delta:
             failures.append(
-                f"position delta {header_result['position_delta']} > {args.max_position_delta}"
+                "vertical position delta "
+                f"{header_result['position_delta'][1]} > {args.max_position_delta}"
+            )
+        horizontal_delta = abs(
+            header_result["horizontal_shift"] - args.target_horizontal_shift
+        )
+        if horizontal_delta > args.max_position_delta:
+            failures.append(
+                f"horizontal shift {header_result['horizontal_shift']:.2f} differs from "
+                f"target {args.target_horizontal_shift:.2f} by {horizontal_delta:.2f} > "
+                f"{args.max_position_delta:.2f}"
             )
 
     if failures:
