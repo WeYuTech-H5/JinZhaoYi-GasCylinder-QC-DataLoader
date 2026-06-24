@@ -20,6 +20,18 @@ namespace JinZhaoYi.GasQcDataLoader.Services.Service;
 
 public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) : ISpreadsheetPdfConverter
 {
+    private const string CoaLargePdfHeaderComposedImageFileName = "coa-large-header-composed.png";
+    private const string CoaLargePdfSignatureImageFileName = "coa-large-signature-enhanced.png";
+    private const uint CoaLargePdfPaperSize = 9U; // A4, matching the production LibreOffice environment.
+    private const string CoaLargePdfWorksheetImageNamePrefix = "COA PDF ";
+    private const double CoaLargePdfLeftMarginInches = 0.15D;
+    private const double CoaLargePdfRightMarginInches = 0.15D;
+    private const uint CoaLargePdfScale = 94U;
+    private const double CoaLargePdfTopMarginInches = 0.65D;
+    private const double CoaLargePdfBottomMarginInches = 0.45D;
+    private const double CoaLargePdfHeaderWidthPoints = 561D;
+    private const double CoaLargePdfHeaderTopPoints = 6D;
+    private const double CoaLargePdfHeaderWhiteoutHeightPoints = 100D;
     private const string SmallCardPdfPrintArea = "$B$2:$AA$66";
     private const double SmallCardMarginInches = 0.25D;
     private const double SmallCardRowHeightScale = 0.96D;
@@ -205,20 +217,22 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
                 return workbookContent;
             }
 
-            var pdfHeaderImagePath = ResolvePdfHeaderImagePath();
+            var pdfHeaderImagePath = ResolveImagePath(CoaLargePdfHeaderComposedImageFileName);
+            var pdfSignatureImagePath = ResolveImagePath(CoaLargePdfSignatureImageFileName);
             foreach (var worksheetPart in workbookPart.WorksheetParts)
             {
                 if (IsCoaLargeWorksheet(workbookPart, worksheetPart))
                 {
-                    ApplyCoaLargePdfPrintLayout(worksheetPart);
+                    ApplyCoaLargePdfPrintLayout(workbookPart, worksheetPart);
+                    ReplaceCoaLargePdfSignatureImage(worksheetPart, pdfSignatureImagePath);
+                    ReplaceHeaderFooterWithPdfHeaderImage(workbookPart, worksheetPart, pdfHeaderImagePath);
                 }
                 else if (IsCoaSmallWorksheet(workbookPart, worksheetPart))
                 {
                     ApplyCoaSmallPdfPrintLayout(workbookPart, worksheetPart);
                     ApplyCoaSmallPdfFonts(workbookPart);
+                    ReplaceHeaderFooterWithPdfHeaderImage(workbookPart, worksheetPart, pdfHeaderImagePath);
                 }
-
-                ReplaceHeaderFooterWithPdfHeaderImage(workbookPart, worksheetPart, pdfHeaderImagePath);
             }
 
             workbookPart.Workbook.Save();
@@ -227,27 +241,33 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
         return stream.ToArray();
     }
 
-    private static void ApplyCoaLargePdfPrintLayout(WorksheetPart worksheetPart)
+    private static void ApplyCoaLargePdfPrintLayout(WorkbookPart workbookPart, WorksheetPart worksheetPart)
     {
         var worksheet = worksheetPart.Worksheet;
+        var sheetProperties = worksheet.GetFirstChild<SheetProperties>();
+        if (sheetProperties is null)
+        {
+            sheetProperties = new SheetProperties();
+            worksheet.InsertAt(sheetProperties, 0);
+        }
+
+        sheetProperties.PageSetupProperties ??= new PageSetupProperties();
+        sheetProperties.PageSetupProperties.FitToPage = true;
+        sheetProperties.PageSetupProperties.AutoPageBreaks = false;
+
         var pageMargins = worksheet.GetFirstChild<PageMargins>();
         if (pageMargins is null)
         {
-            pageMargins = new PageMargins
-            {
-                Left = 0.25D,
-                Right = 0.25D,
-                Top = 0.75D,
-                Bottom = 0.75D,
-                Header = 0.25D,
-                Footer = 0.05D
-            };
+            pageMargins = new PageMargins();
             worksheet.Append(pageMargins);
         }
-        else
-        {
-            pageMargins.Right = pageMargins.Left;
-        }
+
+        pageMargins.Left = CoaLargePdfLeftMarginInches;
+        pageMargins.Right = CoaLargePdfRightMarginInches;
+        pageMargins.Top = CoaLargePdfTopMarginInches;
+        pageMargins.Bottom = CoaLargePdfBottomMarginInches;
+        pageMargins.Header = 0.1D;
+        pageMargins.Footer = 0.05D;
 
         var printOptions = worksheet.GetFirstChild<PrintOptions>();
         if (printOptions is null)
@@ -257,6 +277,21 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
         }
 
         printOptions.HorizontalCentered = true;
+        printOptions.VerticalCentered = false;
+
+        var pageSetup = worksheet.GetFirstChild<PageSetup>();
+        if (pageSetup is null)
+        {
+            pageSetup = new PageSetup();
+            worksheet.Append(pageSetup);
+        }
+
+        pageSetup.PaperSize = CoaLargePdfPaperSize;
+        pageSetup.Orientation = OrientationValues.Portrait;
+        pageSetup.Scale = CoaLargePdfScale;
+        pageSetup.FitToWidth = 0U;
+        pageSetup.FitToHeight = null;
+
         worksheet.Save();
     }
 
@@ -354,20 +389,12 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
         workbookPart.WorkbookStylesPart!.Stylesheet.Save();
     }
 
-    private static string? ResolvePdfHeaderImagePath()
+    private static string? ResolveImagePath(string fileName)
     {
         var baseDirectory = Path.GetDirectoryName(typeof(SpreadsheetPdfConverter).Assembly.Location)
             ?? AppContext.BaseDirectory;
-        var imageDirectory = Path.Combine(baseDirectory, "wwwroot", "image");
-        if (!Directory.Exists(imageDirectory))
-        {
-            return null;
-        }
-
-        return Directory
-            .EnumerateFiles(imageDirectory, "*.png")
-            .OrderBy(path => Path.GetFileName(path), StringComparer.OrdinalIgnoreCase)
-            .FirstOrDefault();
+        var imagePath = Path.Combine(baseDirectory, "wwwroot", "image", fileName);
+        return File.Exists(imagePath) ? imagePath : null;
     }
 
     private static string? ResolveSmallCardHeaderImagePath()
@@ -438,7 +465,7 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
 
     private static byte[] OverlayPdfHeaderImageIfNeeded(byte[] pdfContent, byte[] workbookContent)
     {
-        var pdfHeaderImagePath = ResolvePdfHeaderImagePath();
+        var pdfHeaderImagePath = ResolveImagePath(CoaLargePdfHeaderComposedImageFileName);
         if (string.IsNullOrWhiteSpace(pdfHeaderImagePath) ||
             !File.Exists(pdfHeaderImagePath) ||
             !WorkbookContainsCoaLargeWorksheet(workbookContent))
@@ -680,6 +707,20 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
         return index;
     }
 
+    private static string ToAbsoluteRangeReference(string rangeReference)
+    {
+        static string FormatCell(string cellReference)
+        {
+            var (column, row) = SplitCellReference(cellReference);
+            return $"${column}${row}";
+        }
+
+        var parts = rangeReference.Split(':', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return parts.Length == 1
+            ? FormatCell(parts[0])
+            : $"{FormatCell(parts[0])}:{FormatCell(parts[1])}";
+    }
+
     private static bool RangesIntersect(CellRange left, CellRange right) =>
         left.StartColumn <= right.EndColumn &&
         left.EndColumn >= right.StartColumn &&
@@ -775,7 +816,7 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
             {
                 shape.SetAttributeValue(
                     "style",
-                    "position:absolute;margin-left:0;margin-top:0;width:550pt;height:110.6pt;z-index:2");
+                    "position:absolute;margin-left:0;margin-top:0;width:561pt;height:92.5pt;z-index:2");
                 shape.Element(v + "imagedata")?.SetAttributeValue(o + "relid", headerRelationshipId);
             }
             else if (shapeId == "RH")
@@ -793,6 +834,39 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
         if (headerFooter?.OddHeader is not null)
         {
             headerFooter.OddHeader.Text = "&C\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n";
+        }
+    }
+
+    private static void ReplaceCoaLargePdfSignatureImage(WorksheetPart worksheetPart, string? signatureImagePath)
+    {
+        if (string.IsNullOrWhiteSpace(signatureImagePath) ||
+            !File.Exists(signatureImagePath) ||
+            worksheetPart.DrawingsPart?.WorksheetDrawing is not { } worksheetDrawing)
+        {
+            return;
+        }
+
+        var signatureRelationshipIds = worksheetDrawing
+            .Descendants<Xdr.Picture>()
+            .Where(picture =>
+                !(picture.NonVisualPictureProperties?.NonVisualDrawingProperties?.Name?.Value ?? string.Empty)
+                    .StartsWith(CoaLargePdfWorksheetImageNamePrefix, StringComparison.OrdinalIgnoreCase))
+            .Select(picture => picture.BlipFill?.Blip?.Embed?.Value)
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        foreach (var relationshipId in signatureRelationshipIds)
+        {
+            if (worksheetPart.DrawingsPart.GetPartById(relationshipId!) is not ImagePart imagePart ||
+                !string.Equals(imagePart.ContentType, "image/png", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            using var sourceStream = File.OpenRead(signatureImagePath);
+            using var targetStream = imagePart.GetStream(FileMode.Create, FileAccess.Write);
+            sourceStream.CopyTo(targetStream);
         }
     }
 
@@ -1103,19 +1177,17 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
 
             foreach (var page in document.Pages)
             {
-                var pageWidth = page.Width.Point;
-                var headerWidth = Math.Min(559D, Math.Max(0D, pageWidth - 36D));
-                if (headerWidth <= 0D || image.PixelWidth <= 0)
+                if (image.PixelWidth <= 0)
                 {
                     continue;
                 }
 
-                var headerHeight = headerWidth * image.PixelHeight / image.PixelWidth;
-                var headerX = (pageWidth - headerWidth) / 2D;
-                const double headerY = 7D;
-
                 using var graphics = XGraphics.FromPdfPage(page, XGraphicsPdfPageOptions.Append);
-                graphics.DrawImage(image, headerX, headerY, headerWidth, headerHeight);
+                var headerWidth = Math.Min(CoaLargePdfHeaderWidthPoints, Math.Max(0D, page.Width.Point - 24D));
+                var headerHeight = headerWidth * image.PixelHeight / image.PixelWidth;
+                var headerLeft = (page.Width.Point - headerWidth) / 2D;
+                graphics.DrawRectangle(XBrushes.White, 0D, 0D, page.Width.Point, CoaLargePdfHeaderWhiteoutHeightPoints);
+                graphics.DrawImage(image, headerLeft, CoaLargePdfHeaderTopPoints, headerWidth, headerHeight);
             }
 
             using var output = new MemoryStream();

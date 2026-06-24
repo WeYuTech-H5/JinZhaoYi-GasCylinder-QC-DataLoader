@@ -127,14 +127,13 @@ public sealed class CoaWorkbookExporterTests
     }
 
     [Fact]
-    public void PdfConversionWorkbook_uses_static_pdf_header_and_preserves_excel_print_layout()
+    public void PdfConversionWorkbook_uses_large_card_assets_and_a4_print_layout()
     {
         var exporter = CreateExporter();
         var row = CreateRow("STD-PDF", "0.5L_Cylinder");
         var download = exporter.ExportLargeForDownload([row], "20260521", CoaLargeTemplateType.Standard);
         var originalContent = download.Content.ToArray();
 
-        using var headerImage = new TemporaryPdfHeaderImage();
         var preparedContent = PrepareWorkbookForPdfConversion(originalContent);
 
         HasLegacyHeaderFooterDrawing(download, "COA_STD-PDF").Should().BeTrue();
@@ -143,6 +142,15 @@ public sealed class CoaWorkbookExporterTests
         var preparedDownload = new CoaWorkbookDownload(preparedContent, download.ContentType, download.FileName);
         HasLegacyHeaderFooterDrawing(preparedDownload, "COA_STD-PDF").Should().BeTrue();
         HasWorksheetDrawing(preparedDownload, "COA_STD-PDF").Should().BeTrue();
+        GetLargeSheetPageSetup(preparedDownload, "COA_STD-PDF").Should()
+            .Be((true, 9U, 0U, null, 94U, 0.15D, 0.15D, 0.65D, 0.45D, true, false, null));
+
+        foreach (var fileName in new[] { "coa-large-header-composed.png", "coa-large-signature-enhanced.png" })
+        {
+            var assetPath = Path.Combine(AppContext.BaseDirectory, "wwwroot", "image", fileName);
+            File.Exists(assetPath).Should().BeTrue();
+            new FileInfo(assetPath).Length.Should().BeGreaterThan(0);
+        }
     }
 
     [Fact]
@@ -507,6 +515,57 @@ public sealed class CoaWorkbookExporterTests
             pageMargins?.Top?.Value);
     }
 
+    private static (
+        bool FitToPage,
+        uint? PaperSize,
+        uint? FitToWidth,
+        uint? FitToHeight,
+        uint? Scale,
+        double? LeftMargin,
+        double? RightMargin,
+        double? TopMargin,
+        double? BottomMargin,
+        bool HorizontalCentered,
+        bool VerticalCentered,
+        string? PrintArea) GetLargeSheetPageSetup(
+        CoaWorkbookDownload download,
+        string sheetName)
+    {
+        using var stream = new MemoryStream(download.Content);
+        using var document = SpreadsheetDocument.Open(stream, false);
+        var workbookPart = document.WorkbookPart!;
+        var sheet = workbookPart.Workbook.Sheets!.Elements<Sheet>()
+            .First(item => string.Equals(item.Name?.Value, sheetName, StringComparison.OrdinalIgnoreCase));
+        var worksheetPart = (WorksheetPart)workbookPart.GetPartById(sheet.Id!);
+        var worksheet = worksheetPart.Worksheet;
+        var pageSetup = worksheet.GetFirstChild<PageSetup>();
+        var pageMargins = worksheet.GetFirstChild<PageMargins>();
+        var printOptions = worksheet.GetFirstChild<PrintOptions>();
+        var sheetIndex = workbookPart.Workbook.Sheets!.Elements<Sheet>()
+            .Select((item, index) => (item, index))
+            .First(item => string.Equals(item.item.Name?.Value, sheetName, StringComparison.OrdinalIgnoreCase))
+            .index;
+        var printArea = workbookPart.Workbook.DefinedNames?
+            .Elements<DefinedName>()
+            .FirstOrDefault(name =>
+                name.Name?.Value == "_xlnm.Print_Area" &&
+                name.LocalSheetId?.Value == (uint)sheetIndex)
+            ?.Text;
+        return (
+            worksheet.GetFirstChild<SheetProperties>()?.PageSetupProperties?.FitToPage?.Value == true,
+            pageSetup?.PaperSize?.Value,
+            pageSetup?.FitToWidth?.Value,
+            pageSetup?.FitToHeight?.Value,
+            pageSetup?.Scale?.Value,
+            pageMargins?.Left?.Value,
+            pageMargins?.Right?.Value,
+            pageMargins?.Top?.Value,
+            pageMargins?.Bottom?.Value,
+            printOptions?.HorizontalCentered?.Value == true,
+            printOptions?.VerticalCentered?.Value == true,
+            printArea);
+    }
+
     private static bool HasWorksheetDrawing(CoaWorkbookDownload download, string sheetName)
     {
         using var stream = new MemoryStream(download.Content);
@@ -687,34 +746,6 @@ public sealed class CoaWorkbookExporterTests
         left.EndRow >= right.StartRow;
 
     private readonly record struct CellRange(int StartColumn, int EndColumn, uint StartRow, uint EndRow);
-
-    private sealed class TemporaryPdfHeaderImage : IDisposable
-    {
-        private readonly string _path;
-
-        public TemporaryPdfHeaderImage()
-        {
-            var directory = Path.Combine(AppContext.BaseDirectory, "wwwroot", "image");
-            Directory.CreateDirectory(directory);
-            _path = Path.Combine(directory, "000-test-pdf-header.png");
-            File.WriteAllBytes(_path, Convert.FromBase64String(
-                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lJqGygAAAABJRU5ErkJggg=="));
-        }
-
-        public void Dispose()
-        {
-            try
-            {
-                File.Delete(_path);
-            }
-            catch (IOException)
-            {
-            }
-            catch (UnauthorizedAccessException)
-            {
-            }
-        }
-    }
 
     private static string ResolveTemplatePath(string fileName)
     {
