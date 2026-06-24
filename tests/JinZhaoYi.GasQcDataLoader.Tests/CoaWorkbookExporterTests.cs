@@ -3,12 +3,16 @@ using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Spreadsheet;
 using FluentAssertions;
+using System.Diagnostics;
 using System.Reflection;
+using System.Security.Cryptography;
 using JinZhaoYi.GasQcDataLoader.Configuration;
 using JinZhaoYi.GasQcDataLoader.DataModels;
 using JinZhaoYi.GasQcDataLoader.Services.Interface;
 using JinZhaoYi.GasQcDataLoader.Services.Service;
 using Microsoft.Extensions.Options;
+using PdfSharp.Pdf;
+using PdfSharp.Pdf.IO;
 using A = DocumentFormat.OpenXml.Drawing;
 using Xdr = DocumentFormat.OpenXml.Drawing.Spreadsheet;
 
@@ -265,14 +269,16 @@ public sealed class CoaWorkbookExporterTests
         GetSmallSheetPageSetup(preparedDownload, sheetName).Should().Be((false, 1U, null, null, 74U, 0.25D, 0.25D));
         IsHorizontallyCentered(preparedDownload, sheetName).Should().BeTrue();
         IsVerticallyCentered(preparedDownload, sheetName).Should().BeTrue();
-        GetPrintArea(preparedDownload, sheetName).Should().Be($"'{sheetName}'!$B$2:$AA$66");
+        GetPrintArea(preparedDownload, sheetName).Should().Be($"'{sheetName}'!$A$1:$AB$67");
 
         using var originalWorkbook = Open(download);
         using var preparedWorkbook = Open(preparedDownload);
         originalWorkbook.Worksheet(sheetName).Cell("B8").Style.Font.FontName.Should().Be("Microsoft JhengHei UI");
-        preparedWorkbook.Worksheet(sheetName).Cell("B8").Style.Font.FontName.Should().Be("Times New Roman");
+        preparedWorkbook.Worksheet(sheetName).Cell("B8").Style.Font.FontName.Should().Be("Microsoft JhengHei UI");
         preparedWorkbook.Worksheet(sheetName).Row(8).Height.Should()
             .BeApproximately(originalWorkbook.Worksheet(sheetName).Row(8).Height * 0.96D, 0.01D);
+        preparedWorkbook.Worksheet(sheetName).RowHeight.Should().BeApproximately(16.2D * 0.96D, 0.01D);
+        preparedWorkbook.Worksheet(sheetName).Row(20).Height.Should().BeApproximately(16.5D * 0.96D, 0.01D);
     }
 
     [Fact]
@@ -288,9 +294,53 @@ public sealed class CoaWorkbookExporterTests
         var preparedContent = PrepareWorkbookForPdfConversion(download.Content.ToArray());
         var preparedDownload = new CoaWorkbookDownload(preparedContent, download.ContentType, download.FileName);
 
-        GetPrintArea(preparedDownload, sheetName).Should().Be($"'{sheetName}'!$B$2:$AA$66");
+        GetPrintArea(preparedDownload, sheetName).Should().Be($"'{sheetName}'!$A$1:$AB$67");
         IsHorizontallyCentered(preparedDownload, sheetName).Should().BeTrue();
         IsVerticallyCentered(preparedDownload, sheetName).Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(5)]
+    [InlineData(9)]
+    [InlineData(10)]
+    public void PdfConversionWorkbook_preserves_small_card_layout_for_supported_batch_sizes(int cardCount)
+    {
+        var exporter = CreateExporter();
+        var rows = Enumerable.Range(1, cardCount)
+            .Select(index => CreateRow($"STD-N{index:000}", "1L_Cylinder", index))
+            .ToArray();
+        var download = exporter.ExportSmallForDownload(rows, "20260521", 9);
+        var preparedContent = PrepareWorkbookForPdfConversion(download.Content.ToArray());
+        var preparedDownload = new CoaWorkbookDownload(preparedContent, download.ContentType, download.FileName);
+        var sheetNames = GetSheetNames(preparedDownload);
+        var sampleCells = new[] { "F6", "O6", "X6", "F28", "O28", "X28", "F50", "O50", "X50" };
+
+        sheetNames.Should().HaveCount((cardCount + 8) / 9);
+        using var workbook = Open(preparedDownload);
+        for (var pageIndex = 0; pageIndex < sheetNames.Length; pageIndex++)
+        {
+            var sheetName = sheetNames[pageIndex];
+            var cardsOnPage = Math.Min(9, cardCount - (pageIndex * 9));
+            GetPrintArea(preparedDownload, sheetName).Should().Be($"'{sheetName}'!$A$1:$AB$67");
+            IsHorizontallyCentered(preparedDownload, sheetName).Should().BeTrue();
+            IsVerticallyCentered(preparedDownload, sheetName).Should().BeTrue();
+            workbook.Worksheet(sheetName).Cell("B8").Style.Font.FontName.Should().Be("Microsoft JhengHei UI");
+
+            for (var index = 0; index < sampleCells.Length; index++)
+            {
+                var value = workbook.Worksheet(sheetName).Cell(sampleCells[index]).GetString();
+                if (index < cardsOnPage)
+                {
+                    value.Should().NotBeEmpty();
+                }
+                else
+                {
+                    value.Should().BeEmpty();
+                }
+            }
+        }
     }
 
     [Fact]
@@ -334,6 +384,86 @@ public sealed class CoaWorkbookExporterTests
 
         File.Exists(assetPath).Should().BeTrue();
         new FileInfo(assetPath).Length.Should().BeGreaterThan(0);
+        var (width, height) = ReadPngDimensions(assetPath);
+        width.Should().BeGreaterThanOrEqualTo(611, "the Excel-rendered header must provide at least 300 DPI");
+        height.Should().BeGreaterThanOrEqualTo(89, "the header should retain sufficient vertical detail at print size");
+        (width / (double)height).Should().BeApproximately(1222D / 179D, 0.05D);
+    }
+
+    [Fact]
+    public void Project_contains_locked_excel_rendered_small_card_reference_page()
+    {
+        var referencePath = ResolveSmallCardExcelReferencePagePath();
+
+        File.Exists(referencePath).Should().BeTrue();
+        ReadPngDimensions(referencePath).Should().Be((2481, 3508));
+        Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(referencePath))).Should()
+            .Be("9A4DC3E84EA475B77B58C230BAD68A3736B22451B59A1A4CCB0ABEBA90BF52F2");
+    }
+
+    [Theory]
+    [Trait("Category", "LibreOfficeIntegration")]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(5)]
+    [InlineData(9)]
+    [InlineData(10)]
+    public async Task LibreOffice_renders_small_card_pdf_for_supported_batch_sizes(int cardCount)
+    {
+        var libreOfficePath = Environment.GetEnvironmentVariable("GAS_QC_TEST_LIBREOFFICE_PATH");
+        if (string.IsNullOrWhiteSpace(libreOfficePath))
+        {
+            return;
+        }
+
+        File.Exists(libreOfficePath).Should().BeTrue();
+        var options = Options.Create(new SchedulerOptions
+        {
+            CsvExport = new SchedulerCsvExportOptions { RawLotId = "CC-706988" },
+            CoaExport = new SchedulerCoaExportOptions
+            {
+                SmallTemplatePath = ResolveTemplatePath("COA(小卡).xlsx"),
+                LibreOfficePath = libreOfficePath,
+                PdfConversionTimeoutSeconds = 120,
+                UseBasicPdfFallback = false
+            }
+        });
+        var exporter = new CoaWorkbookExporter(options);
+        var converter = new SpreadsheetPdfConverter(options);
+        var rows = Enumerable.Range(1, cardCount)
+            .Select(index => CreateRow($"STD-N{index:000}", "1L_Cylinder", index))
+            .ToArray();
+        var workbook = exporter.ExportSmallForDownload(rows, "20260624", 9);
+
+        var pdfContent = await converter.ConvertXlsxToPdfAsync(
+            workbook.Content.ToArray(),
+            workbook.FileName,
+            CancellationToken.None);
+
+        pdfContent.Length.Should().BeGreaterThan(20_000);
+        using var pdf = PdfReader.Open(new MemoryStream(pdfContent), PdfDocumentOpenMode.Import);
+        pdf.PageCount.Should().Be((cardCount + 8) / 9);
+        foreach (var page in pdf.Pages.Cast<PdfPage>())
+        {
+            page.Width.Point.Should().BeApproximately(612D, 2D);
+            page.Height.Point.Should().BeApproximately(792D, 2D);
+        }
+
+        var outputDirectory = Environment.GetEnvironmentVariable("GAS_QC_TEST_OUTPUT_DIR");
+        if (!string.IsNullOrWhiteSpace(outputDirectory))
+        {
+            Directory.CreateDirectory(outputDirectory);
+            var pdfPath = Path.Combine(outputDirectory, $"COA-small-{cardCount:00}.pdf");
+            await File.WriteAllBytesAsync(
+                Path.Combine(outputDirectory, $"COA-small-{cardCount:00}.xlsx"),
+                workbook.Content.ToArray());
+            await File.WriteAllBytesAsync(pdfPath, pdfContent);
+
+            if (cardCount is 1 or 9)
+            {
+                await VerifySmallCardPdfIfConfiguredAsync(pdfPath, outputDirectory, cardCount);
+            }
+        }
     }
 
     [Fact]
@@ -619,6 +749,84 @@ public sealed class CoaWorkbookExporterTests
         method.Should().NotBeNull();
         return ((byte[]?)method!.Invoke(null, [workbookContent]))!;
     }
+
+    private static (int Width, int Height) ReadPngDimensions(string path)
+    {
+        Span<byte> header = stackalloc byte[24];
+        using var stream = File.OpenRead(path);
+        stream.ReadExactly(header);
+
+        header[..8].SequenceEqual(new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 }).Should().BeTrue();
+        var width = System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(header[16..20]);
+        var height = System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(header[20..24]);
+        return (width, height);
+    }
+
+    private static async Task VerifySmallCardPdfIfConfiguredAsync(
+        string pdfPath,
+        string outputDirectory,
+        int cardCount)
+    {
+        var pythonPath = Environment.GetEnvironmentVariable("GAS_QC_TEST_PYTHON_PATH");
+        var pdftoppmPath = Environment.GetEnvironmentVariable("GAS_QC_TEST_PDFTOPPM_PATH");
+        if (string.IsNullOrWhiteSpace(pythonPath) ||
+            string.IsNullOrWhiteSpace(pdftoppmPath))
+        {
+            return;
+        }
+
+        File.Exists(pythonPath).Should().BeTrue();
+        File.Exists(pdftoppmPath).Should().BeTrue();
+        var scriptPath = Path.Combine(
+            AppContext.BaseDirectory,
+            "Tools",
+            "verify_coa_small_header.py");
+        File.Exists(scriptPath).Should().BeTrue();
+
+        var comparisonDirectory = Path.Combine(
+            outputDirectory,
+            cardCount == 1 ? "header-comparison" : "crop-mark-comparison");
+        var startInfo = new ProcessStartInfo(pythonPath)
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        startInfo.ArgumentList.Add(scriptPath);
+        startInfo.ArgumentList.Add("--actual-pdf");
+        startInfo.ArgumentList.Add(pdfPath);
+        startInfo.ArgumentList.Add("--pdftoppm");
+        startInfo.ArgumentList.Add(pdftoppmPath);
+        startInfo.ArgumentList.Add("--output-dir");
+        startInfo.ArgumentList.Add(comparisonDirectory);
+        if (cardCount == 1)
+        {
+            startInfo.ArgumentList.Add("--reference-page");
+            startInfo.ArgumentList.Add(ResolveSmallCardExcelReferencePagePath());
+            startInfo.ArgumentList.Add("--verify-fonts");
+        }
+        else
+        {
+            startInfo.ArgumentList.Add("--verify-crop-marks");
+        }
+
+        using var process = Process.Start(startInfo);
+        process.Should().NotBeNull();
+        var standardOutput = await process!.StandardOutput.ReadToEndAsync();
+        var standardError = await process.StandardError.ReadToEndAsync();
+        await process.WaitForExitAsync();
+
+        process.ExitCode.Should().Be(
+            0,
+            $"header similarity regression failed.{Environment.NewLine}{standardOutput}{Environment.NewLine}{standardError}");
+    }
+
+    private static string ResolveSmallCardExcelReferencePagePath() =>
+        Path.Combine(
+            AppContext.BaseDirectory,
+            "TestData",
+            "coa-small-excel-reference-page-300dpi.png");
 
     private static string? GetCellFontRgb(CoaWorkbookDownload download, string sheetName, string cellReference)
     {

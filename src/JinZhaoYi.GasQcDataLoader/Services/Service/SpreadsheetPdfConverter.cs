@@ -32,10 +32,11 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
     private const double CoaLargePdfHeaderWidthPoints = 561D;
     private const double CoaLargePdfHeaderTopPoints = 6D;
     private const double CoaLargePdfHeaderWhiteoutHeightPoints = 100D;
-    private const string SmallCardPdfPrintArea = "$B$2:$AA$66";
+    private const string SmallCardPdfPrintArea = "$A$1:$AB$67";
     private const double SmallCardMarginInches = 0.25D;
+    private const double SmallCardDefaultRowHeightPoints = 16.2D;
+    private const double SmallCardFooterRowHeightPoints = 16.5D;
     private const double SmallCardRowHeightScale = 0.96D;
-    private const string SmallCardPdfFontName = "Times New Roman";
     private const uint SmallCardPdfPaperSize = 1U; // Letter, matching the approved Excel-rendered PDF.
     private const uint SmallCardPdfScale = 74U;
     private const double SmallCardWidthPoints = 246.6D;
@@ -230,7 +231,6 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
                 else if (IsCoaSmallWorksheet(workbookPart, worksheetPart))
                 {
                     ApplyCoaSmallPdfPrintLayout(workbookPart, worksheetPart);
-                    ApplyCoaSmallPdfFonts(workbookPart);
                     ReplaceHeaderFooterWithPdfHeaderImage(workbookPart, worksheetPart, pdfHeaderImagePath);
                 }
             }
@@ -355,9 +355,9 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
     private static void ScaleSmallCardRowHeights(Worksheet worksheet)
     {
         var sheetFormat = worksheet.GetFirstChild<SheetFormatProperties>();
-        if (sheetFormat?.DefaultRowHeight?.Value is { } defaultRowHeight)
+        if (sheetFormat is not null)
         {
-            sheetFormat.DefaultRowHeight = defaultRowHeight * SmallCardRowHeightScale;
+            sheetFormat.DefaultRowHeight = SmallCardDefaultRowHeightPoints * SmallCardRowHeightScale;
         }
 
         foreach (var row in worksheet.Descendants<Row>())
@@ -367,26 +367,16 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
                 row.Height = height * SmallCardRowHeightScale;
             }
         }
-    }
 
-    private static void ApplyCoaSmallPdfFonts(WorkbookPart workbookPart)
-    {
-        var fonts = workbookPart.WorkbookStylesPart?.Stylesheet.Fonts;
-        if (fonts is null)
+        foreach (var rowIndex in new uint[] { 20U, 42U, 64U })
         {
-            return;
-        }
-
-        foreach (var font in fonts.Elements<Font>())
-        {
-            var fontName = font.GetFirstChild<FontName>();
-            if (string.Equals(fontName?.Val?.Value, "Microsoft JhengHei UI", StringComparison.OrdinalIgnoreCase))
+            var row = worksheet.Descendants<Row>().FirstOrDefault(item => item.RowIndex?.Value == rowIndex);
+            if (row is not null && row.Height is null)
             {
-                fontName!.Val = SmallCardPdfFontName;
+                row.Height = SmallCardFooterRowHeightPoints * SmallCardRowHeightScale;
+                row.CustomHeight = true;
             }
         }
-
-        workbookPart.WorkbookStylesPart!.Stylesheet.Save();
     }
 
     private static string? ResolveImagePath(string fileName)
@@ -1084,11 +1074,13 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
         private const double CardBlockHeightPoints = 220D;
         private const double CardColumnPitchPoints = 150D;
         private const double CardRowPitchPoints = 218D;
-        private const double HeaderImageLeftOffsetPoints = 0.5D;
-        private const double HeaderImageTopOffsetPoints = 9D;
-        private const double HeaderImageWidthPoints = 135D;
-        private const double HeaderWhiteoutWidthPoints = 147D;
-        private const double HeaderWhiteoutHeightPoints = 31D;
+        private const double HeaderImageLeftOffsetPoints = -14D;
+        private const double HeaderImageTopOffsetPoints = 5.5D;
+        private const double HeaderImageWidthPoints = 128.8D;
+        private const double HeaderWhiteoutLeftOffsetPoints = -26D;
+        private const double HeaderWhiteoutTopOffsetPoints = 4D;
+        private const double HeaderWhiteoutWidthPoints = 181D;
+        private const double HeaderWhiteoutHeightPoints = 27D;
 
         public static byte[] Add(
             byte[] pdfContent,
@@ -1137,8 +1129,8 @@ public sealed class SpreadsheetPdfConverter(IOptions<SchedulerOptions> options) 
                     var row = cardIndex / SmallCardColumnsPerPage;
                     graphics.DrawRectangle(
                         XBrushes.White,
-                        blockLeft + (column * CardColumnPitchPoints * scale),
-                        blockTop + (row * CardRowPitchPoints * scale),
+                        blockLeft + ((HeaderWhiteoutLeftOffsetPoints + (column * CardColumnPitchPoints)) * scale),
+                        blockTop + ((HeaderWhiteoutTopOffsetPoints + (row * CardRowPitchPoints)) * scale),
                         HeaderWhiteoutWidthPoints * scale,
                         HeaderWhiteoutHeightPoints * scale);
                 }
