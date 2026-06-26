@@ -42,8 +42,10 @@ public sealed class CoaWorkbookExporterTests
         workbook.Worksheet("COA_STD-L100").Cell("B10").GetString().Should().Be("STD Gas PC for Semiconductor");
         workbook.Worksheet("COA_STD-N050").Cell("B11").GetString().Should().Be("PG000-0006");
         workbook.Worksheet("COA_STD-L100").Cell("B11").GetString().Should().Be("PG000-0100");
-        workbook.Worksheet("COA_STD-N050").Cell("B13").GetString().Should().Be("2026/9/15");
-        workbook.Worksheet("COA_STD-L100").Cell("B13").GetString().Should().Be("2027/5/20");
+        workbook.Worksheet("COA_STD-N050").Cell("B12").GetString().Should().Be("2026/05/21");
+        workbook.Worksheet("COA_STD-N050").Cell("B13").GetString().Should().Be("2026/09/15");
+        workbook.Worksheet("COA_STD-L100").Cell("B12").GetString().Should().Be("2026/05/21");
+        workbook.Worksheet("COA_STD-L100").Cell("B13").GetString().Should().Be("2027/05/20");
         workbook.Worksheet("COA_STD-N050").Cell("B14").GetString().Should().Be("5 cm*35cm");
         workbook.Worksheet("COA_STD-L100").Cell("B14").GetString().Should().Be("8.87 cm*27.7 cm");
         workbook.Worksheet("COA_STD-N050").Cell("B16").GetString().Should().Be("950 psi");
@@ -234,6 +236,8 @@ public sealed class CoaWorkbookExporterTests
         firstSheet.Cell("O8").GetDouble().Should().Be(92);
         firstSheet.Cell("B19").GetString().Should().Be("母瓶 NO.  BOMB1-001");
         firstSheet.Cell("K19").GetString().Should().Be("母瓶 NO.  BOMB1-002");
+        firstSheet.Cell("F19").GetString().Should().Be("QC: 2026/05/21");
+        firstSheet.Cell("B20").GetString().Should().Contain("2027/05/20");
     }
 
     [Fact]

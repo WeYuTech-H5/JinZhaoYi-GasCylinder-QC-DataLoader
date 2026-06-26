@@ -69,7 +69,7 @@ public sealed class CoaPackageExporter(
                 cancellationToken.ThrowIfCancellationRequested();
 
                 var workbook = exportWorkbook(row);
-                var baseFileName = BuildBaseFileName(packageName, batchDateText, row);
+                var baseFileName = BuildBaseFileName(row);
                 var xlsxFileName = ResolveUniqueFileName($"{baseFileName}.xlsx", usedFileNames);
                 AddEntry(archive, xlsxFileName, workbook.Content);
 
@@ -92,10 +92,11 @@ public sealed class CoaPackageExporter(
         entryStream.Write(content, 0, content.Length);
     }
 
-    private static string BuildBaseFileName(string packageName, string batchDateText, QcDataRow row)
+    private static string BuildBaseFileName(QcDataRow row)
     {
+        var certificationDate = row.AnlzTime?.ToString("yyyyMMdd", CultureInfo.InvariantCulture) ?? "unknown-date";
         var sampleName = string.IsNullOrWhiteSpace(row.SampleName) ? "unknown-sample" : row.SampleName.Trim();
-        return $"{packageName}_{batchDateText}_{SanitizeFileName(sampleName)}";
+        return $"{certificationDate}_{SanitizeFileName(sampleName)}";
     }
 
     private static string ResolveUniqueFileName(string fileName, HashSet<string> usedFileNames)

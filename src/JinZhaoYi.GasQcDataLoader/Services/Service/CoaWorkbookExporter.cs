@@ -633,7 +633,7 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
     }
 
     private static string FormatDate(DateTime? value) =>
-        value?.ToString("yyyy/M/d", CultureInfo.InvariantCulture) ?? string.Empty;
+        value?.ToString("yyyy/MM/dd", CultureInfo.InvariantCulture) ?? string.Empty;
 
     private static void WriteDecimal(IXLCell cell, decimal? value)
     {
