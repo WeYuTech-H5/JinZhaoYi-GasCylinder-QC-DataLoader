@@ -42,7 +42,7 @@ COA 大卡與小卡都不直接讀匯入計算表 `ZZ_NF_GAS_QC_LOT_PORT_PPB`，
 | `E15` | Analytical Accuracy | 固定 `±10%` |
 | `E16` | Specification | 一般版依 `Container` 覆寫：`1L_Cylinder` = `±15%`、`0.5L_Cylinder` = `±10%`。 |
 | sheet 名稱 | `COA_{SampleName}` | `ZZ_NF_GAS_QC_EXCEL_PPB_HISTORY.SampleName` |
-| 大卡 zip 內檔名 | `Certification Date_yyyyMMdd_{SampleName}.xlsx` / `Certification Date_yyyyMMdd_{SampleName}.pdf` | `yyyyMMdd` 來自 Certification Date (`AnlzTime`)，`SampleName` 為 Cylinder#；若重複則加 `_2`、`_3` 避免覆蓋。 |
+| 大卡 zip 內檔名 | `yyyyMMdd_{SampleName}.xlsx` / `yyyyMMdd_{SampleName}.pdf` | `yyyyMMdd` 來自 Certification Date (`AnlzTime`)，`SampleName` 為 Cylinder#；若重複則加 `_2`、`_3` 避免覆蓋。 |
 
 母瓶效期來源為 `GAS_LOT_Bomb`，其中 `LotNo` 是母瓶號，對應 `ZZ_NF_GAS_MFG_LOT.Prod_Bomb1_LotNo`。
 

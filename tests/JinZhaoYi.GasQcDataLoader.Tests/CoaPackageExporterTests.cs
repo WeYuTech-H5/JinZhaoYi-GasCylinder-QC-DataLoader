@@ -33,13 +33,13 @@ public sealed class CoaPackageExporterTests
 
         using var archive = new ZipArchive(new MemoryStream(download.Content), ZipArchiveMode.Read);
         archive.Entries.Select(entry => entry.FullName).Should().BeEquivalentTo(
-            "Certification Date_20260521_STD-N001.xlsx",
-            "Certification Date_20260521_STD-N001.pdf",
-            "Certification Date_20260521_STD-N002.xlsx",
-            "Certification Date_20260521_STD-N002.pdf");
+            "20260521_STD-N001.xlsx",
+            "20260521_STD-N001.pdf",
+            "20260521_STD-N002.xlsx",
+            "20260521_STD-N002.pdf");
         pdfConverter.WorkbookFileNames.Should().Equal(
-            "Certification Date_20260521_STD-N001.xlsx",
-            "Certification Date_20260521_STD-N002.xlsx");
+            "20260521_STD-N001.xlsx",
+            "20260521_STD-N002.xlsx");
     }
 
     [Fact]
