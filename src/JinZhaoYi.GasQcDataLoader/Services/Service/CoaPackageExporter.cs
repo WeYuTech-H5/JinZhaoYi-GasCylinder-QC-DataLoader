@@ -96,7 +96,7 @@ public sealed class CoaPackageExporter(
     {
         var certificationDate = row.AnlzTime?.ToString("yyyyMMdd", CultureInfo.InvariantCulture) ?? "unknown-date";
         var sampleName = string.IsNullOrWhiteSpace(row.SampleName) ? "unknown-sample" : row.SampleName.Trim();
-        return $"{certificationDate}_{SanitizeFileName(sampleName)}";
+        return $"Certification Date_{certificationDate}_{SanitizeFileName(sampleName)}";
     }
 
     private static string ResolveUniqueFileName(string fileName, HashSet<string> usedFileNames)
