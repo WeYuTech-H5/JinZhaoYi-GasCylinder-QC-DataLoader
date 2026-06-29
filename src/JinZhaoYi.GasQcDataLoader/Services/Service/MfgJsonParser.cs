@@ -7,6 +7,20 @@ namespace JinZhaoYi.GasQcDataLoader.Services.Service;
 
 public sealed class MfgJsonParser : IMfgJsonParser
 {
+    private static readonly HashSet<string> AllowedNullFields = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Cal_id",
+        "CalType",
+        "FnlPrs",
+        "IniPrs",
+        "QCComplete",
+        "QCInst",
+        "QCPort",
+        "QCTime",
+        "Result",
+        "RF_ID"
+    };
+
     public IReadOnlyList<MfgJsonLotRecord> Parse(string json)
     {
         using var document = JsonDocument.Parse(json);
@@ -88,7 +102,9 @@ public sealed class MfgJsonParser : IMfgJsonParser
 
     private static IReadOnlyList<string> GetExplicitNullFields(JsonElement item) =>
         item.EnumerateObject()
-            .Where(property => property.Value.ValueKind == JsonValueKind.Null)
+            .Where(property =>
+                property.Value.ValueKind == JsonValueKind.Null &&
+                !AllowedNullFields.Contains(property.Name))
             .Select(property => property.Name)
             .ToArray();
 

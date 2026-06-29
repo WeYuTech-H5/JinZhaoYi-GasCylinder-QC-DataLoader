@@ -42,7 +42,7 @@ public sealed class MfgJsonParserTests
     }
 
     [Fact]
-    public void Parse_tracks_explicit_null_fields()
+    public void Parse_tracks_explicit_null_fields_except_qc_fields()
     {
         var rows = new MfgJsonParser().Parse(
             """
@@ -51,13 +51,26 @@ public sealed class MfgJsonParserTests
                 "si0_id": 6377,
                 "LotNo": "20260508002",
                 "SampleType": null,
-                "Result": null
+                "Cal_id": null,
+                "CalType": null,
+                "FnlPrs": null,
+                "IniPrs": null,
+                "QCComplete": null,
+                "QCInst": null,
+                "QCPort": null,
+                "QCTime": null,
+                "Result": null,
+                "RF_ID": null
               }
             ]
             """);
 
         rows.Should().ContainSingle();
-        rows[0].NullFields.Should().Equal("SampleType", "Result");
+        rows[0].NullFields.Should().Equal("SampleType");
+        rows[0].CalId.Should().BeNull();
+        rows[0].QcTime.Should().BeNull();
+        rows[0].Result.Should().BeNull();
+        rows[0].RfId.Should().BeNull();
     }
 
     [Fact]
