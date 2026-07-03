@@ -55,7 +55,7 @@ Misc      : port 1  903  872>  #20251030001
 | `Sample` | `Sample` | 目前不直接寫入主要 DB 欄位 | 保留在 parsed model，方便追查。 |
 | `Misc` | `Misc` | `Description` | 完整 Misc 文字寫入 DB。 |
 | `Misc` 最後 `#` 後文字 | `LotNo` | `LotNo` | 例如 `#20251030001` → `20251030001`。 |
-| `.D` folder name | `SampleNo` | `SampleNo` | 例如 `xxx_903.D` → `903`；`xxx_V006.D` → `6`。 |
+| `.D` folder name | `SampleNo` | `SampleNo` | 例如 `xxx_903.D` → `903`；`xxx_V006.D` → `6`；`xxx_L068.D` → `68`。 |
 | Source folder `STD` / `PORT N` | `Source.Port` | `Port` | `STD` 寫 STD table；`PORT N` 寫 PORT table。 |
 
 ## 3. SampleNo 解析規則
