@@ -7,20 +7,6 @@ namespace JinZhaoYi.GasQcDataLoader.Services.Service;
 
 public sealed class MfgJsonParser : IMfgJsonParser
 {
-    private static readonly HashSet<string> AllowedNullFields = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "Cal_id",
-        "CalType",
-        "FnlPrs",
-        "IniPrs",
-        "QCComplete",
-        "QCInst",
-        "QCPort",
-        "QCTime",
-        "Result",
-        "RF_ID"
-    };
-
     public IReadOnlyList<MfgJsonLotRecord> Parse(string json)
     {
         using var document = JsonDocument.Parse(json);
@@ -43,41 +29,40 @@ public sealed class MfgJsonParser : IMfgJsonParser
             var lotNo = ReadRequiredString(item, "LotNo", index);
             rows.Add(new MfgJsonLotRecord
             {
-                NullFields = GetExplicitNullFields(item),
                 Id = ReadRequiredDecimal(item, "si0_id", index),
                 Si0Id = si0Id,
                 LotNo = lotNo,
                 SampleName = ReadString(item, "si0_SampleName"),
-                ProdDate = ReadDate(item, "si0_ProdDate", index),
+                ProdDate = ReadDate(item, "si0_ProdDate"),
                 ProdType = ReadString(item, "ProdType"),
                 ProdOperator = ReadString(item, "Prod_Operator"),
-                ProdIniPrs = ReadInt(item, "Prod_IniPrs", index),
-                ProdLeakTest1 = ReadInt(item, "Prod_LeakTest1", index),
-                ProdVacuumPrs = ReadInt(item, "Prod_VacuumPrs", index),
-                ProdCan1FillingPrs = ReadInt(item, "Prod_Can1_FillingPrs", index),
-                ProdCan2FillingPrs = ReadInt(item, "Prod_Can2_FillingPrs", index),
-                ProdBomb2FillingPrs = ReadInt(item, "Prod_Bomb2_FillingPrs", index),
-                ProdBomb1FillingPrs = ReadInt(item, "Prod_Bomb1_FillingPrs", index),
-                ProdBomb3FillingPrs = ReadInt(item, "Prod_Bomb3_FillingPrs", index),
-                ProdLeakTest2 = ReadInt(item, "Prod_LeakTest2", index),
+                ProdIniPrs = ReadInt(item, "Prod_IniPrs"),
+                ProdLeakTest1 = ReadInt(item, "Prod_LeakTest1"),
+                ProdVacuumPrs = ReadInt(item, "Prod_VacuumPrs"),
+                ProdCan1FillingPrs = ReadInt(item, "Prod_Can1_FillingPrs"),
+                ProdCan2FillingPrs = ReadInt(item, "Prod_Can2_FillingPrs"),
+                ProdBomb2FillingPrs = ReadInt(item, "Prod_Bomb2_FillingPrs"),
+                ProdBomb1FillingPrs = ReadInt(item, "Prod_Bomb1_FillingPrs"),
+                ProdBomb3FillingPrs = ReadInt(item, "Prod_Bomb3_FillingPrs"),
+                ProdLeakTest2 = ReadInt(item, "Prod_LeakTest2"),
                 ProdCan1LotNo = ReadString(item, "Prod_Can1_LotNo"),
-                ProdCan1Flow = ReadInt(item, "Prod_Can1_Flow", index),
-                ProdCan1Sec = ReadInt(item, "Prod_Can1_Sec", index),
-                ProdCan1Prs = ReadDecimal(item, "Prod_Can1_Prs", index),
+                ProdCan1Flow = ReadInt(item, "Prod_Can1_Flow"),
+                ProdCan1Sec = ReadInt(item, "Prod_Can1_Sec"),
+                ProdCan1Prs = ReadDecimal(item, "Prod_Can1_Prs"),
                 ProdCan2LotNo = ReadString(item, "Prod_Can2_LotNo"),
-                ProdCan2Flow = ReadInt(item, "Prod_Can2_Flow", index),
-                ProdCan2Sec = ReadInt(item, "Prod_Can2_Sec", index),
-                ProdCan2Prs = ReadInt(item, "Prod_Can2_Prs", index),
+                ProdCan2Flow = ReadInt(item, "Prod_Can2_Flow"),
+                ProdCan2Sec = ReadInt(item, "Prod_Can2_Sec"),
+                ProdCan2Prs = ReadInt(item, "Prod_Can2_Prs"),
                 ProdBomb2LotNo = ReadString(item, "Prod_Bomb2_LotNo"),
-                ProdBomb2Flow = ReadInt(item, "Prod_Bomb2_Flow", index),
-                ProdBomb2Sec = ReadInt(item, "Prod_Bomb2_Sec", index),
-                ProdBomb2Prs = ReadInt(item, "Prod_Bomb2_Prs", index),
+                ProdBomb2Flow = ReadInt(item, "Prod_Bomb2_Flow"),
+                ProdBomb2Sec = ReadInt(item, "Prod_Bomb2_Sec"),
+                ProdBomb2Prs = ReadInt(item, "Prod_Bomb2_Prs"),
                 ProdBomb1LotNo = ReadString(item, "Prod_Bomb1_LotNo"),
-                ProdBomb1SetFillingPrs = ReadInt(item, "Prod_Bomb1_SetFillingPrs", index),
-                ProdBomb1Prs = ReadInt(item, "Prod_Bomb1_Prs", index),
+                ProdBomb1SetFillingPrs = ReadInt(item, "Prod_Bomb1_SetFillingPrs"),
+                ProdBomb1Prs = ReadInt(item, "Prod_Bomb1_Prs"),
                 ProdBomb3LotNo = ReadString(item, "Prod_Bomb3_LotNo"),
-                ProdBomb3SetFillingPrs = ReadInt(item, "Prod_Bomb3_SetFillingPrs", index),
-                ProdBomb3Prs = ReadInt(item, "Prod_Bomb3_Prs", index),
+                ProdBomb3SetFillingPrs = ReadInt(item, "Prod_Bomb3_SetFillingPrs"),
+                ProdBomb3Prs = ReadInt(item, "Prod_Bomb3_Prs"),
                 SampleNo = ReadString(item, "SampleNo"),
                 SampleType = ReadString(item, "SampleType"),
                 Container = ReadString(item, "Container"),
@@ -88,7 +73,7 @@ public sealed class MfgJsonParser : IMfgJsonParser
                 QcComplete = ReadString(item, "QCComplete"),
                 QcInst = ReadString(item, "QCInst"),
                 QcPort = ReadString(item, "QCPort"),
-                QcTime = ReadDateTime(item, "QCTime", index),
+                QcTime = ReadDateTime(item, "QCTime"),
                 Result = ReadString(item, "Result"),
                 RfId = ReadString(item, "RF_ID"),
                 FnlPrs = ReadString(item, "FnlPrs")
@@ -99,14 +84,6 @@ public sealed class MfgJsonParser : IMfgJsonParser
         EnsureNoDuplicate(rows, row => row.LotNo, "LotNo");
         return rows;
     }
-
-    private static IReadOnlyList<string> GetExplicitNullFields(JsonElement item) =>
-        item.EnumerateObject()
-            .Where(property =>
-                property.Value.ValueKind == JsonValueKind.Null &&
-                !AllowedNullFields.Contains(property.Name))
-            .Select(property => property.Name)
-            .ToArray();
 
     private static void EnsureNoDuplicate(
         IReadOnlyList<MfgJsonLotRecord> rows,
@@ -142,7 +119,7 @@ public sealed class MfgJsonParser : IMfgJsonParser
         return string.IsNullOrWhiteSpace(text) ? null : text.Trim();
     }
 
-    private static int? ReadInt(JsonElement item, string propertyName, int index)
+    private static int? ReadInt(JsonElement item, string propertyName)
     {
         var text = ReadString(item, propertyName);
         if (text is null)
@@ -155,14 +132,14 @@ public sealed class MfgJsonParser : IMfgJsonParser
             return value;
         }
 
-        throw new InvalidOperationException($"MFG JSON item #{index} field '{propertyName}' is not a valid integer: {text}.");
+        return null;
     }
 
     private static decimal ReadRequiredDecimal(JsonElement item, string propertyName, int index) =>
-        ReadDecimal(item, propertyName, index)
+        ReadRequiredDecimalValue(item, propertyName, index)
         ?? throw new InvalidOperationException($"MFG JSON item #{index} missing required decimal field '{propertyName}'.");
 
-    private static decimal? ReadDecimal(JsonElement item, string propertyName, int index)
+    private static decimal? ReadRequiredDecimalValue(JsonElement item, string propertyName, int index)
     {
         var text = ReadString(item, propertyName);
         if (text is null)
@@ -178,13 +155,26 @@ public sealed class MfgJsonParser : IMfgJsonParser
         throw new InvalidOperationException($"MFG JSON item #{index} field '{propertyName}' is not a valid decimal: {text}.");
     }
 
-    private static DateTime? ReadDate(JsonElement item, string propertyName, int index)
+    private static decimal? ReadDecimal(JsonElement item, string propertyName)
     {
-        var value = ReadDateTime(item, propertyName, index);
+        var text = ReadString(item, propertyName);
+        if (text is null)
+        {
+            return null;
+        }
+
+        return decimal.TryParse(text, NumberStyles.Number, CultureInfo.InvariantCulture, out var value)
+            ? value
+            : null;
+    }
+
+    private static DateTime? ReadDate(JsonElement item, string propertyName)
+    {
+        var value = ReadDateTime(item, propertyName);
         return value?.Date;
     }
 
-    private static DateTime? ReadDateTime(JsonElement item, string propertyName, int index)
+    private static DateTime? ReadDateTime(JsonElement item, string propertyName)
     {
         var text = ReadString(item, propertyName);
         if (text is null)
@@ -197,6 +187,6 @@ public sealed class MfgJsonParser : IMfgJsonParser
             return value;
         }
 
-        throw new InvalidOperationException($"MFG JSON item #{index} field '{propertyName}' is not a valid date/time: {text}.");
+        return null;
     }
 }

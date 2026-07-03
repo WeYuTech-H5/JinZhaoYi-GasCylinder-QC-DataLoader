@@ -42,7 +42,7 @@ public sealed class MfgJsonParserTests
     }
 
     [Fact]
-    public void Parse_tracks_explicit_null_fields_except_qc_fields()
+    public void Parse_allows_explicit_null_fields()
     {
         var rows = new MfgJsonParser().Parse(
             """
@@ -66,7 +66,8 @@ public sealed class MfgJsonParserTests
             """);
 
         rows.Should().ContainSingle();
-        rows[0].NullFields.Should().Equal("SampleType");
+        rows[0].NullFields.Should().BeEmpty();
+        rows[0].SampleType.Should().BeNull();
         rows[0].CalId.Should().BeNull();
         rows[0].QcTime.Should().BeNull();
         rows[0].Result.Should().BeNull();
@@ -80,6 +81,37 @@ public sealed class MfgJsonParserTests
 
         act.Should().Throw<InvalidOperationException>()
             .WithMessage("*LotNo*");
+    }
+
+    [Fact]
+    public void Parse_rejects_invalid_required_id()
+    {
+        var act = () => new MfgJsonParser().Parse("""[{ "si0_id": "bad-id", "LotNo": "20260508002" }]""");
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*si0_id*valid decimal*");
+    }
+
+    [Fact]
+    public void Parse_ignores_invalid_optional_number_and_date_fields()
+    {
+        var rows = new MfgJsonParser().Parse(
+            """
+            [
+              {
+                "si0_id": 6377,
+                "LotNo": "20260508002",
+                "Prod_IniPrs": "not-a-number",
+                "Prod_Can1_Prs": "not-a-decimal",
+                "QCTime": "not-a-date"
+              }
+            ]
+            """);
+
+        rows.Should().ContainSingle();
+        rows[0].ProdIniPrs.Should().BeNull();
+        rows[0].ProdCan1Prs.Should().BeNull();
+        rows[0].QcTime.Should().BeNull();
     }
 
     [Fact]

@@ -10,8 +10,6 @@ public sealed class MfgJsonImportService(
     IDapperRepository repository,
     ILogger<MfgJsonImportService> logger) : IMfgJsonImportService
 {
-    private const string SkippedNullFieldAction = "SkippedNullField";
-
     public async Task ProcessFileAsync(string path, CancellationToken cancellationToken)
     {
         var fileName = Path.GetFileName(path);
@@ -22,7 +20,8 @@ public sealed class MfgJsonImportService(
 
         if (state.Files.TryGetValue(fileName, out var fileState) &&
             fileState.Hash.Equals(hash, StringComparison.OrdinalIgnoreCase) &&
-            fileState.Status.Equals("Succeeded", StringComparison.OrdinalIgnoreCase))
+            fileState.Status.Equals("Succeeded", StringComparison.OrdinalIgnoreCase) &&
+            fileState.SkippedCount == 0)
         {
             logger.LogDebug("MFG JSON file was already imported. FileName={FileName}, Hash={Hash}.", fileName, hash);
             return;
@@ -31,25 +30,16 @@ public sealed class MfgJsonImportService(
         try
         {
             var records = parser.Parse(System.Text.Encoding.UTF8.GetString(bytes));
-            var skippedLots = records
-                .Where(record => record.NullFields.Count > 0)
-                .Select(ToSkippedLot)
-                .ToArray();
-            var validRecords = records
-                .Where(record => record.NullFields.Count == 0)
-                .ToArray();
-
-            // Only complete JSON records are written; rows with explicit null fields are tracked as skipped.
-            var upsertResult = validRecords.Length == 0
+            var upsertResult = records.Count == 0
                 ? new MfgJsonImportResult()
-                : await repository.UpsertMfgJsonLotsAsync(validRecords, fileName, cancellationToken);
+                : await repository.UpsertMfgJsonLotsAsync(records, fileName, cancellationToken);
             var result = new MfgJsonImportResult
             {
                 InsertedCount = upsertResult.InsertedCount,
                 UpdatedCount = upsertResult.UpdatedCount,
-                SkippedCount = skippedLots.Length,
+                SkippedCount = upsertResult.SkippedCount,
                 Lots = upsertResult.Lots,
-                SkippedLots = skippedLots
+                SkippedLots = upsertResult.SkippedLots
             };
             state.Files[fileName] = new MfgJsonFileState
             {
@@ -76,21 +66,6 @@ public sealed class MfgJsonImportService(
                 };
             }
 
-            foreach (var lot in result.SkippedLots)
-            {
-                state.Lots[lot.LotNo] = new MfgJsonLotState
-                {
-                    LotNo = lot.LotNo,
-                    Si0Id = lot.Si0Id,
-                    SourceFileName = fileName,
-                    SourceFileHash = hash,
-                    Status = "Skipped",
-                    Action = SkippedNullFieldAction,
-                    ProcessedAt = processedAt,
-                    ErrorMessage = lot.Reason
-                };
-            }
-
             await stateStore.SaveAsync(state, cancellationToken);
             logger.LogInformation(
                 "MFG JSON import succeeded. FileName={FileName}, Inserted={InsertedCount}, Updated={UpdatedCount}, Skipped={SkippedCount}.",
@@ -113,18 +88,6 @@ public sealed class MfgJsonImportService(
             await stateStore.SaveAsync(state, cancellationToken);
             throw;
         }
-    }
-
-    private static MfgJsonSkippedLot ToSkippedLot(MfgJsonLotRecord record)
-    {
-        var nullFields = record.NullFields.ToArray();
-        return new MfgJsonSkippedLot
-        {
-            LotNo = record.LotNo,
-            Si0Id = record.Si0Id,
-            NullFields = nullFields,
-            Reason = $"MFG JSON contains null field(s): {string.Join(", ", nullFields)}."
-        };
     }
 
     private static async Task<byte[]> ReadAllBytesAsync(string path, CancellationToken cancellationToken)
