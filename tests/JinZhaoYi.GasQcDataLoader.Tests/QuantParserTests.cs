@@ -85,6 +85,48 @@ public sealed class QuantParserTests
         }
     }
 
+    [Theory]
+    [InlineData("PORT 5", "PORT 5[20260612 1509]_L068.D", "20260611001", 68)]
+    [InlineData("PORT 11", "PORT 11[20260618 0121]_L027.D", "20260616002", 27)]
+    public async Task ParseAsync_supports_port_folder_sample_number_with_l_prefix(
+        string port,
+        string dataFolderName,
+        string lotNo,
+        int expectedSampleNo)
+    {
+        var root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        var dataFolder = Path.Combine(root, port, dataFolderName);
+        Directory.CreateDirectory(dataFolder);
+        var quantPath = Path.Combine(dataFolder, "Quant.txt");
+        await File.WriteAllTextAsync(quantPath, QuantFixtures.Std0947.Replace("#20251030001", $"#{lotNo}"));
+
+        try
+        {
+            var candidate = new QuantFileCandidate(
+                FullPath: quantPath,
+                DayFolderPath: root,
+                SourceRootPath: Path.Combine(root, port),
+                OutputRootPath: root,
+                LogicalBatchDate: lotNo[..8],
+                IsArchivedInput: false,
+                TopFolderName: port,
+                SourceKind: QuantSourceKind.Port,
+                Port: port,
+                DataFilename: Path.Combine(dataFolderName, "Quant.txt"),
+                DataFilepath: dataFolder);
+
+            var parsed = await new QuantParser().ParseAsync(candidate, CancellationToken.None);
+
+            parsed.SampleNo.Should().Be(expectedSampleNo);
+            parsed.LotNo.Should().Be(lotNo);
+            parsed.DataPath.Should().Be("D:\\data\\");
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Fact]
     public async Task ParseAsync_rejects_folder_without_sample_suffix()
     {

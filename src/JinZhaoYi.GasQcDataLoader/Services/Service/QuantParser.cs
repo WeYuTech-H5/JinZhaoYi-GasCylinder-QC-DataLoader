@@ -248,14 +248,14 @@ public sealed partial class QuantParser : IQuantParser
     /// 目前 SampleNo 不是從檔案內容取得，
     /// 而是由 Quant.txt 所在的 .D 資料夾名稱解析。
     /// 
-    /// 例如資料夾名稱為 abc_903.D 或 abc_V006.D，
-    /// 則 SampleNo 分別為 903 與 6。
+    /// 例如資料夾名稱為 abc_903.D、abc_V006.D 或 abc_L068.D，
+    /// 則 SampleNo 分別為 903、6 與 68。
     /// 
     /// 若路徑格式不符合預期則拋出例外。
     /// </remarks>
     private static int ParseSampleNo(QuantFileCandidate candidate)
     {
-        // 取 Quant.txt 上一層資料夾名稱，例如 xxx_903.D 或 xxx_V006.D
+        // 取 Quant.txt 上一層資料夾名稱，例如 xxx_903.D、xxx_V006.D 或 xxx_L068.D
         var directoryName = Path.GetFileName(Path.GetDirectoryName(candidate.FullPath));
 
         var match = SampleNoRegex().Match(directoryName ?? string.Empty);
@@ -264,7 +264,7 @@ public sealed partial class QuantParser : IQuantParser
             return int.Parse(match.Groups["sampleNo"].Value, CultureInfo.InvariantCulture);
         }
 
-        throw new InvalidDataException($"Quant path '{candidate.FullPath}' does not contain a sample number like '_903.D' or '_V006.D'.");
+        throw new InvalidDataException($"Quant path '{candidate.FullPath}' does not contain a sample number like '_903.D', '_V006.D', or '_L068.D'.");
     }
 
     /// <summary>
@@ -286,15 +286,16 @@ public sealed partial class QuantParser : IQuantParser
     /// </summary>
     /// <remarks>
     /// 用於從 .D 資料夾名稱中擷取底線後的數字，
-    /// 並支援 PORT 檔名中的 V 前綴。
+    /// 並支援 PORT 檔名中的 V 或 L 前綴。
     /// 
     /// 範例：
     /// TEST_903.D
     /// TEST_V006.D
+    /// TEST_L068.D
     /// 
-    /// 會擷取出 903 與 6。
+    /// 會擷取出 903、6 與 68。
     /// </remarks>
-    [GeneratedRegex(@"_(?:V)?(?<sampleNo>\d+)\.D$", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
+    [GeneratedRegex(@"_(?:[VL])?(?<sampleNo>\d+)\.D$", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
     private static partial Regex SampleNoRegex();
 
     /// <summary>
