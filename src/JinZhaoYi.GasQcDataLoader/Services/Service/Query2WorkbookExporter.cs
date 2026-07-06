@@ -175,13 +175,14 @@ public sealed class Query2WorkbookExporter(
         }
 
         var lastDataRowNumber = targetRow - 1;
-        var copiedCritRowNumbers = new List<int>();
-        foreach (var critRowNumber in critRows)
-        {
-            CopyTemplateRow(templateWorksheet, critRowNumber, worksheet, targetRow, headers.Count);
-            copiedCritRowNumbers.Add(targetRow);
-            targetRow++;
-        }
+        var copiedCritRowNumbers = CopyCritRows(
+            templateWorksheet,
+            worksheet,
+            critRows,
+            targetRow,
+            headers.Count,
+            qcSettings);
+        targetRow += copiedCritRowNumbers.Count;
 
         ApplyQcCritValues(worksheet, Query2ColumnLayout.DataStartRowNumber, lastDataRowNumber, copiedCritRowNumbers, dynamicAreaFields.Count, qcSettings);
         ApplyResultRangeFills(worksheet, Query2ColumnLayout.DataStartRowNumber, lastDataRowNumber, copiedCritRowNumbers, dynamicAreaFields.Count, qcSettings);
@@ -225,6 +226,84 @@ public sealed class Query2WorkbookExporter(
 
         sourceRange.CopyTo(targetWorksheet.Cell(targetRowNumber, 1));
         targetWorksheet.Row(targetRowNumber).Height = sourceWorksheet.Row(sourceRowNumber).Height;
+    }
+
+    private static IReadOnlyList<int> CopyCritRows(
+        IXLWorksheet templateWorksheet,
+        IXLWorksheet worksheet,
+        IReadOnlyCollection<int> critRows,
+        int firstTargetRow,
+        int columnCount,
+        QcResultSettingsDto? qcSettings)
+    {
+        if (qcSettings is null ||
+            !TryResolveCritRow(templateWorksheet, critRows, "MAX", out var maxTemplateRowNumber) ||
+            !TryResolveCritRow(templateWorksheet, critRows, "MIN", out var minTemplateRowNumber))
+        {
+            return CopyTemplateCritRows(templateWorksheet, worksheet, critRows, firstTargetRow, columnCount);
+        }
+
+        var rows = new[]
+        {
+            new ConfiguredCritRow(maxTemplateRowNumber, QcResultSettingRules.Container05),
+            new ConfiguredCritRow(minTemplateRowNumber, QcResultSettingRules.Container05),
+            new ConfiguredCritRow(maxTemplateRowNumber, QcResultSettingRules.Container1L),
+            new ConfiguredCritRow(minTemplateRowNumber, QcResultSettingRules.Container1L)
+        };
+
+        var copiedRows = new List<int>();
+        var targetRow = firstTargetRow;
+        foreach (var row in rows)
+        {
+            CopyTemplateRow(templateWorksheet, row.TemplateRowNumber, worksheet, targetRow, columnCount);
+            worksheet.Cell(targetRow, 1).Value = FormatConfiguredCritLabel(
+                templateWorksheet.Cell(row.TemplateRowNumber, 1).GetString(),
+                row.ContainerType);
+            copiedRows.Add(targetRow);
+            targetRow++;
+        }
+
+        return copiedRows;
+    }
+
+    private static IReadOnlyList<int> CopyTemplateCritRows(
+        IXLWorksheet templateWorksheet,
+        IXLWorksheet worksheet,
+        IReadOnlyCollection<int> critRows,
+        int firstTargetRow,
+        int columnCount)
+    {
+        var copiedRows = new List<int>();
+        var targetRow = firstTargetRow;
+        foreach (var critRowNumber in critRows)
+        {
+            CopyTemplateRow(templateWorksheet, critRowNumber, worksheet, targetRow, columnCount);
+            copiedRows.Add(targetRow);
+            targetRow++;
+        }
+
+        return copiedRows;
+    }
+
+    private static string FormatConfiguredCritLabel(string templateLabel, string containerType)
+    {
+        var label = StripConfiguredCritContainerSuffix(templateLabel);
+        return $"{label}-{containerType}";
+    }
+
+    private static string StripConfiguredCritContainerSuffix(string value)
+    {
+        var label = value.Trim();
+        foreach (var containerType in QcResultSettingRules.SupportedContainers)
+        {
+            var suffix = $"-{containerType}";
+            if (label.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+            {
+                return label[..^suffix.Length].TrimEnd();
+            }
+        }
+
+        return label;
     }
 
     private static void WriteRowValues(IXLWorksheet worksheet, int rowNumber, IReadOnlyList<object?> values)
@@ -338,28 +417,47 @@ public sealed class Query2WorkbookExporter(
         QcResultSettingsDto? qcSettings)
     {
         if (qcSettings is null ||
-            lastDataRowNumber < firstDataRowNumber ||
-            !TryResolveCritRow(worksheet, critRowNumbers, "MAX", out var maxRowNumber) ||
-            !TryResolveCritRow(worksheet, critRowNumbers, "MIN", out var minRowNumber) ||
-            ResolveFirstPpbContainer(worksheet, firstDataRowNumber, lastDataRowNumber) is not { } containerType)
+            lastDataRowNumber < firstDataRowNumber)
         {
             return;
         }
 
-        for (var index = 0; index < CompoundMap.Analytes.Count; index++)
+        foreach (var containerType in QcResultSettingRules.SupportedContainers)
         {
-            var analyte = CompoundMap.Analytes[index];
-            if (!TryResolveConfiguredBounds(qcSettings, containerType, analyte.Suffix, out var min, out var max))
+            if (!TryResolveConfiguredCritRow(worksheet, critRowNumbers, "MAX", containerType, out var maxRowNumber) ||
+                !TryResolveConfiguredCritRow(worksheet, critRowNumbers, "MIN", containerType, out var minRowNumber))
             {
                 continue;
             }
 
-            var areaColumn = FirstAreaColumn + index;
-            var ppbColumn = ResolveFirstPpbColumn(dynamicAreaCount) + index;
-            WriteCritBound(worksheet.Cell(maxRowNumber, areaColumn), max);
-            WriteCritBound(worksheet.Cell(minRowNumber, areaColumn), min);
-            WriteCritBound(worksheet.Cell(maxRowNumber, ppbColumn), max);
-            WriteCritBound(worksheet.Cell(minRowNumber, ppbColumn), min);
+            ClearCritBoundCells(worksheet, maxRowNumber, dynamicAreaCount);
+            ClearCritBoundCells(worksheet, minRowNumber, dynamicAreaCount);
+
+            for (var index = 0; index < CompoundMap.Analytes.Count; index++)
+            {
+                var analyte = CompoundMap.Analytes[index];
+                if (!TryResolveConfiguredBounds(qcSettings, containerType, analyte.Suffix, out var min, out var max))
+                {
+                    continue;
+                }
+
+                var areaColumn = FirstAreaColumn + index;
+                var ppbColumn = ResolveFirstPpbColumn(dynamicAreaCount) + index;
+                WriteCritBound(worksheet.Cell(maxRowNumber, areaColumn), max);
+                WriteCritBound(worksheet.Cell(minRowNumber, areaColumn), min);
+                WriteCritBound(worksheet.Cell(maxRowNumber, ppbColumn), max);
+                WriteCritBound(worksheet.Cell(minRowNumber, ppbColumn), min);
+            }
+        }
+    }
+
+    private static void ClearCritBoundCells(IXLWorksheet worksheet, int rowNumber, int dynamicAreaCount)
+    {
+        var firstPpbColumn = ResolveFirstPpbColumn(dynamicAreaCount);
+        for (var index = 0; index < CompoundMap.Analytes.Count; index++)
+        {
+            worksheet.Cell(rowNumber, FirstAreaColumn + index).Clear(XLClearOptions.Contents);
+            worksheet.Cell(rowNumber, firstPpbColumn + index).Clear(XLClearOptions.Contents);
         }
     }
 
@@ -447,28 +545,6 @@ public sealed class Query2WorkbookExporter(
         return min.HasValue || max.HasValue;
     }
 
-    private static string? ResolveFirstPpbContainer(
-        IXLWorksheet worksheet,
-        int firstDataRowNumber,
-        int lastDataRowNumber)
-    {
-        for (var rowNumber = firstDataRowNumber; rowNumber <= lastDataRowNumber; rowNumber++)
-        {
-            if (ClassifyRow(worksheet.Cell(rowNumber, 1).GetString()) != Query2ExportRowType.Ppb)
-            {
-                continue;
-            }
-
-            var containerType = ResolveContainerType(worksheet.Cell(rowNumber, 11).GetString());
-            if (containerType is not null)
-            {
-                return containerType;
-            }
-        }
-
-        return null;
-    }
-
     private static string? ResolveContainerType(string? container)
     {
         try
@@ -532,6 +608,30 @@ public sealed class Query2WorkbookExporter(
                 rowNumber = candidate;
                 return true;
             }
+        }
+
+        rowNumber = 0;
+        return false;
+    }
+
+    private static bool TryResolveConfiguredCritRow(
+        IXLWorksheet worksheet,
+        IReadOnlyCollection<int> critRowNumbers,
+        string marker,
+        string containerType,
+        out int rowNumber)
+    {
+        foreach (var candidate in critRowNumbers)
+        {
+            var id = worksheet.Cell(candidate, 1).GetString();
+            if (!id.Contains(marker, StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(ResolveContainerType(id), containerType, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            rowNumber = candidate;
+            return true;
         }
 
         rowNumber = 0;
@@ -741,4 +841,6 @@ public sealed class Query2WorkbookExporter(
 
         return Query2ExportRowType.Raw;
     }
+
+    private sealed record ConfiguredCritRow(int TemplateRowNumber, string ContainerType);
 }

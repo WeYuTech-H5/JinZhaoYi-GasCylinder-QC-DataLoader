@@ -461,6 +461,21 @@ RT values...
 9. 刪除 `_Query2Template`。
 10. 回傳 Excel bytes，檔名為 `Cylinder_Qc[startDate-endDate].xlsx`。
 
+### 10.1 PPB Crit 顯示規則
+
+若匯出時有提供 QC 濃度設定，Excel 最後的 Crit 顯示區會由範本的 `Crit(...:MAX)` / `Crit(...:MIN)` 樣式展開為四列：
+
+```text
+Crit(...:MAX)-0.5L
+Crit(...:MIN)-0.5L
+Crit(...:MAX)-1L
+Crit(...:MIN)-1L
+```
+
+這四列分別寫入 `ZZ_NF_GAS_QC_CONCENTRATION_RULE` 的 0.5L 與 1L `MinPpb` / `MaxPpb`。PPB 資料列反紅仍依該列 `Container` 判斷：`0.5L_Cylinder` 使用 0.5L 規則，`1L_Cylinder` 使用 1L 規則。
+
+若匯出時沒有 QC 濃度設定，系統維持舊行為，只複製 template 原本的 Crit rows，並用 template 內的 Crit 數值做範圍判斷。
+
 ## 11. 完整演算法流程圖
 
 ```mermaid

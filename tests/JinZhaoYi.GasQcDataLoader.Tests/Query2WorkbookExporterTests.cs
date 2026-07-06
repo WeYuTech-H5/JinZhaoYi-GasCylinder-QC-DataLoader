@@ -305,13 +305,14 @@ public sealed class Query2WorkbookExporterTests : IDisposable
             NullLogger<Query2WorkbookExporter>.Instance);
         var rows = new[]
         {
-            new Query2ExportRow(Query2ExportRowType.Ppb, Row("ppb(5900)", "PORT 2", "20260603001", acetone: 108m))
+            new Query2ExportRow(Query2ExportRowType.Ppb, Row("ppb(5900)", "PORT 2", "20260603001", acetone: 108m)),
+            new Query2ExportRow(Query2ExportRowType.Ppb, Row("ppb(5901)", "PORT 3", "20260603002", acetone: 92m, container: "1L_Cylinder"))
         };
         var settings = new QcResultSettingsDto
         {
             ConcentrationRules =
             [
-                new QcConcentrationRuleDto("Acetone", "Acetone", 1, 95m, 105m, null, null)
+                new QcConcentrationRuleDto("Acetone", "Acetone", 1, 95m, 105m, 90m, 110m)
             ]
         };
 
@@ -321,8 +322,20 @@ public sealed class Query2WorkbookExporterTests : IDisposable
         var worksheet = workbook.Worksheet("Query2");
         worksheet.Cell(4, 17).GetValue<decimal>().Should().Be(108m);
         worksheet.Cell(4, 17).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFFF6969));
-        worksheet.Cell(5, 17).GetValue<decimal>().Should().Be(105m);
-        worksheet.Cell(6, 17).GetValue<decimal>().Should().Be(95m);
+        worksheet.Cell(5, 17).GetValue<decimal>().Should().Be(92m);
+        worksheet.Cell(5, 17).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFE2EFDA));
+        worksheet.Cell(6, 1).GetString().Should().Be("Crit(MAX)-0.5L");
+        worksheet.Cell(7, 1).GetString().Should().Be("Crit(MIN)-0.5L");
+        worksheet.Cell(8, 1).GetString().Should().Be("Crit(MAX)-1L");
+        worksheet.Cell(9, 1).GetString().Should().Be("Crit(MIN)-1L");
+        worksheet.Cell(6, 17).GetValue<decimal>().Should().Be(105m);
+        worksheet.Cell(7, 17).GetValue<decimal>().Should().Be(95m);
+        worksheet.Cell(8, 17).GetValue<decimal>().Should().Be(110m);
+        worksheet.Cell(9, 17).GetValue<decimal>().Should().Be(90m);
+        worksheet.Cell(6, 56).GetValue<decimal>().Should().Be(105m);
+        worksheet.Cell(7, 56).GetValue<decimal>().Should().Be(95m);
+        worksheet.Cell(8, 56).GetValue<decimal>().Should().Be(110m);
+        worksheet.Cell(9, 56).GetValue<decimal>().Should().Be(90m);
     }
 
     public void Dispose()
@@ -399,7 +412,8 @@ public sealed class Query2WorkbookExporterTests : IDisposable
         int? si0Id = 5900,
         decimal? acetone = null,
         decimal? ppbAcetone = null,
-        decimal? rtAcetone = null)
+        decimal? rtAcetone = null,
+        string container = "0.5L_Cylinder")
     {
         var row = new QcDataRow
         {
@@ -411,7 +425,7 @@ public sealed class Query2WorkbookExporterTests : IDisposable
             SampleNo = sampleNo,
             DataFilename = "Quant.txt",
             DataFilepath = @"C:\GAS\file",
-            Container = "0.5L_Cylinder",
+            Container = container,
             Description = $"desc #{lotNo}",
             EmVolts = "1458.82",
             RelativeEm = "-23.529",
