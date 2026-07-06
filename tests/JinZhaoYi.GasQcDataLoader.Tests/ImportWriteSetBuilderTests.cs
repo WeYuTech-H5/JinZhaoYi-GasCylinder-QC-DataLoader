@@ -84,6 +84,19 @@ public sealed class ImportWriteSetBuilderTests
         qcRow.Areas["IPA"].Should().BeApproximately(0.1739130434m, 0.0000000001m);
     }
 
+    [Fact]
+    public void BuildSingleFileWriteSet_uses_mfg_sample_no_for_raw_id()
+    {
+        var parsed = Parsed("STD", QuantSourceKind.Std, "20251030001", 903, new DateTime(2025, 11, 19, 9, 47, 0), ("IPA", 200m));
+        var lot = Lot("20251030001", 5841, "RF-904", "1L_Cylinder", sampleNo: "904");
+
+        var writeSet = _builder.BuildSingleFileWriteSet(parsed, lot);
+
+        var rawRow = writeSet.StdRawRows.Should().ContainSingle().Subject;
+        rawRow.Id.Should().Be("20251119904");
+        rawRow.SampleNo.Should().Be(904);
+    }
+
     private static ParsedQuantFile Parsed(
         string port,
         QuantSourceKind sourceKind,
@@ -126,14 +139,14 @@ public sealed class ImportWriteSetBuilderTests
         };
     }
 
-    private static MfgLot Lot(string lotNo, int? si0Id, string sampleName, string container) =>
+    private static MfgLot Lot(string lotNo, int? si0Id, string sampleName, string container, string? sampleNo = null) =>
         new()
         {
             Id = si0Id ?? 0,
             LotNo = lotNo,
             Si0Id = si0Id,
             SampleName = sampleName,
-            SampleNo = null,
+            SampleNo = sampleNo,
             SampleType = "TO14C1",
             Container = container,
             EMVolts = "1458.82",

@@ -50,6 +50,30 @@ public sealed class RawRowFactoryTests
         row.Si0Id.Should().BeNull();
     }
 
+    [Fact]
+    public void Create_prefers_sample_no_from_mfg_lot()
+    {
+        var factory = new RawRowFactory(Options.Create(new SchedulerOptions()));
+        var parsed = CreateParsedFile();
+        var lot = CreateLot(sampleNo: "904");
+
+        var row = factory.Create(parsed, lot, "20251119904");
+
+        row.SampleNo.Should().Be(904);
+    }
+
+    [Fact]
+    public void Create_falls_back_to_quant_sample_no_when_mfg_sample_no_is_not_numeric()
+    {
+        var factory = new RawRowFactory(Options.Create(new SchedulerOptions()));
+        var parsed = CreateParsedFile();
+        var lot = CreateLot(sampleNo: "RF-904");
+
+        var row = factory.Create(parsed, lot, "20251119903");
+
+        row.SampleNo.Should().Be(903);
+    }
+
     private static ParsedQuantFile CreateParsedFile() =>
         new()
         {
@@ -75,14 +99,14 @@ public sealed class RawRowFactoryTests
             Compounds = new Dictionary<string, QuantCompound>(StringComparer.OrdinalIgnoreCase)
         };
 
-    private static MfgLot CreateLot(decimal id = 5841m, int? si0Id = 5907) =>
+    private static MfgLot CreateLot(decimal id = 5841m, int? si0Id = 5907, string? sampleNo = "903") =>
         new()
         {
             Id = id,
             LotNo = "20251030001",
             Si0Id = si0Id,
             SampleName = "SIM-20251030001",
-            SampleNo = "903",
+            SampleNo = sampleNo,
             SampleType = "TO14C1",
             Container = "SIM",
             EMVolts = "1294",

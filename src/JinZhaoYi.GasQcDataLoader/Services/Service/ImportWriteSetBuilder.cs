@@ -11,7 +11,7 @@ public sealed class ImportWriteSetBuilder(
     public ImportWriteSet BuildSingleFileWriteSet(ParsedQuantFile parsed, MfgLot lot)
     {
         var writeSet = new ImportWriteSet();
-        var rawRow = rawRowFactory.Create(parsed, lot, CreateRawId(parsed));
+        var rawRow = rawRowFactory.Create(parsed, lot, CreateRawId(parsed, lot));
         writeSet.Query2Rows.Add(new Query2ExportRow(Query2ExportRowType.Raw, rawRow));
 
         if (parsed.Source.SourceKind == QuantSourceKind.Std)
@@ -47,7 +47,7 @@ public sealed class ImportWriteSetBuilder(
         foreach (var group in BuildContiguousGroups(orderedFiles))
         {
             var rawRows = group
-                .Select(file => rawRowFactory.Create(file, lots[file.LotNo], CreateRawId(file)))
+                .Select(file => rawRowFactory.Create(file, lots[file.LotNo], CreateRawId(file, lots[file.LotNo])))
                 .ToList();
 
             foreach (var rawRow in rawRows)
@@ -159,6 +159,6 @@ public sealed class ImportWriteSetBuilder(
     private static (QcDataRow First, QcDataRow Second) LastTwo(IReadOnlyList<QcDataRow> rows) =>
         (rows[^2], rows[^1]);
 
-    private static string CreateRawId(ParsedQuantFile parsed) =>
-        $"{parsed.AcquiredAt:yyyyMMdd}{parsed.SampleNo:000}";
+    private static string CreateRawId(ParsedQuantFile parsed, MfgLot lot) =>
+        $"{parsed.AcquiredAt:yyyyMMdd}{RawDataIdentity.ResolveSampleNo(parsed, lot):000}";
 }

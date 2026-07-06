@@ -23,7 +23,7 @@ public sealed class RawRowFactory(IOptions<SchedulerOptions> options) : IRawRowF
             SourceKind = parsed.Source.SourceKind.ToString(),
             SourceFolderName = dataFolderName,
             Si0Id = lot?.Si0Id,
-            SampleNo = parsed.SampleNo,
+            SampleNo = RawDataIdentity.ResolveSampleNo(parsed, lot),
             LotNo = parsed.LotNo,
             DataFilename = Path.Combine(dataFolderName, parsed.DataFile),
             DataFilepath = parsed.DataPath,
