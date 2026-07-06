@@ -166,8 +166,8 @@ RT column   = RT_IPA
 | `PcName` | `PCName` | `Environment.MachineName` |
 | `Container` | `Container` | `ZZ_NF_GAS_MFG_LOT.Container` |
 | `Description` | `Description` | Quant `Misc` |
-| `EmVolts` | `EMVolts` | `ZZ_NF_GAS_MFG_LOT.EMVolts` |
-| `RelativeEm` | `RelativeEM` | `ZZ_NF_GAS_MFG_LOT.RelativeEM` |
+| `EmVolts` | `EMVolts` | `.D` 資料夾內 `acqmeth` / `acqemeth` 的 `Actual EMV`；缺值時 fallback 到 `ZZ_NF_GAS_MFG_LOT.EMVolts` |
+| `RelativeEm` | `RelativeEM` | `.D` 資料夾內 `acqmeth` / `acqemeth` 的 `Actual EM Setting mode Delta`；缺值時 fallback 到 `ZZ_NF_GAS_MFG_LOT.RelativeEM` |
 | `SampleName` | `SampleName` | `ZZ_NF_GAS_MFG_LOT.SamplName` |
 | `SampleType` | `SampleType` | `ZZ_NF_GAS_MFG_LOT.SampleType`，缺值時使用 `Scheduler:SampleType` |
 | `CreateUser` | `CREATE_USER` | `Scheduler:CreateUser` |
@@ -257,6 +257,7 @@ STD raw：
 - 寫入 `ZZ_NF_GAS_QC_LOT_STD`。
 - `Area_*` 來自 Quant `Response`。
 - `RT_*` 來自 Quant `R.T.`。
+- `EMVolts` / `RelativeEM` 來自同一個 `.D` 資料夾的 `acqmeth` / `acqemeth` 檔案，並會在 `ZZ_NF_GAS_MFG_LOT` 欄位空白時回填。
 - raw 建立時不使用 Quant `Conc ppb`。
 
 PORT raw：

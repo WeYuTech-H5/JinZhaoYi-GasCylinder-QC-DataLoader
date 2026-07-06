@@ -206,6 +206,28 @@ public sealed class DapperRepository(
            OR (@Si0Id IS NOT NULL AND TRY_CONVERT(int, si0_id) = @Si0Id)
         """;
 
+    private const string MfgLotEmMetadataUpdateSqlFormat = """
+        UPDATE dbo.{0}
+        SET
+            EMVolts =
+                CASE
+                    WHEN NULLIF(LTRIM(RTRIM(EMVolts)), N'') IS NULL THEN @EmVolts
+                    ELSE EMVolts
+                END,
+            RelativeEM =
+                CASE
+                    WHEN NULLIF(LTRIM(RTRIM(RelativeEM)), N'') IS NULL THEN @RelativeEm
+                    ELSE RelativeEM
+                END,
+            EDIT_USER = @AuditUser,
+            EDIT_TIME = @Now
+        WHERE (LotNo = @LotNo OR (@Si0Id IS NOT NULL AND TRY_CONVERT(int, si0_id) = @Si0Id))
+          AND (
+                (NULLIF(LTRIM(RTRIM(EMVolts)), N'') IS NULL AND @EmVolts IS NOT NULL)
+             OR (NULLIF(LTRIM(RTRIM(RelativeEM)), N'') IS NULL AND @RelativeEm IS NOT NULL)
+          )
+        """;
+
     private const string RowsByDateSqlFormat = """
         SELECT *
         FROM dbo.{0}
@@ -2048,6 +2070,12 @@ public sealed class DapperRepository(
                 await InsertRowIfMissingAsync(connection, transaction, _tables.StdQc, stdQcRow, IncludePpb: false, IncludeRt: false, IncludeIdRefs: true, importDate, sidCounters, cancellationToken);
             }
 
+            await UpdateMfgLotEmMetadataAsync(
+                connection,
+                transaction,
+                writeSet.StdRawRows.Concat(writeSet.PortRawRows).ToArray(),
+                _options.CreateUser,
+                cancellationToken);
             await UpdateMfgLotQcResultsAsync(connection, transaction, qcUpdates, _options.CreateUser, cancellationToken);
 
             await transaction.CommitAsync(cancellationToken);
@@ -2103,6 +2131,67 @@ public sealed class DapperRepository(
                     cancellationToken: cancellationToken));
         }
     }
+
+    private async Task UpdateMfgLotEmMetadataAsync(
+        SqlConnection connection,
+        IDbTransaction transaction,
+        IReadOnlyCollection<QcDataRow> rows,
+        string? user,
+        CancellationToken cancellationToken)
+    {
+        var updates = BuildMfgLotEmUpdates(rows);
+        if (updates.Count == 0)
+        {
+            return;
+        }
+
+        var sql = string.Format(MfgLotEmMetadataUpdateSqlFormat, Quote(_tables.MfgLot));
+        var auditUser = string.IsNullOrWhiteSpace(user) ? _options.CreateUser : user.Trim();
+        var now = DateTime.Now;
+
+        foreach (var update in updates)
+        {
+            await connection.ExecuteAsync(
+                new CommandDefinition(
+                    sql,
+                    new
+                    {
+                        update.LotNo,
+                        update.Si0Id,
+                        update.EmVolts,
+                        update.RelativeEm,
+                        AuditUser = auditUser,
+                        Now = now
+                    },
+                    transaction,
+                    cancellationToken: cancellationToken));
+        }
+    }
+
+    private static IReadOnlyList<MfgLotEmUpdate> BuildMfgLotEmUpdates(IReadOnlyCollection<QcDataRow> rows) =>
+        rows
+            .Where(row =>
+                !string.IsNullOrWhiteSpace(row.LotNo) &&
+                (!string.IsNullOrWhiteSpace(row.EmVolts) || !string.IsNullOrWhiteSpace(row.RelativeEm)))
+            .GroupBy(row => row.LotNo!.Trim(), StringComparer.OrdinalIgnoreCase)
+            .Select(group =>
+            {
+                var ordered = group
+                    .OrderByDescending(row => row.AnlzTime ?? DateTime.MinValue)
+                    .ThenByDescending(row => row.CreateTime ?? DateTime.MinValue)
+                    .ToArray();
+
+                return new MfgLotEmUpdate(
+                    LotNo: group.Key,
+                    Si0Id: ordered.Select(row => row.Si0Id).FirstOrDefault(id => id.HasValue),
+                    EmVolts: ordered.Select(row => NormalizeOptionalText(row.EmVolts)).FirstOrDefault(value => value is not null),
+                    RelativeEm: ordered.Select(row => NormalizeOptionalText(row.RelativeEm)).FirstOrDefault(value => value is not null));
+            })
+            .Where(update => update.EmVolts is not null || update.RelativeEm is not null)
+            .ToArray();
+
+    private static string? NormalizeOptionalText(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private static IReadOnlyList<MfgLotQcUpdate> MergeMfgLotQcUpdates(IReadOnlyCollection<MfgLotQcUpdate> updates) =>
         updates
@@ -2996,6 +3085,8 @@ public sealed class DapperRepository(
 
     private static int? ReadInt(IDictionary<string, object?> row, string key) =>
         row.TryGetValue(key, out var value) && value is not null and not DBNull ? Convert.ToInt32(value) : null;
+
+    private sealed record MfgLotEmUpdate(string LotNo, int? Si0Id, string? EmVolts, string? RelativeEm);
 
     private sealed record RawRowGroup(QuantSourceKind SourceKind, IReadOnlyList<QcDataRow> Rows);
 }

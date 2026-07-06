@@ -50,6 +50,91 @@ public sealed class QuantParserTests
     }
 
     [Fact]
+    public async Task ParseAsync_reads_em_values_from_acqemeth_file()
+    {
+        var root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        var dataFolder = Path.Combine(root, "STD", "STD[20251119 0947]_903.D");
+        Directory.CreateDirectory(dataFolder);
+        var quantPath = Path.Combine(dataFolder, "Quant.txt");
+        var acqemethPath = Path.Combine(dataFolder, "acqemeth.txt");
+        await File.WriteAllTextAsync(quantPath, QuantFixtures.Std0947);
+        await File.WriteAllTextAsync(
+            acqemethPath,
+            """
+            Method metadata
+            Actual EMV: 1458.82 volts
+            Actual EM Setting mode Delta = -23.529 %
+            """);
+
+        try
+        {
+            var candidate = new QuantFileCandidate(
+                FullPath: quantPath,
+                DayFolderPath: root,
+                SourceRootPath: Path.Combine(root, "STD"),
+                OutputRootPath: root,
+                LogicalBatchDate: "20251119",
+                IsArchivedInput: false,
+                TopFolderName: "STD",
+                SourceKind: QuantSourceKind.Std,
+                Port: "STD",
+                DataFilename: Path.Combine("STD[20251119 0947]_903.D", "Quant.txt"),
+                DataFilepath: dataFolder);
+
+            var parsed = await new QuantParser().ParseAsync(candidate, CancellationToken.None);
+
+            parsed.EMVolts.Should().Be("1458.82");
+            parsed.RelativeEM.Should().Be("-23.529");
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ParseAsync_reads_em_values_from_acqmeth_table_file()
+    {
+        var root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        var dataFolder = Path.Combine(root, "STD", "STD[20251119 0947]_903.D");
+        Directory.CreateDirectory(dataFolder);
+        var quantPath = Path.Combine(dataFolder, "Quant.txt");
+        var acqmethPath = Path.Combine(dataFolder, "acqmeth.csv");
+        await File.WriteAllTextAsync(quantPath, QuantFixtures.Std0947);
+        await File.WriteAllTextAsync(
+            acqmethPath,
+            """
+            Method,Actual EMV,Actual EM Setting mode Delta
+            SIM,1294,1.05
+            """);
+
+        try
+        {
+            var candidate = new QuantFileCandidate(
+                FullPath: quantPath,
+                DayFolderPath: root,
+                SourceRootPath: Path.Combine(root, "STD"),
+                OutputRootPath: root,
+                LogicalBatchDate: "20251119",
+                IsArchivedInput: false,
+                TopFolderName: "STD",
+                SourceKind: QuantSourceKind.Std,
+                Port: "STD",
+                DataFilename: Path.Combine("STD[20251119 0947]_903.D", "Quant.txt"),
+                DataFilepath: dataFolder);
+
+            var parsed = await new QuantParser().ParseAsync(candidate, CancellationToken.None);
+
+            parsed.EMVolts.Should().Be("1294");
+            parsed.RelativeEM.Should().Be("1.05");
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task ParseAsync_supports_port_folder_sample_number_with_v_prefix()
     {
         var root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));

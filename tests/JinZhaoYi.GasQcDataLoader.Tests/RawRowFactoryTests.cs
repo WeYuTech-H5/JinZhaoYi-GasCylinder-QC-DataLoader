@@ -26,6 +26,19 @@ public sealed class RawRowFactoryTests
     }
 
     [Fact]
+    public void Create_prefers_em_values_from_parsed_acqmeth()
+    {
+        var factory = new RawRowFactory(Options.Create(new SchedulerOptions()));
+        var parsed = CreateParsedFile(emVolts: "1458.82", relativeEm: "-23.529");
+        var lot = CreateLot(si0Id: 5907);
+
+        var row = factory.Create(parsed, lot, "20251119903");
+
+        row.EmVolts.Should().Be("1458.82");
+        row.RelativeEm.Should().Be("-23.529");
+    }
+
+    [Fact]
     public void Create_uses_si0_id_from_mfg_lot_si0_id()
     {
         var factory = new RawRowFactory(Options.Create(new SchedulerOptions()));
@@ -74,7 +87,7 @@ public sealed class RawRowFactoryTests
         row.SampleNo.Should().Be(903);
     }
 
-    private static ParsedQuantFile CreateParsedFile() =>
+    private static ParsedQuantFile CreateParsedFile(string? emVolts = null, string? relativeEm = null) =>
         new()
         {
             Source = new QuantFileCandidate(
@@ -96,6 +109,8 @@ public sealed class RawRowFactoryTests
             Misc = " port 1  903  872>  #20251030001",
             LotNo = "20251030001",
             SampleNo = 903,
+            EMVolts = emVolts,
+            RelativeEM = relativeEm,
             Compounds = new Dictionary<string, QuantCompound>(StringComparer.OrdinalIgnoreCase)
         };
 

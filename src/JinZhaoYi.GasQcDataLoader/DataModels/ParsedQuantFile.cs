@@ -18,6 +18,10 @@ public sealed class ParsedQuantFile
 
     public required int SampleNo { get; init; }
 
+    public string? EMVolts { get; init; }
+
+    public string? RelativeEM { get; init; }
+
     public IReadOnlyDictionary<string, QuantCompound> Compounds { get; init; } =
         new Dictionary<string, QuantCompound>(StringComparer.OrdinalIgnoreCase);
 }

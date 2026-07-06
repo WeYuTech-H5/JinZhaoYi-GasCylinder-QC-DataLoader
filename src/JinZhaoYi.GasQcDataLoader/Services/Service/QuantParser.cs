@@ -1,4 +1,5 @@
 ﻿using System.Globalization;
+using System.Text;
 using System.Text.RegularExpressions;
 using JinZhaoYi.GasQcDataLoader.DataModels;
 using JinZhaoYi.GasQcDataLoader.Services.Interface;
@@ -22,6 +23,8 @@ namespace JinZhaoYi.GasQcDataLoader.Services.Service;
 /// </remarks>
 public sealed partial class QuantParser : IQuantParser
 {
+    private static readonly char[] AcqmethColumnDelimiters = ['\t', ',', ';'];
+
     /// <summary>
     /// Quant 檔案內日期時間解析所使用的文化設定
     /// </summary>
@@ -73,6 +76,7 @@ public sealed partial class QuantParser : IQuantParser
 
         // 解析 compound 區塊
         var compounds = ParseCompounds(lines);
+        var acqmeth = await ReadAcqmethAsync(candidate, cancellationToken);
 
         return new ParsedQuantFile
         {
@@ -84,8 +88,195 @@ public sealed partial class QuantParser : IQuantParser
             Misc = misc,
             LotNo = lotNo,
             SampleNo = sampleNo,
+            EMVolts = acqmeth.EMVolts,
+            RelativeEM = acqmeth.RelativeEM,
             Compounds = compounds
         };
+    }
+
+    /// <summary>
+    /// 解析 Quant .D 資料夾內的 acqmeth / acqemeth 檔案。
+    /// </summary>
+    /// <remarks>
+    /// acqmeth 缺檔不會阻擋 Quant 匯入；若找到檔案，僅讀取 GAS_MFG_LOT 需求指定的
+    /// Actual EMV 與 Actual EM Setting mode Delta。
+    /// </remarks>
+    private static async Task<AcqmethReading> ReadAcqmethAsync(QuantFileCandidate candidate, CancellationToken cancellationToken)
+    {
+        var path = FindAcqmethPath(candidate);
+        if (path is null)
+        {
+            return AcqmethReading.Empty;
+        }
+
+        var lines = await File.ReadAllLinesAsync(path, cancellationToken);
+        return ReadAcqmethLines(lines);
+    }
+
+    private static AcqmethReading ReadAcqmethLines(IReadOnlyList<string> lines)
+    {
+        string? emVolts = null;
+        string? relativeEm = null;
+
+        foreach (var line in lines)
+        {
+            emVolts ??= TryReadAcqmethValue(line, AcqmethActualEmvRegex());
+            relativeEm ??= TryReadAcqmethValue(line, AcqmethRelativeEmRegex());
+
+            if (emVolts is not null && relativeEm is not null)
+            {
+                break;
+            }
+        }
+
+        (emVolts, relativeEm) = ReadAcqmethTable(lines, emVolts, relativeEm);
+        return new AcqmethReading(emVolts, relativeEm);
+    }
+
+    private static (string? EMVolts, string? RelativeEM) ReadAcqmethTable(
+        IReadOnlyList<string> lines,
+        string? emVolts,
+        string? relativeEm)
+    {
+        if (emVolts is not null && relativeEm is not null)
+        {
+            return (emVolts, relativeEm);
+        }
+
+        for (var lineIndex = 0; lineIndex < lines.Count; lineIndex++)
+        {
+            foreach (var delimiter in AcqmethColumnDelimiters)
+            {
+                var headers = SplitAcqmethColumns(lines[lineIndex], delimiter);
+                if (headers.Count < 2)
+                {
+                    continue;
+                }
+
+                var emVoltsIndex = FindAcqmethHeaderIndex(headers, IsActualEmvHeader);
+                var relativeEmIndex = FindAcqmethHeaderIndex(headers, IsRelativeEmHeader);
+                if (emVoltsIndex < 0 && relativeEmIndex < 0)
+                {
+                    continue;
+                }
+
+                for (var valueLineIndex = lineIndex + 1; valueLineIndex < lines.Count; valueLineIndex++)
+                {
+                    var values = SplitAcqmethColumns(lines[valueLineIndex], delimiter);
+                    if (values.Count == 0 || values.All(string.IsNullOrWhiteSpace))
+                    {
+                        continue;
+                    }
+
+                    emVolts ??= ReadAcqmethColumn(values, emVoltsIndex);
+                    relativeEm ??= ReadAcqmethColumn(values, relativeEmIndex);
+                    return (emVolts, relativeEm);
+                }
+            }
+        }
+
+        return (emVolts, relativeEm);
+    }
+
+    private static IReadOnlyList<string> SplitAcqmethColumns(string line, char delimiter) =>
+        line
+            .Split(delimiter)
+            .Select(column => column.Trim().Trim('"'))
+            .ToArray();
+
+    private static int FindAcqmethHeaderIndex(IReadOnlyList<string> headers, Func<string, bool> predicate)
+    {
+        for (var index = 0; index < headers.Count; index++)
+        {
+            if (predicate(headers[index]))
+            {
+                return index;
+            }
+        }
+
+        return -1;
+    }
+
+    private static string? ReadAcqmethColumn(IReadOnlyList<string> values, int index) =>
+        index >= 0 && index < values.Count
+            ? NormalizeAcqmethValue(values[index])
+            : null;
+
+    private static bool IsActualEmvHeader(string value)
+    {
+        var normalized = NormalizeAcqmethHeader(value);
+        return normalized is "ACTUALEMV" or "EMV";
+    }
+
+    private static bool IsRelativeEmHeader(string value)
+    {
+        var normalized = NormalizeAcqmethHeader(value);
+        return normalized is "ACTUALEMSETTINGMODEDELTA" or "EMSETTINGMODEDELTA";
+    }
+
+    private static string NormalizeAcqmethHeader(string value)
+    {
+        var builder = new StringBuilder(value.Length);
+        foreach (var character in value)
+        {
+            if (char.IsLetterOrDigit(character))
+            {
+                builder.Append(char.ToUpperInvariant(character));
+            }
+        }
+
+        return builder.ToString();
+    }
+
+    private static string? FindAcqmethPath(QuantFileCandidate candidate)
+    {
+        if (!Directory.Exists(candidate.DataFilepath))
+        {
+            return null;
+        }
+
+        return Directory
+            .EnumerateFiles(candidate.DataFilepath, "*", SearchOption.TopDirectoryOnly)
+            .Where(IsAcqmethFile)
+            .OrderBy(path => Path.GetFileName(path) ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault();
+    }
+
+    private static bool IsAcqmethFile(string path)
+    {
+        var fileName = Path.GetFileName(path);
+        if (string.IsNullOrEmpty(fileName))
+        {
+            return false;
+        }
+
+        return fileName.Contains("acqmeth", StringComparison.OrdinalIgnoreCase) ||
+            fileName.Contains("acqemeth", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string? TryReadAcqmethValue(string line, Regex regex)
+    {
+        var match = regex.Match(line);
+        if (!match.Success)
+        {
+            return null;
+        }
+
+        return NormalizeAcqmethValue(match.Groups["value"].Value);
+    }
+
+    private static string? NormalizeAcqmethValue(string value)
+    {
+        var trimmed = value.Trim();
+        if (trimmed.Length == 0)
+        {
+            return null;
+        }
+
+        var numeric = AcqmethNumericValueRegex().Match(trimmed);
+        return numeric.Success
+            ? numeric.Value
+            : trimmed;
     }
 
     /// <summary>
@@ -298,6 +489,15 @@ public sealed partial class QuantParser : IQuantParser
     [GeneratedRegex(@"_(?:[VL])?(?<sampleNo>\d+)\.D$", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
     private static partial Regex SampleNoRegex();
 
+    [GeneratedRegex(@"^\s*Actual\s+EMV\s*(?:[:=]|\t+)\s*(?<value>.+?)\s*$", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
+    private static partial Regex AcqmethActualEmvRegex();
+
+    [GeneratedRegex(@"^\s*(?:Actual\s+)?EM\s+Setting\s+mode\s+Delta\s*(?:[:=]|\t+)\s*(?<value>.+?)\s*$", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
+    private static partial Regex AcqmethRelativeEmRegex();
+
+    [GeneratedRegex(@"[-+]?\d+(?:\.\d+)?", RegexOptions.Compiled)]
+    private static partial Regex AcqmethNumericValueRegex();
+
     /// <summary>
     /// Compound 資料列解析 regex
     /// </summary>
@@ -315,4 +515,9 @@ public sealed partial class QuantParser : IQuantParser
     /// </remarks>
     [GeneratedRegex(@"^\s*\d+\)\s+(?<name>.+?)\s+(?<rt>\d+\.\d{3})\s+(?:(?<qion>\d+)\s+)?(?<response>\d+)\s+(?<conc>\d+(?:\.\d+)?|N\.D\.|No Calib)\b", RegexOptions.Compiled)]
     private static partial Regex CompoundLineRegex();
+
+    private sealed record AcqmethReading(string? EMVolts, string? RelativeEM)
+    {
+        public static AcqmethReading Empty { get; } = new(null, null);
+    }
 }
