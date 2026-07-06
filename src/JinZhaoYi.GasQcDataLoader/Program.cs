@@ -345,6 +345,31 @@ static void MapDownloadEndpoints(WebApplication app)
         }
     });
 
+    app.MapGet("/api/qc-result-settings", async (
+        IDapperRepository repository,
+        CancellationToken cancellationToken) =>
+    {
+        var settings = await repository.GetQcResultSettingsAsync(cancellationToken);
+        return Results.Ok(settings);
+    });
+
+    app.MapPut("/api/qc-result-settings", async (
+        QcResultSettingsUpsertRequest request,
+        IDapperRepository repository,
+        IOptions<SchedulerOptions> options,
+        CancellationToken cancellationToken) =>
+    {
+        try
+        {
+            var settings = await repository.UpsertQcResultSettingsAsync(request, options.Value.CreateUser, cancellationToken);
+            return Results.Ok(settings);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new { message = ex.Message });
+        }
+    });
+
     app.MapPost("/api/exports/query2-excel/preview", async (
         Query2ExcelPreviewRequest request,
         IDapperRepository repository,

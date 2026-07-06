@@ -110,6 +110,13 @@ public interface IDapperRepository
         string user,
         CancellationToken cancellationToken);
 
+    Task<QcResultSettingsDto> GetQcResultSettingsAsync(CancellationToken cancellationToken);
+
+    Task<QcResultSettingsDto> UpsertQcResultSettingsAsync(
+        QcResultSettingsUpsertRequest request,
+        string user,
+        CancellationToken cancellationToken);
+
     Task<PagedResponse<ExportOption>> GetExcelPpbExportOptionsAsync(
         DateTime startDate,
         DateTime endDate,

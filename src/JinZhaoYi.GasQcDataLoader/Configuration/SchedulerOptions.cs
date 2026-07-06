@@ -242,5 +242,9 @@ public sealed class SchedulerTableOptions
 
     public string Query2DynamicAreaPortValue { get; init; } = "ZZ_NF_GAS_QC_QUERY2_DYNAMIC_AREA_PORT_VALUE";
 
+    public string QcPressureRule { get; init; } = "ZZ_NF_GAS_QC_PRESSURE_RULE";
+
+    public string QcConcentrationRule { get; init; } = "ZZ_NF_GAS_QC_CONCENTRATION_RULE";
+
     public string ImportErrorLog { get; init; } = "ZZ_NF_GAS_QC_ERROR_LOG";
 }

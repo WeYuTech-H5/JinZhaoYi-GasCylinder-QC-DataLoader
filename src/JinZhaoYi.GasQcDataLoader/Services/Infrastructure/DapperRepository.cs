@@ -1519,6 +1519,208 @@ public sealed class DapperRepository(
         }
     }
 
+    public async Task<QcResultSettingsDto> GetQcResultSettingsAsync(CancellationToken cancellationToken)
+    {
+        using var connection = sqlConnectionFactory.CreateConnection();
+        var pressureSql = $"""
+            SELECT
+                ContainerType,
+                IniPrsMin,
+                FnlPrsMin,
+                IsActive
+            FROM dbo.{Quote(_tables.QcPressureRule)}
+            WHERE IsActive = 1
+            ORDER BY
+                CASE ContainerType
+                    WHEN N'0.5L' THEN 0
+                    WHEN N'1L' THEN 1
+                    ELSE 99
+                END
+            """;
+
+        var concentrationSql = $"""
+            SELECT
+                ContainerType,
+                AnalyteKey,
+                MinPpb,
+                MaxPpb,
+                SortOrder,
+                IsActive
+            FROM dbo.{Quote(_tables.QcConcentrationRule)}
+            WHERE IsActive = 1
+            ORDER BY SortOrder, AnalyteKey, ContainerType
+            """;
+
+        var pressureRules = await connection.QueryAsync<QcPressureRule>(
+            new CommandDefinition(pressureSql, cancellationToken: cancellationToken));
+        var concentrationRules = await connection.QueryAsync<QcConcentrationRuleValue>(
+            new CommandDefinition(concentrationSql, cancellationToken: cancellationToken));
+
+        return BuildQcResultSettingsDto(pressureRules.ToArray(), concentrationRules.ToArray());
+    }
+
+    public async Task<QcResultSettingsDto> UpsertQcResultSettingsAsync(
+        QcResultSettingsUpsertRequest request,
+        string user,
+        CancellationToken cancellationToken)
+    {
+        var pressureRules = (request.PressureRules ?? [])
+            .Select(QcResultSettingRules.NormalizePressureRule)
+            .GroupBy(rule => rule.ContainerType, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.Last())
+            .ToArray();
+
+        var analytesByKey = QcResultSettingRules.BuildAnalyteLookup();
+        var concentrationRules = (request.ConcentrationRules ?? [])
+            .SelectMany(rule => QcResultSettingRules.NormalizeConcentrationRule(rule, analytesByKey))
+            .GroupBy(rule => $"{rule.ContainerType}|{rule.AnalyteKey}", StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.Last())
+            .ToArray();
+
+        var auditUser = string.IsNullOrWhiteSpace(user) ? "SYSTEM" : user.Trim();
+        var now = DateTime.Now;
+
+        await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
+        await connection.OpenAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+
+        try
+        {
+            var pressureSql = $"""
+                MERGE dbo.{Quote(_tables.QcPressureRule)} AS target
+                USING
+                (
+                    SELECT
+                        @ContainerType AS ContainerType,
+                        @IniPrsMin AS IniPrsMin,
+                        @FnlPrsMin AS FnlPrsMin,
+                        @IsActive AS IsActive
+                ) AS source
+                    ON target.ContainerType = source.ContainerType
+                WHEN MATCHED THEN
+                    UPDATE SET
+                        IniPrsMin = source.IniPrsMin,
+                        FnlPrsMin = source.FnlPrsMin,
+                        IsActive = source.IsActive,
+                        EditUser = @AuditUser,
+                        EditTime = @Now
+                WHEN NOT MATCHED THEN
+                    INSERT
+                    (
+                        ContainerType,
+                        IniPrsMin,
+                        FnlPrsMin,
+                        IsActive,
+                        CreateUser,
+                        CreateTime
+                    )
+                    VALUES
+                    (
+                        source.ContainerType,
+                        source.IniPrsMin,
+                        source.FnlPrsMin,
+                        source.IsActive,
+                        @AuditUser,
+                        @Now
+                    );
+                """;
+
+            foreach (var rule in pressureRules)
+            {
+                await connection.ExecuteAsync(
+                    new CommandDefinition(
+                        pressureSql,
+                        new
+                        {
+                            rule.ContainerType,
+                            rule.IniPrsMin,
+                            rule.FnlPrsMin,
+                            rule.IsActive,
+                            AuditUser = auditUser,
+                            Now = now
+                        },
+                        transaction,
+                        cancellationToken: cancellationToken));
+            }
+
+            var concentrationSql = $"""
+                MERGE dbo.{Quote(_tables.QcConcentrationRule)} AS target
+                USING
+                (
+                    SELECT
+                        @ContainerType AS ContainerType,
+                        @AnalyteKey AS AnalyteKey,
+                        @MinPpb AS MinPpb,
+                        @MaxPpb AS MaxPpb,
+                        @SortOrder AS SortOrder,
+                        @IsActive AS IsActive
+                ) AS source
+                    ON target.ContainerType = source.ContainerType
+                   AND target.AnalyteKey = source.AnalyteKey
+                WHEN MATCHED THEN
+                    UPDATE SET
+                        MinPpb = source.MinPpb,
+                        MaxPpb = source.MaxPpb,
+                        SortOrder = source.SortOrder,
+                        IsActive = source.IsActive,
+                        EditUser = @AuditUser,
+                        EditTime = @Now
+                WHEN NOT MATCHED THEN
+                    INSERT
+                    (
+                        ContainerType,
+                        AnalyteKey,
+                        MinPpb,
+                        MaxPpb,
+                        SortOrder,
+                        IsActive,
+                        CreateUser,
+                        CreateTime
+                    )
+                    VALUES
+                    (
+                        source.ContainerType,
+                        source.AnalyteKey,
+                        source.MinPpb,
+                        source.MaxPpb,
+                        source.SortOrder,
+                        source.IsActive,
+                        @AuditUser,
+                        @Now
+                    );
+                """;
+
+            foreach (var rule in concentrationRules)
+            {
+                await connection.ExecuteAsync(
+                    new CommandDefinition(
+                        concentrationSql,
+                        new
+                        {
+                            rule.ContainerType,
+                            rule.AnalyteKey,
+                            rule.MinPpb,
+                            rule.MaxPpb,
+                            rule.SortOrder,
+                            rule.IsActive,
+                            AuditUser = auditUser,
+                            Now = now
+                        },
+                        transaction,
+                        cancellationToken: cancellationToken));
+            }
+
+            await transaction.CommitAsync(cancellationToken);
+        }
+        catch
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            throw;
+        }
+
+        return await GetQcResultSettingsAsync(cancellationToken);
+    }
+
     public async Task<PagedResponse<ExportOption>> GetExcelPpbExportOptionsAsync(
         DateTime startDate,
         DateTime endDate,
@@ -2340,6 +2542,56 @@ public sealed class DapperRepository(
         values["EDIT_USER"] = row.EditUser;
         values["EDIT_TIME"] = row.EditTime;
         return values;
+    }
+
+    private static QcResultSettingsDto BuildQcResultSettingsDto(
+        IReadOnlyCollection<QcPressureRule> pressureRules,
+        IReadOnlyCollection<QcConcentrationRuleValue> concentrationRules)
+    {
+        var pressureByContainer = pressureRules
+            .GroupBy(rule => rule.ContainerType, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.Last(), StringComparer.OrdinalIgnoreCase);
+
+        var pressureDtos = QcResultSettingRules.SupportedContainers
+            .Select(containerType =>
+            {
+                pressureByContainer.TryGetValue(containerType, out var rule);
+                return new QcPressureRuleDto(
+                    containerType,
+                    rule?.IniPrsMin,
+                    rule?.FnlPrsMin,
+                    rule?.IsActive ?? true);
+            })
+            .ToArray();
+
+        var concentrationByKey = concentrationRules
+            .GroupBy(rule => $"{rule.ContainerType}|{rule.AnalyteKey}", StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.Last(), StringComparer.OrdinalIgnoreCase);
+
+        var concentrationDtos = CompoundMap.Analytes
+            .Select((analyte, index) =>
+            {
+                concentrationByKey.TryGetValue($"{QcResultSettingRules.Container05}|{analyte.Suffix}", out var rule05);
+                concentrationByKey.TryGetValue($"{QcResultSettingRules.Container1L}|{analyte.Suffix}", out var rule1L);
+                return new QcConcentrationRuleDto(
+                    analyte.Suffix,
+                    analyte.QuantName,
+                    rule05?.SortOrder ?? rule1L?.SortOrder ?? index + 1,
+                    rule05?.MinPpb,
+                    rule05?.MaxPpb,
+                    rule1L?.MinPpb,
+                    rule1L?.MaxPpb,
+                    rule05?.IsActive ?? rule1L?.IsActive ?? true);
+            })
+            .OrderBy(rule => rule.SortOrder)
+            .ThenBy(rule => rule.AnalyteKey, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        return new QcResultSettingsDto
+        {
+            PressureRules = pressureDtos,
+            ConcentrationRules = concentrationDtos
+        };
     }
 
     private static Dictionary<string, object?> BuildExcelPpbHistoryValues(QcDataRow row)
