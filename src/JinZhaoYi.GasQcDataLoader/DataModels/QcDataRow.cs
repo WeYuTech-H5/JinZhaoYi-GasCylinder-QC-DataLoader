@@ -78,6 +78,10 @@ public sealed class QcDataRow
 
     public DateTime? ParentExpirationDate { get; set; }
 
+    public string? QcResult { get; set; }
+
+    public string? FailDesc { get; set; }
+
     public Dictionary<string, decimal?> Areas { get; } = new(StringComparer.OrdinalIgnoreCase);
 
     public Dictionary<string, decimal?> Ppbs { get; } = new(StringComparer.OrdinalIgnoreCase);
@@ -125,7 +129,9 @@ public sealed class QcDataRow
             ExcelStdRawIds = ExcelStdRawIds,
             ExcelPortRawIds = ExcelPortRawIds,
             ProdBomb1LotNo = ProdBomb1LotNo,
-            ParentExpirationDate = ParentExpirationDate
+            ParentExpirationDate = ParentExpirationDate,
+            QcResult = QcResult,
+            FailDesc = FailDesc
         };
     }
 

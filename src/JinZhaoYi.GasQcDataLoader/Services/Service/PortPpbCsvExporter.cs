@@ -80,8 +80,9 @@ public sealed class PortPpbCsvExporter(
         var manufacturingDate = ResolveManufacturingDate(row)?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "unknown-date";
         var sampleName = string.IsNullOrWhiteSpace(row.SampleName) ? "unknown-sample" : row.SampleName;
         var lotNo = string.IsNullOrWhiteSpace(rawLotId) ? "unknown-lot" : rawLotId;
+        var result = ResolveResultFileNamePart(row);
 
-        return $"{SanitizeFileName(manufacturingDate)}_{SanitizeFileName(sampleName)}_{SanitizeFileName(lotNo)}_pass.csv";
+        return $"{SanitizeFileName(manufacturingDate)}_{SanitizeFileName(sampleName)}_{SanitizeFileName(lotNo)}_{result}.csv";
     }
 
     internal string BuildContent(QcDataRow row)
@@ -244,6 +245,21 @@ public sealed class PortPpbCsvExporter(
         }
 
         return builder.ToString().Trim();
+    }
+
+    private static string ResolveResultFileNamePart(QcDataRow row)
+    {
+        if (string.Equals(row.QcResult, QcResultValues.Pass, StringComparison.OrdinalIgnoreCase))
+        {
+            return "pass";
+        }
+
+        if (string.Equals(row.QcResult, QcResultValues.Fail, StringComparison.OrdinalIgnoreCase))
+        {
+            return "fail";
+        }
+
+        return "unknown";
     }
 
     private string ResolveOutputPath(string path) =>

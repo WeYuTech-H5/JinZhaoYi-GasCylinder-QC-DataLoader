@@ -56,6 +56,15 @@ public sealed class PortPpbCsvExporterTests : IDisposable
     }
 
     [Fact]
+    public void BuildFileName_uses_qc_result_for_file_name_suffix()
+    {
+        var row = CreatePpbRow();
+        row.QcResult = QcResultValues.Fail;
+
+        PortPpbCsvExporter.BuildFileName(row, "CC-706988").Should().Be("2026-04-20_TSMC-024_CC-706988_fail.csv");
+    }
+
+    [Fact]
     public void ExportToBytes_emits_utf8_bom_for_excel_compatibility()
     {
         var exporter = CreateExporter(new SchedulerCsvExportOptions { Enabled = true });
@@ -166,7 +175,8 @@ public sealed class PortPpbCsvExporterTests : IDisposable
             Port = "PORT 2",
             LotNo = "20260420004",
             DataFilename = "Quant.txt",
-            SampleName = "TSMC-024"
+            SampleName = "TSMC-024",
+            QcResult = QcResultValues.Pass
         };
 
     private QuantFileCandidate CreateCandidate()

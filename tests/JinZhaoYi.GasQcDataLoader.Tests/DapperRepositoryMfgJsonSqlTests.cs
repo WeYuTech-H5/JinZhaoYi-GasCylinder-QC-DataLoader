@@ -45,11 +45,46 @@ public sealed class DapperRepositoryMfgJsonSqlTests
             "[Prod_Bomb3_Prs] = COALESCE(@ProdBomb3Prs, [Prod_Bomb3_Prs])",
             "[SampleNo] = COALESCE(@SampleNo, [SampleNo])",
             "[SampleType] = COALESCE(@SampleType, [SampleType])",
-            "[Container] = COALESCE(@Container, [Container])",
-            "[ProdOrder] = COALESCE(@ProdOrder, [ProdOrder])"
+            "[Container] = COALESCE(@Container, [Container])"
         };
 
         sql.Should().ContainAll(expectedAssignments);
+    }
+
+    [Fact]
+    public void MfgJson_update_does_not_write_qc_system_fields()
+    {
+        var sql = GetMfgJsonUpdateSqlFormat();
+
+        sql.Should().NotContain("[ProdOrder]");
+        sql.Should().NotContain("[CalType]");
+        sql.Should().NotContain("[Cal_id]");
+        sql.Should().NotContain("[IniPrs]");
+        sql.Should().NotContain("[QCComplete]");
+        sql.Should().NotContain("[QCInst]");
+        sql.Should().NotContain("[QCPort]");
+        sql.Should().NotContain("[QCTime]");
+        sql.Should().NotContain("[Result]");
+        sql.Should().NotContain("[RF_ID]");
+        sql.Should().NotContain("[FnlPrs]");
+    }
+
+    [Fact]
+    public void MfgJson_insert_does_not_seed_qc_system_fields()
+    {
+        var sql = GetMfgJsonInsertSqlFormat();
+
+        sql.Should().NotContain("[ProdOrder]");
+        sql.Should().NotContain("[CalType]");
+        sql.Should().NotContain("[Cal_id]");
+        sql.Should().NotContain("[IniPrs]");
+        sql.Should().NotContain("[QCComplete]");
+        sql.Should().NotContain("[QCInst]");
+        sql.Should().NotContain("[QCPort]");
+        sql.Should().NotContain("[QCTime]");
+        sql.Should().NotContain("[Result]");
+        sql.Should().NotContain("[RF_ID]");
+        sql.Should().NotContain("[FnlPrs]");
     }
 
     [Fact]
@@ -70,5 +105,15 @@ public sealed class DapperRepositoryMfgJsonSqlTests
 
         return field?.GetRawConstantValue() as string
             ?? throw new InvalidOperationException("MfgJsonUpdateSqlFormat was not found.");
+    }
+
+    private static string GetMfgJsonInsertSqlFormat()
+    {
+        var field = typeof(DapperRepository).GetField(
+            "MfgJsonInsertSqlFormat",
+            BindingFlags.NonPublic | BindingFlags.Static);
+
+        return field?.GetRawConstantValue() as string
+            ?? throw new InvalidOperationException("MfgJsonInsertSqlFormat was not found.");
     }
 }

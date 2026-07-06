@@ -41,7 +41,7 @@ public sealed class QcDownloadFileResolver(IOptions<SchedulerOptions> options) :
             return null;
         }
 
-        var searchPattern = $"*_{sampleName}_*_pass.csv";
+        var searchPattern = $"*_{sampleName}_*.csv";
         return Directory
             .EnumerateDirectories(root, "QC", SearchOption.AllDirectories)
             .SelectMany(qcDirectory => Directory.EnumerateFiles(qcDirectory, searchPattern, SearchOption.TopDirectoryOnly))

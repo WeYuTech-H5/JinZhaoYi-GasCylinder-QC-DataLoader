@@ -39,6 +39,7 @@ try
     builder.Services.AddSingleton<IImportWriteSetBuilder, ImportWriteSetBuilder>();
     builder.Services.AddSingleton<IQuery2SelectionExportBuilder, Query2SelectionExportBuilder>();
     builder.Services.AddSingleton<IQuery2PreviewService, Query2PreviewService>();
+    builder.Services.AddSingleton<IQcResultEvaluator, QcResultEvaluator>();
     builder.Services.AddSingleton<IQuery2WorkbookExporter, Query2WorkbookExporter>();
     builder.Services.AddSingleton<IPortPpbCsvExporter, PortPpbCsvExporter>();
     builder.Services.AddSingleton<IStdCylinderSummaryExporter, StdCylinderSummaryExporter>();
@@ -375,6 +376,7 @@ static void MapDownloadEndpoints(WebApplication app)
         IDapperRepository repository,
         IQuery2SelectionExportBuilder exportBuilder,
         IQuery2PreviewService previewService,
+        IQcResultEvaluator qcResultEvaluator,
         CancellationToken cancellationToken) =>
     {
         var validationRequest = new Query2ExcelExportRequest
@@ -412,12 +414,18 @@ static void MapDownloadEndpoints(WebApplication app)
 
         var dynamicAreaFields = await repository.GetQuery2DynamicAreaFieldsAsync(includeInactive: false, cancellationToken);
         var dynamicAreaValues = await repository.GetQuery2DynamicAreaPortValuesAsync(cancellationToken);
-        return Results.Ok(previewService.CreatePreview(startDate, endDate, rfId, stdRawIds, portRawIds, rows, dynamicAreaFields, dynamicAreaValues));
+        var qcSettings = await repository.GetQcResultSettingsAsync(cancellationToken);
+        var preview = previewService.CreatePreview(startDate, endDate, rfId, stdRawIds, portRawIds, rows, dynamicAreaFields, dynamicAreaValues);
+        preview.QcParameterWarnings = qcResultEvaluator.BuildParameterWarnings(rows, qcSettings);
+        return Results.Ok(preview);
     });
 
-    app.MapPost("/api/exports/query2-excel/recalculate", (
+    app.MapPost("/api/exports/query2-excel/recalculate", async (
         Query2PreviewRecalculateRequest request,
-        IQuery2PreviewService previewService) =>
+        IQuery2PreviewService previewService,
+        IDapperRepository repository,
+        IQcResultEvaluator qcResultEvaluator,
+        CancellationToken cancellationToken) =>
     {
         if (request.Preview is null)
         {
@@ -426,7 +434,11 @@ static void MapDownloadEndpoints(WebApplication app)
 
         try
         {
-            return Results.Ok(previewService.Recalculate(request.Preview));
+            var preview = previewService.Recalculate(request.Preview);
+            var rows = previewService.ToExportRows(preview);
+            var qcSettings = await repository.GetQcResultSettingsAsync(cancellationToken);
+            preview.QcParameterWarnings = qcResultEvaluator.BuildParameterWarnings(rows, qcSettings);
+            return Results.Ok(preview);
         }
         catch (InvalidOperationException ex)
         {
@@ -438,6 +450,7 @@ static void MapDownloadEndpoints(WebApplication app)
         Query2PreviewExportRequest request,
         IQuery2PreviewService previewService,
         IQuery2WorkbookExporter exporter,
+        IQcResultEvaluator qcResultEvaluator,
         IDapperRepository repository,
         IOptions<SchedulerOptions> options,
         CancellationToken cancellationToken) =>
@@ -472,7 +485,8 @@ static void MapDownloadEndpoints(WebApplication app)
         var startDateText = startDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
         var endDateText = endDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
         var exportDateText = startDate.Date == endDate.Date ? startDateText : $"{startDateText}-{endDateText}";
-        var content = await exporter.ExportAsync(exportDateText, rows, finalPreview.DynamicAreaFields, cancellationToken);
+        var qcSettings = await repository.GetQcResultSettingsAsync(cancellationToken);
+        var content = await exporter.ExportAsync(exportDateText, rows, finalPreview.DynamicAreaFields, qcSettings, cancellationToken);
         if (content is null)
         {
             return Results.NotFound(new { message = "No Query2 Excel content was generated." });
@@ -493,6 +507,8 @@ static void MapDownloadEndpoints(WebApplication app)
             exportUser);
 
         await repository.UpsertExcelPpbHistoryAsync(historyRequest, cancellationToken);
+        var qcUpdates = qcResultEvaluator.EvaluateExportRows(rows, rfId, qcSettings);
+        await repository.UpsertMfgLotQcResultsAsync(qcUpdates, exportUser, cancellationToken);
 
         var excelExportKey = DapperRepository.ComputeExcelExportKey(historyRequest);
         var editLogs = previewService.BuildEditLogs(
@@ -515,6 +531,7 @@ static void MapDownloadEndpoints(WebApplication app)
         IQuery2SelectionExportBuilder exportBuilder,
         IQuery2PreviewService previewService,
         IQuery2WorkbookExporter exporter,
+        IQcResultEvaluator qcResultEvaluator,
         IOptions<SchedulerOptions> options,
         CancellationToken cancellationToken) =>
     {
@@ -551,7 +568,8 @@ static void MapDownloadEndpoints(WebApplication app)
         var startDateText = startDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
         var endDateText = endDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
         var exportDateText = startDate.Date == endDate.Date ? startDateText : $"{startDateText}-{endDateText}";
-        var content = await exporter.ExportAsync(exportDateText, rows, preview.DynamicAreaFields, cancellationToken);
+        var qcSettings = await repository.GetQcResultSettingsAsync(cancellationToken);
+        var content = await exporter.ExportAsync(exportDateText, rows, preview.DynamicAreaFields, qcSettings, cancellationToken);
         if (content is null)
         {
             return Results.NotFound(new { message = "No Query2 Excel content was generated." });
@@ -559,6 +577,8 @@ static void MapDownloadEndpoints(WebApplication app)
 
         // 只有成功產生 Excel 的 PPB 才能進入 CSV 候選清單，避免使用者下載到沒有對應快照的資料。
         var exportSessionId = Guid.NewGuid();
+        var exportedAt = DateTime.Now;
+        var exportUser = options.Value.CreateUser;
         await repository.UpsertExcelPpbHistoryAsync(
             new ExcelPpbHistorySaveRequest(
                 startDate,
@@ -568,9 +588,11 @@ static void MapDownloadEndpoints(WebApplication app)
                 portRawIds,
                 rows.Where(row => row.RowType == Query2ExportRowType.Ppb).Select(row => row.Row).ToArray(),
                 exportSessionId,
-                DateTime.Now,
-                options.Value.CreateUser),
+                exportedAt,
+                exportUser),
             cancellationToken);
+        var qcUpdates = qcResultEvaluator.EvaluateExportRows(rows, rfId, qcSettings);
+        await repository.UpsertMfgLotQcResultsAsync(qcUpdates, exportUser, cancellationToken);
 
         return Results.File(
             content,

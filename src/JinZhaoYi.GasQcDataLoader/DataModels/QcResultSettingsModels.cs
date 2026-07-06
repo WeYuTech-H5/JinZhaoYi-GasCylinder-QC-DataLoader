@@ -37,6 +37,11 @@ public sealed class QcResultSettingsDto
     public IReadOnlyList<QcConcentrationRuleDto> ConcentrationRules { get; init; } = [];
 }
 
+public sealed record QcParameterWarningDto(
+    string Code,
+    string Message,
+    string? ContainerType = null);
+
 public sealed class QcResultSettingsUpsertRequest
 {
     public IReadOnlyList<QcPressureRuleDto> PressureRules { get; init; } = [];

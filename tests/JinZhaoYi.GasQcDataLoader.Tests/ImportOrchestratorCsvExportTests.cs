@@ -280,6 +280,21 @@ public sealed class ImportOrchestratorCsvExportTests
         public Task UpsertQuery2DynamicAreaPortValuesAsync(IReadOnlyCollection<Query2DynamicAreaPortValueDto> rows, string user, CancellationToken cancellationToken) =>
             Task.CompletedTask;
 
+        public Task<QcResultSettingsDto> GetQcResultSettingsAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(new QcResultSettingsDto());
+
+        public Task<QcResultSettingsDto> UpsertQcResultSettingsAsync(
+            QcResultSettingsUpsertRequest request,
+            string user,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(new QcResultSettingsDto());
+
+        public Task UpsertMfgLotQcResultsAsync(
+            IReadOnlyCollection<MfgLotQcUpdate> updates,
+            string? user,
+            CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+
         public Task<PagedResponse<ExportOption>> GetExcelPpbExportOptionsAsync(
             DateTime startDate,
             DateTime endDate,

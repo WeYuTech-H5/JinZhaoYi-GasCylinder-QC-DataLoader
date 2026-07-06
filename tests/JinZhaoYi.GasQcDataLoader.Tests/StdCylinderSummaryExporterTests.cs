@@ -25,19 +25,20 @@ public sealed class StdCylinderSummaryExporterTests
         var worksheet = workbook.Worksheet("STD Cylinder總表");
 
         worksheet.Cell("A1").GetString().Should().Be("si0,id@@4,1");
-        worksheet.Cell("AV1").GetString().Should().Be("si2,ppb,67641");
-        worksheet.Cell("AX3").GetString().Should().Be("Methylene Chloride");
-        worksheet.Cell("CH3").GetString().Should().Be("HCBD");
-        worksheet.Cell("CI3").GetString().Should().Be("Note");
-        worksheet.Cell("CJ3").GetString().Should().Be("ExcelGuid");
+        worksheet.Cell("AV3").GetString().Should().Be("FailDesc");
+        worksheet.Cell("AW1").GetString().Should().Be("si2,ppb,67641");
+        worksheet.Cell("AY3").GetString().Should().Be("Methylene Chloride");
+        worksheet.Cell("CI3").GetString().Should().Be("HCBD");
+        worksheet.Cell("CJ3").GetString().Should().Be("Note");
+        worksheet.Cell("CK3").GetString().Should().Be("ExcelGuid");
 
         worksheet.Cell("B4").GetString().Should().Be("STD-T132");
         worksheet.Cell("B5").GetString().Should().Be("TSMC-002");
         worksheet.Cell("B6").GetString().Should().Be("RF-001");
-        worksheet.Cell("AV5").GetDouble().Should().BeApproximately(98.125, 0.000001);
-        worksheet.Cell("CJ4").GetString().Should().Be(exportSessionId.ToString("D"));
-        worksheet.Cell("CJ5").GetString().Should().Be(exportSessionId.ToString("D"));
-        worksheet.Cell("CJ6").GetString().Should().Be(exportSessionId.ToString("D"));
+        worksheet.Cell("AW5").GetDouble().Should().BeApproximately(98.125, 0.000001);
+        worksheet.Cell("CK4").GetString().Should().Be(exportSessionId.ToString("D"));
+        worksheet.Cell("CK5").GetString().Should().Be(exportSessionId.ToString("D"));
+        worksheet.Cell("CK6").GetString().Should().Be(exportSessionId.ToString("D"));
     }
 
     private static StdCylinderSummaryRow Row(
@@ -55,6 +56,7 @@ public sealed class StdCylinderSummaryExporterTests
         row.Values["ProdDate"] = new DateTime(2026, 5, 7);
         row.Values["LotNo"] = lotNo;
         row.Values["Result"] = "Pass";
+        row.Values["FailDesc"] = null;
         row.Areas["Acetone"] = acetone;
         row.Areas["HCBD"] = 100.892m;
         return row;

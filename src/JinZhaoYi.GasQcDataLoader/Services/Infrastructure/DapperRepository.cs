@@ -14,6 +14,7 @@ namespace JinZhaoYi.GasQcDataLoader.Services.Infrastructure;
 public sealed class DapperRepository(
     ISqlConnectionFactory sqlConnectionFactory,
     ICalculationService calculationService,
+    IQcResultEvaluator qcResultEvaluator,
     IOptions<SchedulerOptions> options) : IDapperRepository
 {
     private const string LotLookupSqlFormat = """
@@ -46,8 +47,8 @@ public sealed class DapperRepository(
             [Prod_Can1_FillingPrs], [Prod_Can2_FillingPrs], [Prod_Bomb2_FillingPrs], [Prod_Bomb1_FillingPrs], [Prod_Bomb3_FillingPrs], [Prod_LeakTest2],
             [Prod_Can1_LotNo], [Prod_Can1_Flow], [Prod_Can1_Sec], [Prod_Can1_Prs], [Prod_Can2_LotNo], [Prod_Can2_Flow], [Prod_Can2_Sec], [Prod_Can2_Prs],
             [Prod_Bomb2_LotNo], [Prod_Bomb2_Flow], [Prod_Bomb2_Sec], [Prod_Bomb2_Prs], [Prod_Bomb1_LotNo], [Prod_Bomb1_SetFillingPrs], [Prod_Bomb1_Prs],
-            [Prod_Bomb3_LotNo], [Prod_Bomb3_SetFillingPrs], [Prod_Bomb3_Prs], [SampleNo], [SampleType], [Container], [ProdOrder], [CalType], [Cal_id], [IniPrs],
-            [QCComplete], [QCInst], [QCPort], [QCTime], [Result], [RF_ID], [FnlPrs], [CREATE_USER], [CREATE_TIME], [si0_id]
+            [Prod_Bomb3_LotNo], [Prod_Bomb3_SetFillingPrs], [Prod_Bomb3_Prs], [SampleNo], [SampleType], [Container],
+            [CREATE_USER], [CREATE_TIME], [si0_id]
         )
         VALUES
         (
@@ -55,8 +56,8 @@ public sealed class DapperRepository(
             @ProdCan1FillingPrs, @ProdCan2FillingPrs, @ProdBomb2FillingPrs, @ProdBomb1FillingPrs, @ProdBomb3FillingPrs, @ProdLeakTest2,
             @ProdCan1LotNo, @ProdCan1Flow, @ProdCan1Sec, @ProdCan1Prs, @ProdCan2LotNo, @ProdCan2Flow, @ProdCan2Sec, @ProdCan2Prs,
             @ProdBomb2LotNo, @ProdBomb2Flow, @ProdBomb2Sec, @ProdBomb2Prs, @ProdBomb1LotNo, @ProdBomb1SetFillingPrs, @ProdBomb1Prs,
-            @ProdBomb3LotNo, @ProdBomb3SetFillingPrs, @ProdBomb3Prs, @SampleNo, @SampleType, @Container, @ProdOrder, @CalType, @CalId, @IniPrs,
-            @QcComplete, @QcInst, @QcPort, @QcTime, @Result, @RfId, @FnlPrs, @AuditUser, @Now, @Si0Id
+            @ProdBomb3LotNo, @ProdBomb3SetFillingPrs, @ProdBomb3Prs, @SampleNo, @SampleType, @Container,
+            @AuditUser, @Now, @Si0Id
         )
         """;
 
@@ -99,17 +100,6 @@ public sealed class DapperRepository(
             [SampleNo] = COALESCE(@SampleNo, [SampleNo]),
             [SampleType] = COALESCE(@SampleType, [SampleType]),
             [Container] = COALESCE(@Container, [Container]),
-            [ProdOrder] = COALESCE(@ProdOrder, [ProdOrder]),
-            [CalType] = COALESCE(@CalType, [CalType]),
-            [Cal_id] = COALESCE(@CalId, [Cal_id]),
-            [IniPrs] = COALESCE(@IniPrs, [IniPrs]),
-            [QCComplete] = COALESCE(@QcComplete, [QCComplete]),
-            [QCInst] = COALESCE(@QcInst, [QCInst]),
-            [QCPort] = COALESCE(@QcPort, [QCPort]),
-            [QCTime] = COALESCE(@QcTime, [QCTime]),
-            [Result] = COALESCE(@Result, [Result]),
-            [RF_ID] = COALESCE(@RfId, [RF_ID]),
-            [FnlPrs] = COALESCE(@FnlPrs, [FnlPrs]),
             [EDIT_USER] = @AuditUser,
             [EDIT_TIME] = @Now,
             [si0_id] = @Si0Id
@@ -167,6 +157,53 @@ public sealed class DapperRepository(
         WHERE ID IN @Ids
           AND LotNo IN @LotNos
           AND Port IN @Ports
+        """;
+
+    private const string PortPpbRowsForExportSqlFormat = """
+        SELECT
+            rows.*,
+            mfg.Result AS [Result],
+            mfg.FailDesc AS [FailDesc],
+            mfg.Prod_Bomb1_LotNo AS ProdBomb1LotNo
+        FROM dbo.{0} rows
+        OUTER APPLY
+        (
+            SELECT TOP (1)
+                lot.Result,
+                lot.FailDesc,
+                lot.Prod_Bomb1_LotNo
+            FROM dbo.{1} lot
+            WHERE (rows.LotNo IS NOT NULL AND lot.LotNo = rows.LotNo)
+               OR (rows.si0_id IS NOT NULL AND TRY_CONVERT(int, lot.si0_id) = rows.si0_id)
+            ORDER BY
+                CASE WHEN rows.LotNo IS NOT NULL AND lot.LotNo = rows.LotNo THEN 0 ELSE 1 END,
+                lot.EDIT_TIME DESC,
+                lot.CREATE_TIME DESC,
+                lot.ID DESC
+        ) mfg
+        WHERE CAST(rows.AnlzTime AS date) = @BatchDate
+        ORDER BY rows.AnlzTime, rows.SampleNo, rows.SourceFolderName, rows.SampleName
+        """;
+
+    private const string MfgLotQcUpdateSqlFormat = """
+        UPDATE dbo.{0}
+        SET
+            ProdOrder = @ProdOrder,
+            CalType = @CalType,
+            Cal_id = @CalId,
+            IniPrs = @IniPrs,
+            QCComplete = @QcComplete,
+            QCInst = @QcInst,
+            QCPort = @QcPort,
+            QCTime = @QcTime,
+            Result = @Result,
+            RF_ID = @RfId,
+            FnlPrs = @FnlPrs,
+            FailDesc = @FailDesc,
+            EDIT_USER = @AuditUser,
+            EDIT_TIME = @Now
+        WHERE LotNo = @LotNo
+           OR (@Si0Id IS NOT NULL AND TRY_CONVERT(int, si0_id) = @Si0Id)
         """;
 
     private const string RowsByDateSqlFormat = """
@@ -294,12 +331,16 @@ public sealed class DapperRepository(
         SELECT
             rows.*,
             mfg.Prod_Bomb1_LotNo AS ProdBomb1LotNo,
+            mfg.Result AS [Result],
+            mfg.FailDesc AS [FailDesc],
             parent.ExpirationDate AS ParentExpirationDate
         FROM dbo.{0} rows
         OUTER APPLY
         (
             SELECT TOP (1)
-                lot.Prod_Bomb1_LotNo
+                lot.Prod_Bomb1_LotNo,
+                lot.Result,
+                lot.FailDesc
             FROM dbo.{1} lot
             WHERE lot.LotNo = rows.LotNo
                OR TRY_CONVERT(int, lot.si0_id) = rows.si0_id
@@ -382,6 +423,7 @@ public sealed class DapperRepository(
             mfg.QCComplete AS [QCComplete],
             mfg.CalType AS [CalType],
             mfg.Result AS [Result],
+            mfg.FailDesc AS [FailDesc],
             {2},
             CAST(NULL AS nvarchar(4000)) AS [Note],
             rows.ExcelExportSessionId AS [ExcelExportSessionId]
@@ -1056,7 +1098,15 @@ public sealed class DapperRepository(
             return [];
         }
 
-        var rows = await GetRowsByDateAsync(_tables.PortPpb, batchDate.Date, cancellationToken);
+        await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
+        var sql = string.Format(PortPpbRowsForExportSqlFormat, Quote(_tables.PortPpb), Quote(_tables.MfgLot));
+        var queryRows = await connection.QueryAsync(
+            new CommandDefinition(
+                sql,
+                new { BatchDate = batchDate.Date },
+                cancellationToken: cancellationToken));
+
+        var rows = queryRows.Select(DynamicToQcDataRow);
         return FilterRowsByStableIds(rows, selectedSet)
             .OrderBy(row => row.AnlzTime)
             .ThenBy(row => row.SampleNo)
@@ -1522,6 +1572,14 @@ public sealed class DapperRepository(
     public async Task<QcResultSettingsDto> GetQcResultSettingsAsync(CancellationToken cancellationToken)
     {
         using var connection = sqlConnectionFactory.CreateConnection();
+        return await QueryQcResultSettingsAsync(connection, transaction: null, cancellationToken);
+    }
+
+    private async Task<QcResultSettingsDto> QueryQcResultSettingsAsync(
+        IDbConnection connection,
+        IDbTransaction? transaction,
+        CancellationToken cancellationToken)
+    {
         var pressureSql = $"""
             SELECT
                 ContainerType,
@@ -1552,9 +1610,9 @@ public sealed class DapperRepository(
             """;
 
         var pressureRules = await connection.QueryAsync<QcPressureRule>(
-            new CommandDefinition(pressureSql, cancellationToken: cancellationToken));
+            new CommandDefinition(pressureSql, transaction: transaction, cancellationToken: cancellationToken));
         var concentrationRules = await connection.QueryAsync<QcConcentrationRuleValue>(
-            new CommandDefinition(concentrationSql, cancellationToken: cancellationToken));
+            new CommandDefinition(concentrationSql, transaction: transaction, cancellationToken: cancellationToken));
 
         return BuildQcResultSettingsDto(pressureRules.ToArray(), concentrationRules.ToArray());
     }
@@ -1719,6 +1777,32 @@ public sealed class DapperRepository(
         }
 
         return await GetQcResultSettingsAsync(cancellationToken);
+    }
+
+    public async Task UpsertMfgLotQcResultsAsync(
+        IReadOnlyCollection<MfgLotQcUpdate> updates,
+        string? user,
+        CancellationToken cancellationToken)
+    {
+        if (updates.Count == 0)
+        {
+            return;
+        }
+
+        await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
+        await connection.OpenAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
+
+        try
+        {
+            await UpdateMfgLotQcResultsAsync(connection, transaction, updates, user, cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+        }
+        catch
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            throw;
+        }
     }
 
     public async Task<PagedResponse<ExportOption>> GetExcelPpbExportOptionsAsync(
@@ -1944,6 +2028,8 @@ public sealed class DapperRepository(
         try
         {
             var sidCounters = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
+            var qcSettings = await QueryQcResultSettingsAsync(connection, transaction, cancellationToken);
+            var qcUpdates = new List<MfgLotQcUpdate>();
 
             // 依 Quant 時間還原 STD / PORT 連續區段；每組寫完 raw 後，再從 DB 查最新兩筆 raw 計算。
             foreach (var group in BuildRawGroups(writeSet))
@@ -1954,13 +2040,15 @@ public sealed class DapperRepository(
                     continue;
                 }
 
-                await ProcessPortGroupAsync(connection, transaction, group.Rows, rf, importDate, sidCounters, cancellationToken);
+                await ProcessPortGroupAsync(connection, transaction, group.Rows, rf, qcSettings, qcUpdates, importDate, sidCounters, cancellationToken);
             }
 
             foreach (var stdQcRow in writeSet.StdQcRows)
             {
                 await InsertRowIfMissingAsync(connection, transaction, _tables.StdQc, stdQcRow, IncludePpb: false, IncludeRt: false, IncludeIdRefs: true, importDate, sidCounters, cancellationToken);
             }
+
+            await UpdateMfgLotQcResultsAsync(connection, transaction, qcUpdates, _options.CreateUser, cancellationToken);
 
             await transaction.CommitAsync(cancellationToken);
         }
@@ -1970,6 +2058,80 @@ public sealed class DapperRepository(
             throw;
         }
     }
+
+    private async Task UpdateMfgLotQcResultsAsync(
+        SqlConnection connection,
+        IDbTransaction transaction,
+        IReadOnlyCollection<MfgLotQcUpdate> updates,
+        string? user,
+        CancellationToken cancellationToken)
+    {
+        if (updates.Count == 0)
+        {
+            return;
+        }
+
+        var sql = string.Format(MfgLotQcUpdateSqlFormat, Quote(_tables.MfgLot));
+        var auditUser = string.IsNullOrWhiteSpace(user) ? _options.CreateUser : user.Trim();
+        var now = DateTime.Now;
+
+        foreach (var update in MergeMfgLotQcUpdates(updates))
+        {
+            await connection.ExecuteAsync(
+                new CommandDefinition(
+                    sql,
+                    new
+                    {
+                        update.LotNo,
+                        update.Si0Id,
+                        update.ProdOrder,
+                        update.CalType,
+                        CalId = update.CalId,
+                        update.IniPrs,
+                        update.QcComplete,
+                        update.QcInst,
+                        update.QcPort,
+                        update.QcTime,
+                        update.Result,
+                        RfId = update.RfId,
+                        update.FnlPrs,
+                        update.FailDesc,
+                        AuditUser = auditUser,
+                        Now = now
+                    },
+                    transaction,
+                    cancellationToken: cancellationToken));
+        }
+    }
+
+    private static IReadOnlyList<MfgLotQcUpdate> MergeMfgLotQcUpdates(IReadOnlyCollection<MfgLotQcUpdate> updates) =>
+        updates
+            .GroupBy(update => update.LotNo, StringComparer.OrdinalIgnoreCase)
+            .Select(group =>
+            {
+                var ordered = group.ToArray();
+                var latest = ordered[^1];
+                var hasFailure = ordered.Any(update => string.Equals(update.Result, QcResultValues.Fail, StringComparison.OrdinalIgnoreCase));
+                if (!hasFailure)
+                {
+                    return latest;
+                }
+
+                var failDesc = string.Join(
+                    "; ",
+                    ordered
+                        .Select(update => update.FailDesc)
+                        .Where(desc => !string.IsNullOrWhiteSpace(desc))
+                        .Select(desc => desc!.Trim())
+                        .Distinct(StringComparer.OrdinalIgnoreCase));
+
+                return latest with
+                {
+                    Result = QcResultValues.Fail,
+                    FailDesc = string.IsNullOrWhiteSpace(failDesc) ? null : failDesc
+                };
+            })
+            .ToArray();
 
     private async Task<IReadOnlyList<QcDataRow>> GetRawRowsByDateAsync(DateTime batchDate, CancellationToken cancellationToken)
     {
@@ -2125,6 +2287,8 @@ public sealed class DapperRepository(
         IDbTransaction transaction,
         IReadOnlyList<QcDataRow> rawRows,
         QcDataRow rf,
+        QcResultSettingsDto qcSettings,
+        ICollection<MfgLotQcUpdate> qcUpdates,
         DateTime importDate,
         IDictionary<string, decimal> sidCounters,
         CancellationToken cancellationToken)
@@ -2157,6 +2321,11 @@ public sealed class DapperRepository(
         await WriteAverageRowAsync(connection, transaction, _tables.PortAvg, portAverage, IncludePpb: true, IncludeRt: true, IncludeIdRefs: true, importDate, sidCounters, cancellationToken);
         // PPB 的 ID 依 si0_id 命名；同一 Port/Lot 重算時需替換成最新 AVG 對應的 PPB。
         await ReplaceComputedRowAsync(connection, transaction, _tables.PortPpb, portPpb, IncludePpb: false, IncludeRt: false, IncludeIdRefs: true, importDate, sidCounters, cancellationToken);
+        if (qcResultEvaluator.Evaluate(portPpb, rawRows, rf, qcSettings) is { } qcUpdate)
+        {
+            qcUpdates.Add(qcUpdate);
+        }
+
         await InsertRowIfMissingAsync(connection, transaction, _tables.PortRpd, portRpd, IncludePpb: false, IncludeRt: false, IncludeIdRefs: true, importDate, sidCounters, cancellationToken);
     }
 
@@ -2686,7 +2855,9 @@ public sealed class DapperRepository(
             ExcelStdRawIds = ReadString(dictionary, "ExcelStdRawIds"),
             ExcelPortRawIds = ReadString(dictionary, "ExcelPortRawIds"),
             ProdBomb1LotNo = ReadString(dictionary, "ProdBomb1LotNo"),
-            ParentExpirationDate = ReadDateTime(dictionary, "ParentExpirationDate")
+            ParentExpirationDate = ReadDateTime(dictionary, "ParentExpirationDate"),
+            QcResult = ReadString(dictionary, "Result"),
+            FailDesc = ReadString(dictionary, "FailDesc")
         };
 
         foreach (var analyte in CompoundMap.Analytes)

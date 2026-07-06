@@ -117,6 +117,11 @@ public interface IDapperRepository
         string user,
         CancellationToken cancellationToken);
 
+    Task UpsertMfgLotQcResultsAsync(
+        IReadOnlyCollection<MfgLotQcUpdate> updates,
+        string? user,
+        CancellationToken cancellationToken);
+
     Task<PagedResponse<ExportOption>> GetExcelPpbExportOptionsAsync(
         DateTime startDate,
         DateTime endDate,

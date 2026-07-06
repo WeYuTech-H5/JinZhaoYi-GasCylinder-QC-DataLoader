@@ -67,6 +67,20 @@ public sealed class QcDownloadFileResolverTests : IDisposable
     }
 
     [Fact]
+    public void ResolveCsvBySampleName_supports_fail_result_file_name()
+    {
+        var qcDirectory = Path.Combine(_rootPath, "20260615", "QC");
+        Directory.CreateDirectory(qcDirectory);
+        var expectedPath = Path.Combine(qcDirectory, "2026-06-15_STD-N267_CC-706988_fail.csv");
+        File.WriteAllText(expectedPath, "fail");
+        var resolver = CreateResolver();
+
+        var path = resolver.ResolveCsvBySampleName("STD-N267");
+
+        path.Should().Be(Path.GetFullPath(expectedPath));
+    }
+
+    [Fact]
     public void ResolveCsvBySampleName_rejects_wildcard_input()
     {
         var resolver = CreateResolver();

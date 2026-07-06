@@ -94,6 +94,22 @@ public sealed class Query2PreviewServiceTests
     }
 
     [Fact]
+    public void Recalculate_preserves_qc_parameter_warnings()
+    {
+        var service = CreateService();
+        var preview = CreatePreview(service);
+        preview.QcParameterWarnings =
+        [
+            new QcParameterWarningDto("PressureMinMissing", "0.5L 壓力下限未完整設定：分析後壓力", "0.5L")
+        ];
+
+        var recalculated = service.Recalculate(preview);
+
+        recalculated.QcParameterWarnings.Should().ContainSingle()
+            .Which.Message.Should().Be("0.5L 壓力下限未完整設定：分析後壓力");
+    }
+
+    [Fact]
     public void ToExportRows_uses_ppb_manual_value_as_port_ppb_history_area_value()
     {
         var service = CreateService();

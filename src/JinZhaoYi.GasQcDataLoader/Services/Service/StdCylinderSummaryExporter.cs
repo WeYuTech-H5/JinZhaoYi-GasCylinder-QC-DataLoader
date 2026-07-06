@@ -110,7 +110,8 @@ public sealed class StdCylinderSummaryExporter : IStdCylinderSummaryExporter
         new("si1,RF_ID", null, "RF_ID", "RF_ID"),
         new("si1,QCComplete", null, "QCComplete", "QCComplete"),
         new("si1,CalType", null, "CalType", "CalType"),
-        new("si1,Result", null, "Result", "Result")
+        new("si1,Result", null, "Result", "Result"),
+        new("si1,FailDesc", null, "FailDesc", "FailDesc")
     ];
 
     public StdCylinderSummaryDownload ExportForDownload(IReadOnlyCollection<StdCylinderSummaryRow> rows)

@@ -67,6 +67,14 @@ public sealed class Query2WorkbookExporter(
         IReadOnlyList<Query2ExportRow> rows,
         IReadOnlyList<Query2DynamicAreaField> dynamicAreaFields,
         CancellationToken cancellationToken)
+        => await ExportAsync(batchDate, rows, dynamicAreaFields, null, cancellationToken);
+
+    public async Task<byte[]?> ExportAsync(
+        string batchDate,
+        IReadOnlyList<Query2ExportRow> rows,
+        IReadOnlyList<Query2DynamicAreaField> dynamicAreaFields,
+        QcResultSettingsDto? qcSettings,
+        CancellationToken cancellationToken)
     {
         if (!_options.ExcelExport.Enabled || rows.Count == 0)
         {
@@ -74,7 +82,7 @@ public sealed class Query2WorkbookExporter(
         }
 
         var templatePath = ResolveTemplatePath();
-        return await Task.Run(() => ExportWorkbookToBytes(templatePath, rows, dynamicAreaFields), cancellationToken);
+        return await Task.Run(() => ExportWorkbookToBytes(templatePath, rows, dynamicAreaFields, qcSettings), cancellationToken);
     }
 
     private string ResolveOutputDirectory(QuantFileCandidate firstCandidate) =>
@@ -102,9 +110,10 @@ public sealed class Query2WorkbookExporter(
     private static byte[] ExportWorkbookToBytes(
         string templatePath,
         IReadOnlyList<Query2ExportRow> exportRows,
-        IReadOnlyList<Query2DynamicAreaField> dynamicAreaFields)
+        IReadOnlyList<Query2DynamicAreaField> dynamicAreaFields,
+        QcResultSettingsDto? qcSettings)
     {
-        using var workbook = BuildWorkbook(templatePath, exportRows, dynamicAreaFields);
+        using var workbook = BuildWorkbook(templatePath, exportRows, dynamicAreaFields, qcSettings);
         using var stream = new MemoryStream();
         workbook.SaveAs(stream);
         return RemoveResultConditionalFormatting(stream.ToArray(), dynamicAreaFields.Count);
@@ -116,7 +125,7 @@ public sealed class Query2WorkbookExporter(
         IReadOnlyList<Query2ExportRow> exportRows,
         IReadOnlyList<Query2DynamicAreaField> dynamicAreaFields)
     {
-        using var workbook = BuildWorkbook(templatePath, exportRows, dynamicAreaFields);
+        using var workbook = BuildWorkbook(templatePath, exportRows, dynamicAreaFields, qcSettings: null);
         using var stream = new MemoryStream();
         workbook.SaveAs(stream);
         File.WriteAllBytes(outputPath, RemoveResultConditionalFormatting(stream.ToArray(), dynamicAreaFields.Count));
@@ -125,7 +134,8 @@ public sealed class Query2WorkbookExporter(
     private static XLWorkbook BuildWorkbook(
         string templatePath,
         IReadOnlyList<Query2ExportRow> exportRows,
-        IReadOnlyList<Query2DynamicAreaField> dynamicAreaFields)
+        IReadOnlyList<Query2DynamicAreaField> dynamicAreaFields,
+        QcResultSettingsDto? qcSettings)
     {
         var workbook = new XLWorkbook(templatePath);
         var worksheet = workbook.Worksheet(Query2SheetName)
@@ -173,7 +183,8 @@ public sealed class Query2WorkbookExporter(
             targetRow++;
         }
 
-        ApplyResultRangeFills(worksheet, Query2ColumnLayout.DataStartRowNumber, lastDataRowNumber, copiedCritRowNumbers, dynamicAreaFields.Count);
+        ApplyQcCritValues(worksheet, Query2ColumnLayout.DataStartRowNumber, lastDataRowNumber, copiedCritRowNumbers, dynamicAreaFields.Count, qcSettings);
+        ApplyResultRangeFills(worksheet, Query2ColumnLayout.DataStartRowNumber, lastDataRowNumber, copiedCritRowNumbers, dynamicAreaFields.Count, qcSettings);
         templateWorksheet.Delete();
         return workbook;
     }
@@ -275,10 +286,21 @@ public sealed class Query2WorkbookExporter(
         int firstDataRowNumber,
         int lastDataRowNumber,
         IReadOnlyCollection<int> critRowNumbers,
-        int dynamicAreaCount)
+        int dynamicAreaCount,
+        QcResultSettingsDto? qcSettings)
     {
-        if (lastDataRowNumber < firstDataRowNumber ||
-            !TryResolveCritRow(worksheet, critRowNumbers, "MAX", out var maxRowNumber) ||
+        if (lastDataRowNumber < firstDataRowNumber)
+        {
+            return;
+        }
+
+        if (qcSettings is not null)
+        {
+            ApplyConfiguredResultRangeFills(worksheet, firstDataRowNumber, lastDataRowNumber, dynamicAreaCount, qcSettings);
+            return;
+        }
+
+        if (!TryResolveCritRow(worksheet, critRowNumbers, "MAX", out var maxRowNumber) ||
             !TryResolveCritRow(worksheet, critRowNumbers, "MIN", out var minRowNumber))
         {
             return;
@@ -305,6 +327,169 @@ public sealed class Query2WorkbookExporter(
                 maxRowNumber,
                 minRowNumber);
         }
+    }
+
+    private static void ApplyQcCritValues(
+        IXLWorksheet worksheet,
+        int firstDataRowNumber,
+        int lastDataRowNumber,
+        IReadOnlyCollection<int> critRowNumbers,
+        int dynamicAreaCount,
+        QcResultSettingsDto? qcSettings)
+    {
+        if (qcSettings is null ||
+            lastDataRowNumber < firstDataRowNumber ||
+            !TryResolveCritRow(worksheet, critRowNumbers, "MAX", out var maxRowNumber) ||
+            !TryResolveCritRow(worksheet, critRowNumbers, "MIN", out var minRowNumber) ||
+            ResolveFirstPpbContainer(worksheet, firstDataRowNumber, lastDataRowNumber) is not { } containerType)
+        {
+            return;
+        }
+
+        for (var index = 0; index < CompoundMap.Analytes.Count; index++)
+        {
+            var analyte = CompoundMap.Analytes[index];
+            if (!TryResolveConfiguredBounds(qcSettings, containerType, analyte.Suffix, out var min, out var max))
+            {
+                continue;
+            }
+
+            var areaColumn = FirstAreaColumn + index;
+            var ppbColumn = ResolveFirstPpbColumn(dynamicAreaCount) + index;
+            WriteCritBound(worksheet.Cell(maxRowNumber, areaColumn), max);
+            WriteCritBound(worksheet.Cell(minRowNumber, areaColumn), min);
+            WriteCritBound(worksheet.Cell(maxRowNumber, ppbColumn), max);
+            WriteCritBound(worksheet.Cell(minRowNumber, ppbColumn), min);
+        }
+    }
+
+    private static void ApplyConfiguredResultRangeFills(
+        IXLWorksheet worksheet,
+        int firstDataRowNumber,
+        int lastDataRowNumber,
+        int dynamicAreaCount,
+        QcResultSettingsDto qcSettings)
+    {
+        for (var rowNumber = firstDataRowNumber; rowNumber <= lastDataRowNumber; rowNumber++)
+        {
+            var containerType = ResolveContainerType(worksheet.Cell(rowNumber, 11).GetString());
+            if (containerType is null)
+            {
+                continue;
+            }
+
+            if (ClassifyRow(worksheet.Cell(rowNumber, 1).GetString()) == Query2ExportRowType.Ppb)
+            {
+                ApplyConfiguredRangeFills(
+                    worksheet,
+                    rowNumber,
+                    FirstAreaColumn,
+                    qcSettings,
+                    containerType);
+            }
+
+            ApplyConfiguredRangeFills(
+                worksheet,
+                rowNumber,
+                ResolveFirstPpbColumn(dynamicAreaCount),
+                qcSettings,
+                containerType);
+        }
+    }
+
+    private static void ApplyConfiguredRangeFills(
+        IXLWorksheet worksheet,
+        int rowNumber,
+        int firstColumn,
+        QcResultSettingsDto qcSettings,
+        string containerType)
+    {
+        for (var index = 0; index < CompoundMap.Analytes.Count; index++)
+        {
+            var analyte = CompoundMap.Analytes[index];
+            if (!TryResolveConfiguredBounds(qcSettings, containerType, analyte.Suffix, out var min, out var max))
+            {
+                continue;
+            }
+
+            var cell = worksheet.Cell(rowNumber, firstColumn + index);
+            if (!TryGetDecimal(cell, out var value))
+            {
+                continue;
+            }
+
+            var failed = (min.HasValue && value < min.Value) ||
+                (max.HasValue && value > max.Value);
+            cell.Style.Fill.BackgroundColor = failed ? OutOfRangeFill : WithinRangeFill;
+        }
+    }
+
+    private static bool TryResolveConfiguredBounds(
+        QcResultSettingsDto qcSettings,
+        string containerType,
+        string analyteKey,
+        out decimal? min,
+        out decimal? max)
+    {
+        min = null;
+        max = null;
+        var rule = qcSettings.ConcentrationRules.FirstOrDefault(rule =>
+            rule.IsActive &&
+            string.Equals(rule.AnalyteKey, analyteKey, StringComparison.OrdinalIgnoreCase));
+        if (rule is null)
+        {
+            return false;
+        }
+
+        (min, max) = string.Equals(containerType, QcResultSettingRules.Container05, StringComparison.OrdinalIgnoreCase)
+            ? (rule.Min05, rule.Max05)
+            : (rule.Min1L, rule.Max1L);
+        return min.HasValue || max.HasValue;
+    }
+
+    private static string? ResolveFirstPpbContainer(
+        IXLWorksheet worksheet,
+        int firstDataRowNumber,
+        int lastDataRowNumber)
+    {
+        for (var rowNumber = firstDataRowNumber; rowNumber <= lastDataRowNumber; rowNumber++)
+        {
+            if (ClassifyRow(worksheet.Cell(rowNumber, 1).GetString()) != Query2ExportRowType.Ppb)
+            {
+                continue;
+            }
+
+            var containerType = ResolveContainerType(worksheet.Cell(rowNumber, 11).GetString());
+            if (containerType is not null)
+            {
+                return containerType;
+            }
+        }
+
+        return null;
+    }
+
+    private static string? ResolveContainerType(string? container)
+    {
+        try
+        {
+            return QcResultSettingRules.NormalizeContainerType(container);
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+    }
+
+    private static void WriteCritBound(IXLCell cell, decimal? value)
+    {
+        if (value.HasValue)
+        {
+            cell.Value = value.Value;
+            return;
+        }
+
+        cell.Clear(XLClearOptions.Contents);
     }
 
     private static void ApplyRangeFills(

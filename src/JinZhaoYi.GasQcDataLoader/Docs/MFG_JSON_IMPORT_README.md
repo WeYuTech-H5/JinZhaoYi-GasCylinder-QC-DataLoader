@@ -86,17 +86,8 @@ MFGJSON(MFGExport_20260522_093603.json)
 | `SampleNo` | `SampleNo` |
 | `SampleType` | `SampleType` |
 | `Container` | `Container` |
-| `ProdOrder` | `ProdOrder` |
-| `FnlPrs` | `FnlPrs` |
-| `IniPrs` | `IniPrs` |
-| `QCTime` | `QCTime` |
-| `QCInst` | `QCInst` |
-| `QCPort` | `QCPort` |
-| `Cal_id` | `Cal_id` |
-| `RF_ID` | `RF_ID` |
-| `QCComplete` | `QCComplete` |
-| `CalType` | `CalType` |
-| `Result` | `Result` |
+
+MFG JSON 匯入只寫到 `Container`。`ProdOrder`、`CalType`、`Cal_id`、`IniPrs`、`QCComplete`、`QCInst`、`QCPort`、`QCTime`、`Result`、`RF_ID`、`FnlPrs`、`FailDesc` 屬於 QC 系統欄位，改由 Quant / PPB 判定流程回寫，避免製造端 JSON 的空值或舊值覆蓋系統判定結果。
 
 ## 狀態檔
 

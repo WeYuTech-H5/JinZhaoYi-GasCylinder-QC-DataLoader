@@ -829,6 +829,7 @@ public sealed class Query2PreviewService(ICalculationService calculationService)
             PortRawIds = state.PortRawIds.ToArray(),
             Columns = state.Columns.Select(CloneColumn).ToArray(),
             DynamicAreaFields = state.DynamicAreaFields.ToArray(),
+            QcParameterWarnings = state.QcParameterWarnings.ToArray(),
             Rows = state.Rows.Select(CloneRow).ToArray()
         };
 

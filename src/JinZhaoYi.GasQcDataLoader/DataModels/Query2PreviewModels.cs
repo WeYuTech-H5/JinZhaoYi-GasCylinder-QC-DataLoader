@@ -41,6 +41,8 @@ public sealed class Query2PreviewState
 
     public IReadOnlyList<Query2DynamicAreaField> DynamicAreaFields { get; set; } = [];
 
+    public IReadOnlyList<QcParameterWarningDto> QcParameterWarnings { get; set; } = [];
+
     public IReadOnlyList<Query2PreviewRow> Rows { get; set; } = [];
 }
 

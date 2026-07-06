@@ -284,6 +284,47 @@ public sealed class Query2WorkbookExporterTests : IDisposable
         worksheet.Cell(9, 56).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFFFE699));
     }
 
+    [Fact]
+    public async Task ExportAsync_uses_qc_settings_for_ppb_crit_ranges_when_provided()
+    {
+        var templateDirectory = Path.Combine(_rootPath, "template-qc-settings");
+        Directory.CreateDirectory(templateDirectory);
+
+        var templatePath = Path.Combine(templateDirectory, "template.xlsx");
+        CreateTemplateWorkbook(templatePath);
+
+        var exporter = new Query2WorkbookExporter(
+            Options.Create(new SchedulerOptions
+            {
+                ExcelExport = new SchedulerExcelExportOptions
+                {
+                    Enabled = true,
+                    TemplatePath = templatePath
+                }
+            }),
+            NullLogger<Query2WorkbookExporter>.Instance);
+        var rows = new[]
+        {
+            new Query2ExportRow(Query2ExportRowType.Ppb, Row("ppb(5900)", "PORT 2", "20260603001", acetone: 108m))
+        };
+        var settings = new QcResultSettingsDto
+        {
+            ConcentrationRules =
+            [
+                new QcConcentrationRuleDto("Acetone", "Acetone", 1, 95m, 105m, null, null)
+            ]
+        };
+
+        var content = await exporter.ExportAsync("20260603", rows, [], settings, CancellationToken.None);
+
+        using var workbook = new XLWorkbook(new MemoryStream(content!));
+        var worksheet = workbook.Worksheet("Query2");
+        worksheet.Cell(4, 17).GetValue<decimal>().Should().Be(108m);
+        worksheet.Cell(4, 17).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFFF6969));
+        worksheet.Cell(5, 17).GetValue<decimal>().Should().Be(105m);
+        worksheet.Cell(6, 17).GetValue<decimal>().Should().Be(95m);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_rootPath))
