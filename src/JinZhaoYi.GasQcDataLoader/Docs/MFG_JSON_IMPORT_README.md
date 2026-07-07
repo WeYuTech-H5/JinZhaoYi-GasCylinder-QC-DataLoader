@@ -111,7 +111,7 @@ C:\temp\data\MFGJSON\MfgJsonImportState.json
 MFG JSON 掃描與匯入 log 會寫到：
 
 ```text
-Logs\MFGJSON\scan-YYYYMMDD.log
+LOG\MFGJSON\scan-YYYYMMDD.log
 ```
 
 內容包含：
@@ -125,5 +125,5 @@ Logs\MFGJSON\scan-YYYYMMDD.log
 一般程式執行 log 會寫到：
 
 ```text
-Logs\Application\app-YYYYMMDD.log
+LOG\Application\app-YYYYMMDD.log
 ```

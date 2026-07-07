@@ -70,13 +70,18 @@
 
 ## Log
 
-Log 會放在執行目錄底下的 `Logs`，並依用途分資料夾：
+Log 會放在執行目錄底下的 `LOG`，並依用途分資料夾：
 
 | 路徑 | 說明 |
 | --- | --- |
-| `Logs\Application\app-YYYYMMDD.log` | 一般程式執行 log。 |
-| `Logs\MFGJSON\scan-YYYYMMDD.log` | MFG JSON 掃描、略過、成功、失敗、insert/update 筆數。 |
-| `Logs\serilog-selflog.txt` | Serilog 自身錯誤備援 log。 |
+| `LOG\Application\app-YYYYMMDD.log` | 一般程式執行 log。 |
+| `LOG\Sync\cycle-YYYYMMDD.log` | 一輪 Quant 同步週期追蹤：worker 等待、掃描週期開始/結束、成功/失敗統計。 |
+| `LOG\Sync\import-YYYYMMDD.log` | Quant 匯入流程追蹤：解析批次、LOT 驗證、RF 取得、寫入資料集合建立、DB 寫入前後訊息。 |
+| `LOG\Sync\state-YYYYMMDD.log` | processed-quant-files.json 狀態追蹤：已處理檔案比對、略過筆數、待處理筆數、state 更新結果。 |
+| `LOG\DataRead\scanner-YYYYMMDD.log` | 資料夾與 Quant 候選檔掃描追蹤：來源路徑、批次資料夾、穩定檔案數、候選檔案數。 |
+| `LOG\DataRead\quant-YYYYMMDD.log` | Quant / acqmeth 讀檔解析追蹤：讀檔路徑、LOT、SampleNo、Acq On、compound 數、EMVolts、RelativeEM。 |
+| `LOG\MFGJSON\scan-YYYYMMDD.log` | MFG JSON 掃描、略過、成功、失敗、insert/update 筆數。 |
+| `LOG\serilog-selflog.txt` | Serilog 自身錯誤備援 log。 |
 
 ## API
 

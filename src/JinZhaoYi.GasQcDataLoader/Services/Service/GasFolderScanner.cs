@@ -20,12 +20,22 @@ public sealed partial class GasFolderScanner(ILogger<GasFolderScanner>? logger =
     {
         var cutoff = DateTime.Now.Subtract(stableAge);
 
-        return FindStableBatchContexts(watchRoot, stableAge)
+        var batches = FindStableBatchContexts(watchRoot, stableAge);
+        var candidates = batches
             .SelectMany(FindQuantFiles)
             .Where(candidate => IsStable(candidate, cutoff))
             .OrderBy(GetCandidateSortTime)
             .ThenBy(candidate => candidate.FullPath, StringComparer.OrdinalIgnoreCase)
             .ToArray();
+
+        logger?.LogInformation(
+            "穩定 Quant 檔案掃描完成。WatchRoot={WatchRoot}, StableAgeMinutes={StableAgeMinutes}, BatchCount={BatchCount}, StableQuantCount={StableQuantCount}.",
+            watchRoot,
+            stableAge.TotalMinutes,
+            batches.Count,
+            candidates.Length);
+
+        return candidates;
     }
 
     public IReadOnlyList<QuantFileCandidate> FindQuantFiles(string dayFolderPath)
@@ -100,9 +110,17 @@ public sealed partial class GasFolderScanner(ILogger<GasFolderScanner>? logger =
                 batch.SourceRootPath);
         }
 
-        return candidates
+        var orderedCandidates = candidates
             .OrderBy(candidate => candidate.FullPath, StringComparer.OrdinalIgnoreCase)
             .ToArray();
+
+        logger?.LogInformation(
+            "Quant 檔案掃描完成。SourceRootPath={SourceRootPath}, DayFolderPath={DayFolderPath}, CandidateCount={CandidateCount}.",
+            batch.SourceRootPath,
+            batch.DayFolderPath,
+            orderedCandidates.Length);
+
+        return orderedCandidates;
     }
 
     private IReadOnlyList<BatchContext> FindStableBatchContexts(string watchRoot, TimeSpan stableAge)

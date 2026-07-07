@@ -34,6 +34,7 @@ public sealed class ProcessedQuantFileStore(
         {
             var state = await LoadStateAsync(statePath, cancellationToken);
             var unprocessed = new List<QuantFileCandidate>();
+            var skippedProcessedCount = 0;
 
             foreach (var candidate in candidates)
             {
@@ -41,11 +42,20 @@ public sealed class ProcessedQuantFileStore(
                 if (state.Files.TryGetValue(fingerprint.Key, out var existing) &&
                     string.Equals(existing.Sha256, fingerprint.Sha256, StringComparison.OrdinalIgnoreCase))
                 {
+                    skippedProcessedCount++;
                     continue;
                 }
 
                 unprocessed.Add(candidate);
             }
+
+            logger.LogInformation(
+                "processed Quant state 比對完成。StatePath={StatePath}, StateEntryCount={StateEntryCount}, CandidateCount={CandidateCount}, SkippedProcessedCount={SkippedProcessedCount}, UnprocessedCount={UnprocessedCount}.",
+                statePath,
+                state.Files.Count,
+                candidates.Count,
+                skippedProcessedCount,
+                unprocessed.Count);
 
             return unprocessed;
         }
@@ -86,6 +96,11 @@ public sealed class ProcessedQuantFileStore(
             }
 
             await SaveStateAsync(statePath, state, cancellationToken);
+            logger.LogInformation(
+                "processed Quant state 已更新。StatePath={StatePath}, MarkedCount={MarkedCount}, StateEntryCount={StateEntryCount}.",
+                statePath,
+                candidates.Count,
+                state.Files.Count);
         }
         catch (IOException ex)
         {

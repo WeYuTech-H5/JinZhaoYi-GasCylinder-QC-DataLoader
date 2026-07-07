@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using JinZhaoYi.GasQcDataLoader.DataModels;
 using JinZhaoYi.GasQcDataLoader.Services.Interface;
+using Microsoft.Extensions.Logging;
 
 namespace JinZhaoYi.GasQcDataLoader.Services.Service;
 
@@ -24,6 +25,12 @@ namespace JinZhaoYi.GasQcDataLoader.Services.Service;
 public sealed partial class QuantParser : IQuantParser
 {
     private static readonly char[] AcqmethColumnDelimiters = ['\t', ',', ';'];
+    private readonly ILogger<QuantParser>? _logger;
+
+    public QuantParser(ILogger<QuantParser>? logger = null)
+    {
+        _logger = logger;
+    }
 
     /// <summary>
     /// Quant 檔案內日期時間解析所使用的文化設定
@@ -54,6 +61,13 @@ public sealed partial class QuantParser : IQuantParser
     /// </remarks>
     public async Task<ParsedQuantFile> ParseAsync(QuantFileCandidate candidate, CancellationToken cancellationToken)
     {
+        _logger?.LogInformation(
+            "開始讀取 Quant 檔案。QuantPath={QuantPath}, SourceKind={SourceKind}, Port={Port}, DataFolder={DataFolder}.",
+            candidate.FullPath,
+            candidate.SourceKind,
+            candidate.Port,
+            candidate.DataFilepath);
+
         // 一次讀取整個 Quant.txt，後續解析 header 與 compound 表格都依賴完整內容
         var lines = await File.ReadAllLinesAsync(candidate.FullPath, cancellationToken);
 
@@ -78,7 +92,7 @@ public sealed partial class QuantParser : IQuantParser
         var compounds = ParseCompounds(lines);
         var acqmeth = await ReadAcqmethAsync(candidate, cancellationToken);
 
-        return new ParsedQuantFile
+        var parsed = new ParsedQuantFile
         {
             Source = candidate,
             AcquiredAt = acquiredAt,
@@ -92,6 +106,20 @@ public sealed partial class QuantParser : IQuantParser
             RelativeEM = acqmeth.RelativeEM,
             Compounds = compounds
         };
+
+        _logger?.LogInformation(
+            "Quant 檔案解析完成。QuantPath={QuantPath}, LotNo={LotNo}, SampleNo={SampleNo}, AcquiredAt={AcquiredAt:yyyy-MM-dd HH:mm:ss}, CompoundCount={CompoundCount}, AcqmethFound={AcqmethFound}, AcqmethPath={AcqmethPath}, EMVolts={EMVolts}, RelativeEM={RelativeEM}.",
+            candidate.FullPath,
+            parsed.LotNo,
+            parsed.SampleNo,
+            parsed.AcquiredAt,
+            parsed.Compounds.Count,
+            acqmeth.Found,
+            acqmeth.Path,
+            parsed.EMVolts,
+            parsed.RelativeEM);
+
+        return parsed;
     }
 
     /// <summary>
@@ -101,19 +129,44 @@ public sealed partial class QuantParser : IQuantParser
     /// acqmeth 缺檔不會阻擋 Quant 匯入；若找到檔案，僅讀取 GAS_MFG_LOT 需求指定的
     /// Actual EMV 與 Actual EM Setting mode Delta。
     /// </remarks>
-    private static async Task<AcqmethReading> ReadAcqmethAsync(QuantFileCandidate candidate, CancellationToken cancellationToken)
+    private async Task<AcqmethReading> ReadAcqmethAsync(QuantFileCandidate candidate, CancellationToken cancellationToken)
     {
         var path = FindAcqmethPath(candidate);
         if (path is null)
         {
+            _logger?.LogInformation(
+                "acqmeth/acqemeth 檔案不存在，略過 EM 欄位讀取。QuantPath={QuantPath}, DataFolder={DataFolder}.",
+                candidate.FullPath,
+                candidate.DataFilepath);
             return AcqmethReading.Empty;
         }
 
-        var lines = await File.ReadAllLinesAsync(path, cancellationToken);
-        return ReadAcqmethLines(lines);
+        try
+        {
+            var lines = await File.ReadAllLinesAsync(path, cancellationToken);
+            var reading = ReadAcqmethLines(lines, path);
+
+            _logger?.LogInformation(
+                "acqmeth/acqemeth 讀取完成。QuantPath={QuantPath}, AcqmethPath={AcqmethPath}, EMVolts={EMVolts}, RelativeEM={RelativeEM}.",
+                candidate.FullPath,
+                reading.Path,
+                reading.EMVolts,
+                reading.RelativeEM);
+
+            return reading;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or DirectoryNotFoundException or PathTooLongException)
+        {
+            _logger?.LogWarning(
+                ex,
+                "acqmeth/acqemeth 檔案讀取失敗。QuantPath={QuantPath}, AcqmethPath={AcqmethPath}.",
+                candidate.FullPath,
+                path);
+            throw;
+        }
     }
 
-    private static AcqmethReading ReadAcqmethLines(IReadOnlyList<string> lines)
+    private static AcqmethReading ReadAcqmethLines(IReadOnlyList<string> lines, string path)
     {
         string? emVolts = null;
         string? relativeEm = null;
@@ -130,7 +183,7 @@ public sealed partial class QuantParser : IQuantParser
         }
 
         (emVolts, relativeEm) = ReadAcqmethTable(lines, emVolts, relativeEm);
-        return new AcqmethReading(emVolts, relativeEm);
+        return new AcqmethReading(emVolts, relativeEm, path);
     }
 
     private static (string? EMVolts, string? RelativeEM) ReadAcqmethTable(
@@ -516,8 +569,10 @@ public sealed partial class QuantParser : IQuantParser
     [GeneratedRegex(@"^\s*\d+\)\s+(?<name>.+?)\s+(?<rt>\d+\.\d{3})\s+(?:(?<qion>\d+)\s+)?(?<response>\d+)\s+(?<conc>\d+(?:\.\d+)?|N\.D\.|No Calib)\b", RegexOptions.Compiled)]
     private static partial Regex CompoundLineRegex();
 
-    private sealed record AcqmethReading(string? EMVolts, string? RelativeEM)
+    private sealed record AcqmethReading(string? EMVolts, string? RelativeEM, string? Path)
     {
-        public static AcqmethReading Empty { get; } = new(null, null);
+        public static AcqmethReading Empty { get; } = new(null, null, null);
+
+        public bool Found => !string.IsNullOrWhiteSpace(Path);
     }
 }
