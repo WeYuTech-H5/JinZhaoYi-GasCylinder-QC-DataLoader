@@ -36,8 +36,8 @@ public sealed class QcResultEvaluatorTests
         update.Should().NotBeNull();
         update!.Result.Should().Be(QcResultValues.Fail);
         update.FailDesc.Should().Be("壓力不足");
-        update.IniPrs.Should().Be("903");
-        update.FnlPrs.Should().Be("872");
+        update.IniPrs.Should().Be("872");
+        update.FnlPrs.Should().BeNull();
     }
 
     [Fact]
@@ -53,6 +53,22 @@ public sealed class QcResultEvaluatorTests
         update.FailDesc.Should().BeNull();
         update.IniPrs.Should().Be("1000");
         update.FnlPrs.Should().Be("950");
+    }
+
+    [Fact]
+    public void Evaluate_does_not_parse_sample_no_as_pressure_when_final_pressure_is_missing()
+    {
+        var row = CreatePpbRow();
+        row.Areas["Acetone"] = 100m;
+        var settings = CreateSettingsWithoutFinalPressureMin();
+
+        var update = _evaluator.Evaluate(row, [CreateRawRow("port 5 205 1088>  #20260629006")], new QcDataRow { Id = "RF-001" }, settings);
+
+        update.Should().NotBeNull();
+        update!.Result.Should().Be(QcResultValues.Pass);
+        update.FailDesc.Should().BeNull();
+        update.IniPrs.Should().Be("1088");
+        update.FnlPrs.Should().BeNull();
     }
 
     [Fact]
@@ -100,6 +116,20 @@ public sealed class QcResultEvaluatorTests
             [
                 new QcPressureRuleDto(QcResultSettingRules.Container05, 900m, 900m),
                 new QcPressureRuleDto(QcResultSettingRules.Container1L, 900m, 900m)
+            ],
+            ConcentrationRules =
+            [
+                new QcConcentrationRuleDto("Acetone", "Acetone", 1, 90m, 110m, 80m, 120m)
+            ]
+        };
+
+    private static QcResultSettingsDto CreateSettingsWithoutFinalPressureMin() =>
+        new()
+        {
+            PressureRules =
+            [
+                new QcPressureRuleDto(QcResultSettingRules.Container05, 900m, null),
+                new QcPressureRuleDto(QcResultSettingRules.Container1L, 900m, null)
             ],
             ConcentrationRules =
             [

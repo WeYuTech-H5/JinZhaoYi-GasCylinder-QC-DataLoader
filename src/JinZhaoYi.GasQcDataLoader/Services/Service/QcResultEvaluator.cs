@@ -332,19 +332,16 @@ public sealed partial class QcResultEvaluator : IQcResultEvaluator
             return false;
         }
 
-        var match = ArrowBetweenPressureRegex().Match(value);
-        if (!match.Success)
-        {
-            match = ArrowAfterPressureRegex().Match(value);
-        }
-
+        var match = PressureArrowRegex().Match(value);
         if (!match.Success)
         {
             return false;
         }
 
         iniPrsText = match.Groups["ini"].Value;
-        fnlPrsText = match.Groups["fnl"].Value;
+        fnlPrsText = match.Groups["fnl"].Success
+            ? match.Groups["fnl"].Value
+            : null;
         iniPrs = ParseDecimal(iniPrsText);
         fnlPrs = ParseDecimal(fnlPrsText);
         return iniPrs.HasValue || fnlPrs.HasValue;
@@ -409,9 +406,6 @@ public sealed partial class QcResultEvaluator : IQcResultEvaluator
     private static string? NullIfWhiteSpace(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
-    [GeneratedRegex(@"(?<ini>\d+(?:\.\d+)?)\s*>\s*(?<fnl>\d+(?:\.\d+)?)", RegexOptions.Compiled)]
-    private static partial Regex ArrowBetweenPressureRegex();
-
-    [GeneratedRegex(@"(?<ini>\d+(?:\.\d+)?)\s+(?<fnl>\d+(?:\.\d+)?)\s*>", RegexOptions.Compiled)]
-    private static partial Regex ArrowAfterPressureRegex();
+    [GeneratedRegex(@"(?<![\d.])(?<ini>\d+(?:\.\d+)?)\s*>\s*(?<fnl>\d+(?:\.\d+)?)?", RegexOptions.Compiled)]
+    private static partial Regex PressureArrowRegex();
 }
