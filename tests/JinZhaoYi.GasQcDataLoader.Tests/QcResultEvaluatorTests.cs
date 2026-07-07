@@ -14,7 +14,7 @@ public sealed class QcResultEvaluatorTests
         var row = CreatePpbRow();
         row.Areas["Acetone"] = 120m;
 
-        var update = _evaluator.Evaluate(row, [CreateRawRow("port 1 1000 950> #20260615001")], new QcDataRow { Id = "RF-001" }, CreateSettings());
+        var update = _evaluator.Evaluate(row, [CreateRawRow("port 1 1000>950 #20260615001")], new QcDataRow { Id = "RF-001" }, CreateSettings());
 
         update.Should().NotBeNull();
         update!.Result.Should().Be(QcResultValues.Fail);
