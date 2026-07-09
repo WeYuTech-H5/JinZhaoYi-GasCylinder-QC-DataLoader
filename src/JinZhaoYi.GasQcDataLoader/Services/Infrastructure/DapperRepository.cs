@@ -521,15 +521,13 @@ public sealed class DapperRepository(
                 ROW_NUMBER() OVER (
                     PARTITION BY
                         ISNULL(LotNo, ''),
-                        ISNULL(SampleName, ''),
-                        ISNULL(SourceFolderName, ''),
-                        ISNULL(DataFilename, ''),
-                        AnlzTime
+                        ISNULL(SampleName, '')
                     ORDER BY
                         CASE
                             WHEN MfgSampleNo IS NOT NULL AND TRY_CONVERT(int, SampleNo) = MfgSampleNo THEN 0
                             ELSE 1
                         END,
+                        AnlzTime DESC,
                         CREATE_TIME DESC,
                         SID DESC
                 ) AS rn
@@ -574,15 +572,13 @@ public sealed class DapperRepository(
                 ROW_NUMBER() OVER (
                     PARTITION BY
                         ISNULL(LotNo, ''),
-                        ISNULL(SampleName, ''),
-                        ISNULL(SourceFolderName, ''),
-                        ISNULL(DataFilename, ''),
-                        AnlzTime
+                        ISNULL(SampleName, '')
                     ORDER BY
                         CASE
                             WHEN MfgSampleNo IS NOT NULL AND TRY_CONVERT(int, SampleNo) = MfgSampleNo THEN 0
                             ELSE 1
                         END,
+                        AnlzTime DESC,
                         CREATE_TIME DESC,
                         SID DESC
                 ) AS rn
@@ -628,15 +624,13 @@ public sealed class DapperRepository(
                 ROW_NUMBER() OVER (
                     PARTITION BY
                         ISNULL(LotNo, ''),
-                        ISNULL(SampleName, ''),
-                        ISNULL(SourceFolderName, ''),
-                        ISNULL(DataFilename, ''),
-                        AnlzTime
+                        ISNULL(SampleName, '')
                     ORDER BY
                         CASE
                             WHEN MfgSampleNo IS NOT NULL AND TRY_CONVERT(int, SampleNo) = MfgSampleNo THEN 0
                             ELSE 1
                         END,
+                        AnlzTime DESC,
                         CREATE_TIME DESC,
                         SID DESC
                 ) AS rn
