@@ -54,7 +54,7 @@ public sealed class MfgJsonImportServiceTests : IDisposable
         await service.ProcessFileAsync(path, CancellationToken.None);
 
         repository.UpsertCallCount.Should().Be(1);
-        repository.LastRecords.Should().ContainSingle(row => row.LotNo == "20260508002" && row.SampleType is null);
+        repository.LastRecords.Should().ContainSingle(row => row.LotNo == "20260508002" && row.SampleType == null);
         stateStore.State.Files["MFGExport_20260522_093603.json"].InsertedCount.Should().Be(1);
         stateStore.State.Files["MFGExport_20260522_093603.json"].SkippedCount.Should().Be(0);
         stateStore.State.Lots["20260508002"].Status.Should().Be("Succeeded");
@@ -98,7 +98,7 @@ public sealed class MfgJsonImportServiceTests : IDisposable
         repository.UpsertCallCount.Should().Be(1);
         repository.LastRecords.Should().HaveCount(2);
         repository.LastRecords.Should().Contain(row => row.LotNo == "20260508002");
-        repository.LastRecords.Should().Contain(row => row.LotNo == "20260508003" && row.SampleType is null);
+        repository.LastRecords.Should().Contain(row => row.LotNo == "20260508003" && row.SampleType == null);
         stateStore.State.Files["MFGExport_20260522_093603.json"].Status.Should().Be("Succeeded");
         stateStore.State.Files["MFGExport_20260522_093603.json"].InsertedCount.Should().Be(2);
         stateStore.State.Files["MFGExport_20260522_093603.json"].SkippedCount.Should().Be(0);

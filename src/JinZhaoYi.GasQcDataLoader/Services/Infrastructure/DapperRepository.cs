@@ -489,20 +489,51 @@ public sealed class DapperRepository(
         """;
 
     private const string StdRawForRfSqlFormat = """
-        WITH Ranked AS (
-            SELECT *,
-                ROW_NUMBER() OVER (
-                    PARTITION BY ISNULL(LotNo, ''), SampleNo, ISNULL(SampleName, '')
-                    ORDER BY AnlzTime DESC, CREATE_TIME DESC, SID DESC
-                ) AS rn
-            FROM dbo.{0}
+        WITH Candidates AS (
+            SELECT rows.*, mfgMatch.SampleNo AS MfgSampleNo
+            FROM dbo.{0} AS rows
+            OUTER APPLY (
+                SELECT TOP (1)
+                    TRY_CONVERT(int, NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(32), mfg.SampleNo))), '')) AS SampleNo
+                FROM dbo.{1} AS mfg
+                WHERE mfg.LotNo = rows.LotNo
+                    AND TRY_CONVERT(int, NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(32), mfg.SampleNo))), '')) IS NOT NULL
+                ORDER BY
+                    CASE
+                        WHEN ISNULL(NULLIF(LTRIM(RTRIM(mfg.SamplName)), ''), '') =
+                             ISNULL(NULLIF(LTRIM(RTRIM(rows.SampleName)), ''), '') THEN 0
+                        ELSE 1
+                    END,
+                    mfg.EDIT_TIME DESC,
+                    mfg.CREATE_TIME DESC,
+                    mfg.si0_id DESC
+            ) AS mfgMatch
             WHERE
                 @Search IS NULL
-                OR LotNo LIKE @SearchPattern
-                OR SampleName LIKE @SearchPattern
-                OR CAST(SampleNo AS NVARCHAR(32)) LIKE @SearchPattern
-                OR DataFilename LIKE @SearchPattern
-                OR SourceFolderName LIKE @SearchPattern
+                OR rows.LotNo LIKE @SearchPattern
+                OR rows.SampleName LIKE @SearchPattern
+                OR CAST(rows.SampleNo AS NVARCHAR(32)) LIKE @SearchPattern
+                OR rows.DataFilename LIKE @SearchPattern
+                OR rows.SourceFolderName LIKE @SearchPattern
+        ),
+        Ranked AS (
+            SELECT *,
+                ROW_NUMBER() OVER (
+                    PARTITION BY
+                        ISNULL(LotNo, ''),
+                        ISNULL(SampleName, ''),
+                        ISNULL(SourceFolderName, ''),
+                        ISNULL(DataFilename, ''),
+                        AnlzTime
+                    ORDER BY
+                        CASE
+                            WHEN MfgSampleNo IS NOT NULL AND TRY_CONVERT(int, SampleNo) = MfgSampleNo THEN 0
+                            ELSE 1
+                        END,
+                        CREATE_TIME DESC,
+                        SID DESC
+                ) AS rn
+            FROM Candidates
         )
         SELECT TOP (@Limit) *
         FROM Ranked
@@ -511,20 +542,51 @@ public sealed class DapperRepository(
         """;
 
     private const string StdRawForRfPagedSqlFormat = """
-        WITH Ranked AS (
-            SELECT *,
-                ROW_NUMBER() OVER (
-                    PARTITION BY ISNULL(LotNo, ''), SampleNo, ISNULL(SampleName, '')
-                    ORDER BY AnlzTime DESC, CREATE_TIME DESC, SID DESC
-                ) AS rn
-            FROM dbo.{0}
+        WITH Candidates AS (
+            SELECT rows.*, mfgMatch.SampleNo AS MfgSampleNo
+            FROM dbo.{0} AS rows
+            OUTER APPLY (
+                SELECT TOP (1)
+                    TRY_CONVERT(int, NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(32), mfg.SampleNo))), '')) AS SampleNo
+                FROM dbo.{1} AS mfg
+                WHERE mfg.LotNo = rows.LotNo
+                    AND TRY_CONVERT(int, NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(32), mfg.SampleNo))), '')) IS NOT NULL
+                ORDER BY
+                    CASE
+                        WHEN ISNULL(NULLIF(LTRIM(RTRIM(mfg.SamplName)), ''), '') =
+                             ISNULL(NULLIF(LTRIM(RTRIM(rows.SampleName)), ''), '') THEN 0
+                        ELSE 1
+                    END,
+                    mfg.EDIT_TIME DESC,
+                    mfg.CREATE_TIME DESC,
+                    mfg.si0_id DESC
+            ) AS mfgMatch
             WHERE
                 @Search IS NULL
-                OR LotNo LIKE @SearchPattern
-                OR SampleName LIKE @SearchPattern
-                OR CAST(SampleNo AS NVARCHAR(32)) LIKE @SearchPattern
-                OR DataFilename LIKE @SearchPattern
-                OR SourceFolderName LIKE @SearchPattern
+                OR rows.LotNo LIKE @SearchPattern
+                OR rows.SampleName LIKE @SearchPattern
+                OR CAST(rows.SampleNo AS NVARCHAR(32)) LIKE @SearchPattern
+                OR rows.DataFilename LIKE @SearchPattern
+                OR rows.SourceFolderName LIKE @SearchPattern
+        ),
+        Ranked AS (
+            SELECT *,
+                ROW_NUMBER() OVER (
+                    PARTITION BY
+                        ISNULL(LotNo, ''),
+                        ISNULL(SampleName, ''),
+                        ISNULL(SourceFolderName, ''),
+                        ISNULL(DataFilename, ''),
+                        AnlzTime
+                    ORDER BY
+                        CASE
+                            WHEN MfgSampleNo IS NOT NULL AND TRY_CONVERT(int, SampleNo) = MfgSampleNo THEN 0
+                            ELSE 1
+                        END,
+                        CREATE_TIME DESC,
+                        SID DESC
+                ) AS rn
+            FROM Candidates
         )
         SELECT *
         FROM Ranked
@@ -534,22 +596,54 @@ public sealed class DapperRepository(
         """;
 
     private const string StdRawForRfCountSqlFormat = """
-        SELECT COUNT(1)
-        FROM (
-            SELECT
-                ROW_NUMBER() OVER (
-                    PARTITION BY ISNULL(LotNo, ''), SampleNo, ISNULL(SampleName, '')
-                    ORDER BY AnlzTime DESC, CREATE_TIME DESC, SID DESC
-                ) AS rn
-            FROM dbo.{0}
+        WITH Candidates AS (
+            SELECT rows.*, mfgMatch.SampleNo AS MfgSampleNo
+            FROM dbo.{0} AS rows
+            OUTER APPLY (
+                SELECT TOP (1)
+                    TRY_CONVERT(int, NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(32), mfg.SampleNo))), '')) AS SampleNo
+                FROM dbo.{1} AS mfg
+                WHERE mfg.LotNo = rows.LotNo
+                    AND TRY_CONVERT(int, NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(32), mfg.SampleNo))), '')) IS NOT NULL
+                ORDER BY
+                    CASE
+                        WHEN ISNULL(NULLIF(LTRIM(RTRIM(mfg.SamplName)), ''), '') =
+                             ISNULL(NULLIF(LTRIM(RTRIM(rows.SampleName)), ''), '') THEN 0
+                        ELSE 1
+                    END,
+                    mfg.EDIT_TIME DESC,
+                    mfg.CREATE_TIME DESC,
+                    mfg.si0_id DESC
+            ) AS mfgMatch
             WHERE
                 @Search IS NULL
-                OR LotNo LIKE @SearchPattern
-                OR SampleName LIKE @SearchPattern
-                OR CAST(SampleNo AS NVARCHAR(32)) LIKE @SearchPattern
-                OR DataFilename LIKE @SearchPattern
-                OR SourceFolderName LIKE @SearchPattern
-        ) grouped
+                OR rows.LotNo LIKE @SearchPattern
+                OR rows.SampleName LIKE @SearchPattern
+                OR CAST(rows.SampleNo AS NVARCHAR(32)) LIKE @SearchPattern
+                OR rows.DataFilename LIKE @SearchPattern
+                OR rows.SourceFolderName LIKE @SearchPattern
+        ),
+        Ranked AS (
+            SELECT
+                ROW_NUMBER() OVER (
+                    PARTITION BY
+                        ISNULL(LotNo, ''),
+                        ISNULL(SampleName, ''),
+                        ISNULL(SourceFolderName, ''),
+                        ISNULL(DataFilename, ''),
+                        AnlzTime
+                    ORDER BY
+                        CASE
+                            WHEN MfgSampleNo IS NOT NULL AND TRY_CONVERT(int, SampleNo) = MfgSampleNo THEN 0
+                            ELSE 1
+                        END,
+                        CREATE_TIME DESC,
+                        SID DESC
+                ) AS rn
+            FROM Candidates
+        )
+        SELECT COUNT(1)
+        FROM Ranked
         WHERE rn = 1
         """;
 
@@ -881,7 +975,7 @@ public sealed class DapperRepository(
         var normalizedLimit = Math.Clamp(limit, 1, 500);
         var normalizedSearch = string.IsNullOrWhiteSpace(search) ? null : search.Trim();
         await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
-        var sql = string.Format(StdRawForRfSqlFormat, Quote(_tables.StdRaw));
+        var sql = string.Format(StdRawForRfSqlFormat, Quote(_tables.StdRaw), Quote(_tables.MfgLot));
         var rows = await connection.QueryAsync(
             new CommandDefinition(
                 sql,
@@ -917,11 +1011,11 @@ public sealed class DapperRepository(
         };
 
         await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
-        var countSql = string.Format(StdRawForRfCountSqlFormat, Quote(_tables.StdRaw));
+        var countSql = string.Format(StdRawForRfCountSqlFormat, Quote(_tables.StdRaw), Quote(_tables.MfgLot));
         var totalCount = await connection.ExecuteScalarAsync<int>(
             new CommandDefinition(countSql, parameters, cancellationToken: cancellationToken));
 
-        var pageSql = string.Format(StdRawForRfPagedSqlFormat, Quote(_tables.StdRaw));
+        var pageSql = string.Format(StdRawForRfPagedSqlFormat, Quote(_tables.StdRaw), Quote(_tables.MfgLot));
         var rows = await connection.QueryAsync(
             new CommandDefinition(pageSql, parameters, cancellationToken: cancellationToken));
 
