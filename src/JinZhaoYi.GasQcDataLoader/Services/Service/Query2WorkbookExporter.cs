@@ -13,10 +13,30 @@ public sealed class Query2WorkbookExporter(
     ILogger<Query2WorkbookExporter> logger) : IQuery2WorkbookExporter
 {
     private const string Query2SheetName = "Query2";
+    private const string QcJudgmentSheetName = "QC判定";
     private const string TemplateSheetName = "_Query2Template";
     private const int BaseColumnCount = 16;
     private static readonly XLColor WithinRangeFill = XLColor.FromHtml("#E2EFDA");
     private static readonly XLColor OutOfRangeFill = XLColor.FromHtml("#FF6969");
+    private static readonly XLColor QcHeaderFill = XLColor.FromHtml("#1E40AF");
+    private static readonly XLColor QcNotEvaluatedFill = XLColor.FromHtml("#FFF2CC");
+    private static readonly XLColor QcRuleFill = XLColor.FromHtml("#DBEAFE");
+    private static readonly XLColor QcBorderColor = XLColor.FromHtml("#B8C4D6");
+    private static readonly string[] QcJudgmentHeaders =
+    [
+        "PPB ID",
+        "AnlzTime",
+        "LotNo",
+        "Port",
+        "Container",
+        "QC_IniPrs",
+        "QC_IniPrsMin",
+        "QC_FnlPrs",
+        "QC_FnlPrsMin",
+        "QC_PressureResult",
+        "QC_Result",
+        "QC_FailDesc"
+    ];
     private static int FirstAreaColumn => BaseColumnCount + 1;
     private static int FixedAreaCount => CompoundMap.Analytes.Count;
 
@@ -75,6 +95,21 @@ public sealed class Query2WorkbookExporter(
         IReadOnlyList<Query2DynamicAreaField> dynamicAreaFields,
         QcResultSettingsDto? qcSettings,
         CancellationToken cancellationToken)
+        => await ExportAsync(
+            batchDate,
+            rows,
+            dynamicAreaFields,
+            qcSettings,
+            [],
+            cancellationToken);
+
+    public async Task<byte[]?> ExportAsync(
+        string batchDate,
+        IReadOnlyList<Query2ExportRow> rows,
+        IReadOnlyList<Query2DynamicAreaField> dynamicAreaFields,
+        QcResultSettingsDto? qcSettings,
+        IReadOnlyList<QcJudgmentSnapshot> qcJudgments,
+        CancellationToken cancellationToken)
     {
         if (!_options.ExcelExport.Enabled || rows.Count == 0)
         {
@@ -82,7 +117,9 @@ public sealed class Query2WorkbookExporter(
         }
 
         var templatePath = ResolveTemplatePath();
-        return await Task.Run(() => ExportWorkbookToBytes(templatePath, rows, dynamicAreaFields, qcSettings), cancellationToken);
+        return await Task.Run(
+            () => ExportWorkbookToBytes(templatePath, rows, dynamicAreaFields, qcSettings, qcJudgments),
+            cancellationToken);
     }
 
     private string ResolveOutputDirectory(QuantFileCandidate firstCandidate) =>
@@ -111,9 +148,10 @@ public sealed class Query2WorkbookExporter(
         string templatePath,
         IReadOnlyList<Query2ExportRow> exportRows,
         IReadOnlyList<Query2DynamicAreaField> dynamicAreaFields,
-        QcResultSettingsDto? qcSettings)
+        QcResultSettingsDto? qcSettings,
+        IReadOnlyList<QcJudgmentSnapshot> qcJudgments)
     {
-        using var workbook = BuildWorkbook(templatePath, exportRows, dynamicAreaFields, qcSettings);
+        using var workbook = BuildWorkbook(templatePath, exportRows, dynamicAreaFields, qcSettings, qcJudgments);
         using var stream = new MemoryStream();
         workbook.SaveAs(stream);
         return RemoveResultConditionalFormatting(stream.ToArray(), dynamicAreaFields.Count);
@@ -125,7 +163,7 @@ public sealed class Query2WorkbookExporter(
         IReadOnlyList<Query2ExportRow> exportRows,
         IReadOnlyList<Query2DynamicAreaField> dynamicAreaFields)
     {
-        using var workbook = BuildWorkbook(templatePath, exportRows, dynamicAreaFields, qcSettings: null);
+        using var workbook = BuildWorkbook(templatePath, exportRows, dynamicAreaFields, qcSettings: null, qcJudgments: []);
         using var stream = new MemoryStream();
         workbook.SaveAs(stream);
         File.WriteAllBytes(outputPath, RemoveResultConditionalFormatting(stream.ToArray(), dynamicAreaFields.Count));
@@ -135,7 +173,8 @@ public sealed class Query2WorkbookExporter(
         string templatePath,
         IReadOnlyList<Query2ExportRow> exportRows,
         IReadOnlyList<Query2DynamicAreaField> dynamicAreaFields,
-        QcResultSettingsDto? qcSettings)
+        QcResultSettingsDto? qcSettings,
+        IReadOnlyList<QcJudgmentSnapshot> qcJudgments)
     {
         var workbook = new XLWorkbook(templatePath);
         var worksheet = workbook.Worksheet(Query2SheetName)
@@ -187,7 +226,142 @@ public sealed class Query2WorkbookExporter(
         ApplyQcCritValues(worksheet, Query2ColumnLayout.DataStartRowNumber, lastDataRowNumber, copiedCritRowNumbers, dynamicAreaFields.Count, qcSettings);
         ApplyResultRangeFills(worksheet, Query2ColumnLayout.DataStartRowNumber, lastDataRowNumber, copiedCritRowNumbers, dynamicAreaFields.Count, qcSettings);
         templateWorksheet.Delete();
+        if (qcJudgments.Count > 0)
+        {
+            AddQcJudgmentWorksheet(workbook, qcJudgments);
+        }
+
         return workbook;
+    }
+
+    private static void AddQcJudgmentWorksheet(
+        XLWorkbook workbook,
+        IReadOnlyList<QcJudgmentSnapshot> judgments)
+    {
+        var worksheet = workbook.AddWorksheet(QcJudgmentSheetName);
+        for (var column = 1; column <= QcJudgmentHeaders.Length; column++)
+        {
+            worksheet.Cell(1, column).Value = QcJudgmentHeaders[column - 1];
+        }
+
+        var headerRange = worksheet.Range(1, 1, 1, QcJudgmentHeaders.Length);
+        headerRange.Style.Fill.BackgroundColor = QcHeaderFill;
+        headerRange.Style.Font.FontColor = XLColor.White;
+        headerRange.Style.Font.Bold = true;
+        headerRange.Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Center;
+        headerRange.Style.Alignment.Vertical = XLAlignmentVerticalValues.Center;
+        worksheet.Row(1).Height = 24;
+
+        var rowNumber = 2;
+        foreach (var judgment in judgments)
+        {
+            WriteOptionalText(worksheet.Cell(rowNumber, 1), judgment.PpbId);
+            if (judgment.AnlzTime.HasValue)
+            {
+                worksheet.Cell(rowNumber, 2).Value = judgment.AnlzTime.Value;
+                worksheet.Cell(rowNumber, 2).Style.DateFormat.Format = "yyyy-mm-dd hh:mm:ss";
+            }
+
+            WriteOptionalText(worksheet.Cell(rowNumber, 3), judgment.LotNo);
+            WriteOptionalText(worksheet.Cell(rowNumber, 4), judgment.Port);
+            WriteOptionalText(worksheet.Cell(rowNumber, 5), judgment.Container);
+            WriteNullableDecimal(worksheet.Cell(rowNumber, 6), judgment.IniPrs);
+            WriteNullableDecimal(worksheet.Cell(rowNumber, 7), judgment.IniPrsMin);
+            WriteNullableDecimal(worksheet.Cell(rowNumber, 8), judgment.FnlPrs);
+            WriteNullableDecimal(worksheet.Cell(rowNumber, 9), judgment.FnlPrsMin);
+            worksheet.Cell(rowNumber, 10).Value = judgment.PressureResult;
+            worksheet.Cell(rowNumber, 11).Value = judgment.Result;
+            WriteOptionalText(worksheet.Cell(rowNumber, 12), judgment.FailDesc);
+
+            ApplyPressureValueFill(
+                worksheet.Cell(rowNumber, 6),
+                worksheet.Cell(rowNumber, 7),
+                judgment.IniPrsMin,
+                judgment.IniPrsFailed);
+            ApplyPressureValueFill(
+                worksheet.Cell(rowNumber, 8),
+                worksheet.Cell(rowNumber, 9),
+                judgment.FnlPrsMin,
+                judgment.FnlPrsFailed);
+            ApplyQcStatusFill(worksheet.Cell(rowNumber, 10), judgment.PressureResult);
+            ApplyQcStatusFill(worksheet.Cell(rowNumber, 11), judgment.Result);
+            if (!string.IsNullOrWhiteSpace(judgment.FailDesc))
+            {
+                worksheet.Cell(rowNumber, 12).Style.Fill.BackgroundColor = OutOfRangeFill;
+                worksheet.Cell(rowNumber, 12).Style.Font.Bold = true;
+            }
+
+            rowNumber++;
+        }
+
+        var lastRowNumber = rowNumber - 1;
+        var usedRange = worksheet.Range(1, 1, lastRowNumber, QcJudgmentHeaders.Length);
+        usedRange.Style.Border.OutsideBorder = XLBorderStyleValues.Thin;
+        usedRange.Style.Border.InsideBorder = XLBorderStyleValues.Thin;
+        usedRange.Style.Border.OutsideBorderColor = QcBorderColor;
+        usedRange.Style.Border.InsideBorderColor = QcBorderColor;
+        usedRange.Style.Alignment.Vertical = XLAlignmentVerticalValues.Center;
+        worksheet.Range(2, 6, lastRowNumber, 9).Style.NumberFormat.Format = "0.################";
+        worksheet.Range(2, 12, lastRowNumber, 12).Style.Alignment.WrapText = true;
+        usedRange.SetAutoFilter();
+        worksheet.SheetView.FreezeRows(1);
+
+        worksheet.Column(1).Width = 16;
+        worksheet.Column(2).Width = 21;
+        worksheet.Column(3).Width = 18;
+        worksheet.Column(4).Width = 12;
+        worksheet.Column(5).Width = 16;
+        worksheet.Columns(6, 9).Width = 16;
+        worksheet.Columns(10, 11).Width = 20;
+        worksheet.Column(12).Width = 32;
+    }
+
+    private static void WriteNullableDecimal(IXLCell cell, decimal? value)
+    {
+        if (value.HasValue)
+        {
+            cell.Value = value.Value;
+        }
+    }
+
+    private static void WriteOptionalText(IXLCell cell, string? value)
+    {
+        if (value is not null)
+        {
+            cell.Value = value;
+        }
+    }
+
+    private static void ApplyPressureValueFill(
+        IXLCell valueCell,
+        IXLCell minCell,
+        decimal? min,
+        bool failed)
+    {
+        if (!min.HasValue)
+        {
+            valueCell.Style.Fill.BackgroundColor = QcNotEvaluatedFill;
+            minCell.Style.Fill.BackgroundColor = QcNotEvaluatedFill;
+            return;
+        }
+
+        valueCell.Style.Fill.BackgroundColor = failed ? OutOfRangeFill : WithinRangeFill;
+        minCell.Style.Fill.BackgroundColor = QcRuleFill;
+        if (failed)
+        {
+            valueCell.Style.Font.Bold = true;
+        }
+    }
+
+    private static void ApplyQcStatusFill(IXLCell cell, string status)
+    {
+        cell.Style.Fill.BackgroundColor = string.Equals(status, QcResultValues.Fail, StringComparison.OrdinalIgnoreCase)
+            ? OutOfRangeFill
+            : string.Equals(status, QcResultValues.Pass, StringComparison.OrdinalIgnoreCase)
+                ? WithinRangeFill
+                : QcNotEvaluatedFill;
+        cell.Style.Font.Bold = true;
+        cell.Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Center;
     }
 
     private static void ApplyDynamicAreaColumns(

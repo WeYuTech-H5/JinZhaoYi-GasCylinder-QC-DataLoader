@@ -415,7 +415,16 @@ static void MapDownloadEndpoints(WebApplication app)
         var dynamicAreaFields = await repository.GetQuery2DynamicAreaFieldsAsync(includeInactive: false, cancellationToken);
         var dynamicAreaValues = await repository.GetQuery2DynamicAreaPortValuesAsync(cancellationToken);
         var qcSettings = await repository.GetQcResultSettingsAsync(cancellationToken);
-        var preview = previewService.CreatePreview(startDate, endDate, rfId, stdRawIds, portRawIds, rows, dynamicAreaFields, dynamicAreaValues);
+        var preview = previewService.CreatePreview(
+            startDate,
+            endDate,
+            rfId,
+            stdRawIds,
+            portRawIds,
+            rows,
+            dynamicAreaFields,
+            dynamicAreaValues,
+            qcSettings);
         preview.QcParameterWarnings = qcResultEvaluator.BuildParameterWarnings(rows, qcSettings);
         return Results.Ok(preview);
     });
@@ -423,6 +432,7 @@ static void MapDownloadEndpoints(WebApplication app)
     app.MapPost("/api/exports/query2-excel/recalculate", async (
         Query2PreviewRecalculateRequest request,
         IQuery2PreviewService previewService,
+        IQuery2SelectionExportBuilder exportBuilder,
         IDapperRepository repository,
         IQcResultEvaluator qcResultEvaluator,
         CancellationToken cancellationToken) =>
@@ -432,12 +442,34 @@ static void MapDownloadEndpoints(WebApplication app)
             return Results.BadRequest(new { message = "preview is required." });
         }
 
+        if (!TryValidatePreviewExportRequest(request.Preview, out var startDate, out var endDate, out var rfId, out var stdRawIds, out var portRawIds, out var validationMessage))
+        {
+            return Results.BadRequest(new { message = validationMessage });
+        }
+
+        var canonicalResult = await BuildCanonicalQuery2PreviewAsync(
+            startDate,
+            endDate,
+            rfId,
+            stdRawIds,
+            portRawIds,
+            repository,
+            exportBuilder,
+            previewService,
+            cancellationToken);
+        if (canonicalResult.Error is not null)
+        {
+            return canonicalResult.Error;
+        }
+
         try
         {
-            var preview = previewService.Recalculate(request.Preview);
-            var rows = previewService.ToExportRows(preview);
-            var qcSettings = await repository.GetQcResultSettingsAsync(cancellationToken);
-            preview.QcParameterWarnings = qcResultEvaluator.BuildParameterWarnings(rows, qcSettings);
+            var preview = previewService.RecalculateFromCanonical(
+                canonicalResult.Preview!,
+                request.Preview,
+                canonicalResult.QcSettings);
+            var rows = previewService.ToExportRows(preview, canonicalResult.QcSettings);
+            preview.QcParameterWarnings = qcResultEvaluator.BuildParameterWarnings(rows, canonicalResult.QcSettings!);
             return Results.Ok(preview);
         }
         catch (InvalidOperationException ex)
@@ -449,6 +481,7 @@ static void MapDownloadEndpoints(WebApplication app)
     app.MapPost("/api/exports/query2-excel/from-preview", async (
         Query2PreviewExportRequest request,
         IQuery2PreviewService previewService,
+        IQuery2SelectionExportBuilder exportBuilder,
         IQuery2WorkbookExporter exporter,
         IQcResultEvaluator qcResultEvaluator,
         IDapperRepository repository,
@@ -465,12 +498,31 @@ static void MapDownloadEndpoints(WebApplication app)
             return Results.BadRequest(new { message = validationMessage });
         }
 
+        var canonicalResult = await BuildCanonicalQuery2PreviewAsync(
+            startDate,
+            endDate,
+            rfId,
+            stdRawIds,
+            portRawIds,
+            repository,
+            exportBuilder,
+            previewService,
+            cancellationToken);
+        if (canonicalResult.Error is not null)
+        {
+            return canonicalResult.Error;
+        }
+
+        var qcSettings = canonicalResult.QcSettings!;
         Query2PreviewState finalPreview;
         IReadOnlyList<Query2ExportRow> rows;
         try
         {
-            finalPreview = previewService.Recalculate(request.Preview);
-            rows = previewService.ToExportRows(finalPreview);
+            finalPreview = previewService.RecalculateFromCanonical(
+                canonicalResult.Preview!,
+                request.Preview,
+                qcSettings);
+            rows = previewService.ToExportRows(finalPreview, qcSettings);
         }
         catch (InvalidOperationException ex)
         {
@@ -485,8 +537,20 @@ static void MapDownloadEndpoints(WebApplication app)
         var startDateText = startDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
         var endDateText = endDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
         var exportDateText = startDate.Date == endDate.Date ? startDateText : $"{startDateText}-{endDateText}";
-        var qcSettings = await repository.GetQcResultSettingsAsync(cancellationToken);
-        var content = await exporter.ExportAsync(exportDateText, rows, finalPreview.DynamicAreaFields, qcSettings, cancellationToken);
+        var qcEvaluation = qcResultEvaluator.EvaluateExportRowsDetailed(rows, rfId, qcSettings);
+        var qcValidationError = BuildQcUndeterminedExportError(qcEvaluation);
+        if (qcValidationError is not null)
+        {
+            return qcValidationError;
+        }
+
+        var content = await exporter.ExportAsync(
+            exportDateText,
+            rows,
+            finalPreview.DynamicAreaFields,
+            qcSettings,
+            qcEvaluation.Snapshots,
+            cancellationToken);
         if (content is null)
         {
             return Results.NotFound(new { message = "No Query2 Excel content was generated." });
@@ -507,8 +571,7 @@ static void MapDownloadEndpoints(WebApplication app)
             exportUser);
 
         await repository.UpsertExcelPpbHistoryAsync(historyRequest, cancellationToken);
-        var qcUpdates = qcResultEvaluator.EvaluateExportRows(rows, rfId, qcSettings);
-        await repository.UpsertMfgLotQcResultsAsync(qcUpdates, exportUser, cancellationToken);
+        await repository.UpsertMfgLotQcResultsAsync(qcEvaluation.Updates, exportUser, cancellationToken);
 
         var excelExportKey = DapperRepository.ComputeExcelExportKey(historyRequest);
         var editLogs = previewService.BuildEditLogs(
@@ -562,14 +625,36 @@ static void MapDownloadEndpoints(WebApplication app)
 
         var dynamicAreaFields = await repository.GetQuery2DynamicAreaFieldsAsync(includeInactive: false, cancellationToken);
         var dynamicAreaValues = await repository.GetQuery2DynamicAreaPortValuesAsync(cancellationToken);
-        var preview = previewService.CreatePreview(startDate, endDate, rfId, stdRawIds, portRawIds, rows, dynamicAreaFields, dynamicAreaValues);
-        rows = previewService.ToExportRows(preview);
+        var qcSettings = await repository.GetQcResultSettingsAsync(cancellationToken);
+        var preview = previewService.CreatePreview(
+            startDate,
+            endDate,
+            rfId,
+            stdRawIds,
+            portRawIds,
+            rows,
+            dynamicAreaFields,
+            dynamicAreaValues,
+            qcSettings);
+        rows = previewService.ToExportRows(preview, qcSettings);
 
         var startDateText = startDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
         var endDateText = endDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
         var exportDateText = startDate.Date == endDate.Date ? startDateText : $"{startDateText}-{endDateText}";
-        var qcSettings = await repository.GetQcResultSettingsAsync(cancellationToken);
-        var content = await exporter.ExportAsync(exportDateText, rows, preview.DynamicAreaFields, qcSettings, cancellationToken);
+        var qcEvaluation = qcResultEvaluator.EvaluateExportRowsDetailed(rows, rfId, qcSettings);
+        var qcValidationError = BuildQcUndeterminedExportError(qcEvaluation);
+        if (qcValidationError is not null)
+        {
+            return qcValidationError;
+        }
+
+        var content = await exporter.ExportAsync(
+            exportDateText,
+            rows,
+            preview.DynamicAreaFields,
+            qcSettings,
+            qcEvaluation.Snapshots,
+            cancellationToken);
         if (content is null)
         {
             return Results.NotFound(new { message = "No Query2 Excel content was generated." });
@@ -591,8 +676,7 @@ static void MapDownloadEndpoints(WebApplication app)
                 exportedAt,
                 exportUser),
             cancellationToken);
-        var qcUpdates = qcResultEvaluator.EvaluateExportRows(rows, rfId, qcSettings);
-        await repository.UpsertMfgLotQcResultsAsync(qcUpdates, exportUser, cancellationToken);
+        await repository.UpsertMfgLotQcResultsAsync(qcEvaluation.Updates, exportUser, cancellationToken);
 
         return Results.File(
             content,
@@ -1039,7 +1123,7 @@ static bool TryValidatePreviewExportRequest(
         return false;
     }
 
-    if (preview.Rows.Count == 0)
+    if (preview.Rows is null || preview.Rows.Count == 0)
     {
         message = "preview rows are required.";
         return false;
@@ -1047,6 +1131,78 @@ static bool TryValidatePreviewExportRequest(
 
     message = string.Empty;
     return true;
+}
+
+static async Task<(Query2PreviewState? Preview, QcResultSettingsDto? QcSettings, IResult? Error)> BuildCanonicalQuery2PreviewAsync(
+    DateTime startDate,
+    DateTime endDate,
+    string rfId,
+    IReadOnlyList<string> stdRawIds,
+    IReadOnlyList<string> portRawIds,
+    IDapperRepository repository,
+    IQuery2SelectionExportBuilder exportBuilder,
+    IQuery2PreviewService previewService,
+    CancellationToken cancellationToken)
+{
+    var rf = await repository.GetRfByIdAsync(rfId, cancellationToken);
+    if (rf is null)
+    {
+        return (null, null, Results.NotFound(new { message = $"RF '{rfId}' not found." }));
+    }
+
+    var stdRows = await repository.GetRawRowsForExportAsync(startDate, endDate, stdRawIds, cancellationToken);
+    var portRows = await repository.GetRawRowsForExportAsync(startDate, endDate, portRawIds, cancellationToken);
+    if (stdRows.Count != stdRawIds.Count || portRows.Count != portRawIds.Count)
+    {
+        return (null, null, Results.NotFound(new { message = "One or more selected raw rows were not found in the requested date range." }));
+    }
+
+    var rows = exportBuilder.BuildRows(rf, stdRows, portRows);
+    if (rows.Count == 0)
+    {
+        return (null, null, Results.NotFound(new { message = "No DB rows found for selected export data." }));
+    }
+
+    var dynamicAreaFields = await repository.GetQuery2DynamicAreaFieldsAsync(includeInactive: false, cancellationToken);
+    var dynamicAreaValues = await repository.GetQuery2DynamicAreaPortValuesAsync(cancellationToken);
+    var qcSettings = await repository.GetQcResultSettingsAsync(cancellationToken);
+    var preview = previewService.CreatePreview(
+        startDate,
+        endDate,
+        rfId,
+        stdRawIds,
+        portRawIds,
+        rows,
+        dynamicAreaFields,
+        dynamicAreaValues,
+        qcSettings);
+
+    return (preview, qcSettings, null);
+}
+
+static IResult? BuildQcUndeterminedExportError(QcExportEvaluationBatch evaluation)
+{
+    var undeterminedRows = evaluation.Snapshots
+        .Where(snapshot => string.Equals(snapshot.Result, QcResultValues.Unknown, StringComparison.OrdinalIgnoreCase))
+        .Select(snapshot => new
+        {
+            snapshot.PpbId,
+            snapshot.LotNo,
+            snapshot.Port,
+            snapshot.Container,
+            snapshot.PressureResult
+        })
+        .ToArray();
+    if (undeterminedRows.Length == 0)
+    {
+        return null;
+    }
+
+    return Results.BadRequest(new
+    {
+        message = "QC 判定包含未判定資料，已停止正式匯出與資料庫寫入。請確認 Container 與分析前／後壓力門檻設定。",
+        rows = undeterminedRows
+    });
 }
 
 static bool TryValidateDateRange(
@@ -1079,8 +1235,9 @@ static bool TryValidateDateRange(
     return true;
 }
 
-static string[] NormalizeIds(IEnumerable<string> ids) =>
-    ids.Where(id => !string.IsNullOrWhiteSpace(id))
+static string[] NormalizeIds(IEnumerable<string>? ids) =>
+    (ids ?? [])
+        .Where(id => !string.IsNullOrWhiteSpace(id))
         .Select(id => id.Trim())
         .Distinct(StringComparer.OrdinalIgnoreCase)
         .ToArray();
@@ -1270,4 +1427,4 @@ static ExportGroup[] BuildExcelPpbGroups(IReadOnlyCollection<ExportOption> optio
         .ThenBy(group => group.SampleName, StringComparer.OrdinalIgnoreCase)
         .ToArray();
 
-// 1
+public partial class Program;

@@ -62,13 +62,230 @@ public sealed class QcResultEvaluatorTests
         row.Areas["Acetone"] = 100m;
         var settings = CreateSettingsWithoutFinalPressureMin();
 
-        var update = _evaluator.Evaluate(row, [CreateRawRow("port 5 205 1088>  #20260629006")], new QcDataRow { Id = "RF-001" }, settings);
+        var snapshot = _evaluator.EvaluateSnapshot(
+            row,
+            [CreateRawRow("port 5 205 1088>  #20260629006")],
+            settings);
 
-        update.Should().NotBeNull();
-        update!.Result.Should().Be(QcResultValues.Pass);
-        update.FailDesc.Should().BeNull();
-        update.IniPrs.Should().Be("1088");
-        update.FnlPrs.Should().BeNull();
+        snapshot.IniPrs.Should().Be(1088m);
+        snapshot.FnlPrs.Should().BeNull();
+        snapshot.PressureResult.Should().Be(QcPressureResultValues.NotEvaluated);
+        snapshot.Result.Should().Be(QcResultValues.Unknown);
+        _evaluator.Evaluate(
+                row,
+                [CreateRawRow("port 5 205 1088>  #20260629006")],
+                new QcDataRow { Id = "RF-001" },
+                settings)
+            .Should()
+            .BeNull();
+    }
+
+    [Theory]
+    [InlineData("0.5L_Cylinder", "1050>950", 1050, 950)]
+    [InlineData("1L_Cylinder", "1050>1000", 1050, 1000)]
+    public void EvaluateSnapshot_treats_values_equal_to_container_thresholds_as_pass(
+        string container,
+        string pressureText,
+        double expectedIniMin,
+        double expectedFnlMin)
+    {
+        var row = CreatePpbRow();
+        row.Container = container;
+
+        var snapshot = _evaluator.EvaluateSnapshot(
+            row,
+            [CreateRawRow($"port 1 {pressureText} #20260615001")],
+            CreatePressureSettings());
+
+        snapshot.IniPrs.Should().Be((decimal)expectedIniMin);
+        snapshot.IniPrsMin.Should().Be((decimal)expectedIniMin);
+        snapshot.FnlPrs.Should().Be((decimal)expectedFnlMin);
+        snapshot.FnlPrsMin.Should().Be((decimal)expectedFnlMin);
+        snapshot.IniPrsFailed.Should().BeFalse();
+        snapshot.FnlPrsFailed.Should().BeFalse();
+        snapshot.PressureResult.Should().Be(QcPressureResultValues.Pass);
+        snapshot.Result.Should().Be(QcResultValues.Pass);
+        snapshot.FailDesc.Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData("1049.9999>950", true, false)]
+    [InlineData("1050>949.9999", false, true)]
+    [InlineData("1050>", false, true)]
+    [InlineData("", true, true)]
+    public void EvaluateSnapshot_marks_below_or_missing_required_pressure_as_fail(
+        string pressureText,
+        bool expectedIniFailed,
+        bool expectedFnlFailed)
+    {
+        var row = CreatePpbRow();
+        var rawRows = string.IsNullOrWhiteSpace(pressureText)
+            ? Array.Empty<QcDataRow>()
+            : [CreateRawRow($"port 1 {pressureText} #20260615001")];
+
+        var snapshot = _evaluator.EvaluateSnapshot(row, rawRows, CreatePressureSettings());
+
+        snapshot.IniPrsFailed.Should().Be(expectedIniFailed);
+        snapshot.FnlPrsFailed.Should().Be(expectedFnlFailed);
+        snapshot.PressureResult.Should().Be(QcPressureResultValues.Fail);
+        snapshot.Result.Should().Be(QcResultValues.Fail);
+        snapshot.FailDesc.Should().Be("壓力不足");
+    }
+
+    [Theory]
+    [InlineData("1049>1000", true, false)]
+    [InlineData("1050>999", false, true)]
+    [InlineData("1050>", false, true)]
+    public void EvaluateSnapshot_applies_1l_pressure_thresholds(
+        string pressureText,
+        bool expectedIniFailed,
+        bool expectedFnlFailed)
+    {
+        var row = CreatePpbRow();
+        row.Container = "1L_Cylinder";
+
+        var snapshot = _evaluator.EvaluateSnapshot(
+            row,
+            [CreateRawRow($"port 1 {pressureText} #20260615001")],
+            CreatePressureSettings());
+
+        snapshot.IniPrsFailed.Should().Be(expectedIniFailed);
+        snapshot.FnlPrsFailed.Should().Be(expectedFnlFailed);
+        snapshot.PressureResult.Should().Be(QcPressureResultValues.Fail);
+        snapshot.Result.Should().Be(QcResultValues.Fail);
+        snapshot.FailDesc.Should().Be("壓力不足");
+    }
+
+    [Theory]
+    [InlineData("2L_Cylinder")]
+    [InlineData("")]
+    public void EvaluateSnapshot_reports_not_evaluated_when_container_has_no_applicable_rule(string container)
+    {
+        var row = CreatePpbRow();
+        row.Container = container;
+
+        var snapshot = _evaluator.EvaluateSnapshot(
+            row,
+            [CreateRawRow("port 1 100>50 #20260615001")],
+            CreatePressureSettings());
+
+        snapshot.IniPrsMin.Should().BeNull();
+        snapshot.FnlPrsMin.Should().BeNull();
+        snapshot.PressureResult.Should().Be(QcPressureResultValues.NotEvaluated);
+        snapshot.Result.Should().Be(QcResultValues.Unknown);
+        snapshot.FailDesc.Should().BeNull();
+    }
+
+    [Fact]
+    public void EvaluateSnapshot_reports_unknown_when_pressure_rule_is_missing_or_inactive()
+    {
+        var row = CreatePpbRow();
+        var noRule = _evaluator.EvaluateSnapshot(
+            row,
+            [CreateRawRow("port 1 1050>950 #20260615001")],
+            new QcResultSettingsDto());
+        var inactiveRule = _evaluator.EvaluateSnapshot(
+            row,
+            [CreateRawRow("port 1 1050>950 #20260615001")],
+            new QcResultSettingsDto
+            {
+                PressureRules =
+                [
+                    new QcPressureRuleDto(QcResultSettingRules.Container05, 1050m, 950m, IsActive: false)
+                ]
+            });
+
+        noRule.PressureResult.Should().Be(QcPressureResultValues.NotEvaluated);
+        noRule.Result.Should().Be(QcResultValues.Unknown);
+        inactiveRule.PressureResult.Should().Be(QcPressureResultValues.NotEvaluated);
+        inactiveRule.Result.Should().Be(QcResultValues.Unknown);
+    }
+
+    [Fact]
+    public void EvaluateSnapshot_reports_unknown_for_incomplete_rule_unless_configured_threshold_fails()
+    {
+        var row = CreatePpbRow();
+        var settings = new QcResultSettingsDto
+        {
+            PressureRules =
+            [
+                new QcPressureRuleDto(QcResultSettingRules.Container05, 1050m, null)
+            ]
+        };
+
+        var passingConfiguredThreshold = _evaluator.EvaluateSnapshot(
+            row,
+            [CreateRawRow("port 1 1050>950 #20260615001")],
+            settings);
+        var failingConfiguredThreshold = _evaluator.EvaluateSnapshot(
+            row,
+            [CreateRawRow("port 1 1049>950 #20260615001")],
+            settings);
+
+        passingConfiguredThreshold.PressureResult.Should().Be(QcPressureResultValues.NotEvaluated);
+        passingConfiguredThreshold.Result.Should().Be(QcResultValues.Unknown);
+        failingConfiguredThreshold.PressureResult.Should().Be(QcPressureResultValues.Fail);
+        failingConfiguredThreshold.Result.Should().Be(QcResultValues.Fail);
+        failingConfiguredThreshold.FailDesc.Should().Be("壓力不足");
+    }
+
+    [Fact]
+    public void EvaluateSnapshot_combines_pressure_and_concentration_failures_in_stable_order()
+    {
+        var row = CreatePpbRow();
+        row.Areas["Acetone"] = 120m;
+
+        var snapshot = _evaluator.EvaluateSnapshot(
+            row,
+            [CreateRawRow("port 1 899>899 #20260615001")],
+            CreateSettings());
+
+        snapshot.PressureResult.Should().Be(QcPressureResultValues.Fail);
+        snapshot.Result.Should().Be(QcResultValues.Fail);
+        snapshot.FailDesc.Should().Be("壓力不足; Conc(Acetone)");
+    }
+
+    [Fact]
+    public void EvaluateExportRowsDetailed_returns_the_same_snapshot_and_update_result()
+    {
+        var raw = CreateRawRow("port 1 1050>949 #20260615001");
+        raw.SourceKind = "PORT";
+        var ppb = CreatePpbRow();
+
+        var batch = _evaluator.EvaluateExportRowsDetailed(
+            [
+                new Query2ExportRow(Query2ExportRowType.Raw, raw),
+                new Query2ExportRow(Query2ExportRowType.Ppb, ppb)
+            ],
+            "RF-001",
+            CreatePressureSettings());
+
+        batch.Snapshots.Should().ContainSingle();
+        batch.Updates.Should().ContainSingle();
+        batch.Snapshots[0].PressureResult.Should().Be(QcPressureResultValues.Fail);
+        batch.Snapshots[0].Result.Should().Be(batch.Updates[0].Result);
+        batch.Snapshots[0].FailDesc.Should().Be(batch.Updates[0].FailDesc);
+        batch.Updates[0].FnlPrs.Should().Be("949");
+    }
+
+    [Fact]
+    public void EvaluateExportRowsDetailed_does_not_create_mfg_update_for_unknown_result()
+    {
+        var raw = CreateRawRow("port 1 1050>950 #20260615001");
+        raw.SourceKind = "PORT";
+        var ppb = CreatePpbRow();
+
+        var batch = _evaluator.EvaluateExportRowsDetailed(
+            [
+                new Query2ExportRow(Query2ExportRowType.Raw, raw),
+                new Query2ExportRow(Query2ExportRowType.Ppb, ppb)
+            ],
+            "RF-001",
+            new QcResultSettingsDto());
+
+        batch.Snapshots.Should().ContainSingle()
+            .Which.Result.Should().Be(QcResultValues.Unknown);
+        batch.Updates.Should().BeEmpty();
     }
 
     [Fact]
@@ -134,6 +351,16 @@ public sealed class QcResultEvaluatorTests
             ConcentrationRules =
             [
                 new QcConcentrationRuleDto("Acetone", "Acetone", 1, 90m, 110m, 80m, 120m)
+            ]
+        };
+
+    private static QcResultSettingsDto CreatePressureSettings() =>
+        new()
+        {
+            PressureRules =
+            [
+                new QcPressureRuleDto(QcResultSettingRules.Container05, 1050m, 950m),
+                new QcPressureRuleDto(QcResultSettingRules.Container1L, 1050m, 1000m)
             ]
         };
 

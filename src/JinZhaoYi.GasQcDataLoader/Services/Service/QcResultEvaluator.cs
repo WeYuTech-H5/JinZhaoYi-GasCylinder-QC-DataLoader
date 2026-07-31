@@ -12,6 +12,12 @@ public sealed partial class QcResultEvaluator : IQcResultEvaluator
     private const string QcInst = "QC-01";
     private const string PressureFailDesc = "壓力不足";
 
+    public QcJudgmentSnapshot EvaluateSnapshot(
+        QcDataRow ppbRow,
+        IReadOnlyList<QcDataRow> portRawRows,
+        QcResultSettingsDto settings) =>
+        EvaluateCore(ppbRow, portRawRows, settings).Snapshot;
+
     public MfgLotQcUpdate? Evaluate(
         QcDataRow ppbRow,
         IReadOnlyList<QcDataRow> portRawRows,
@@ -23,44 +29,16 @@ public sealed partial class QcResultEvaluator : IQcResultEvaluator
             return null;
         }
 
-        var containerType = ResolveContainerType(ppbRow.Container);
-        var pressureReading = ResolvePressureReading(portRawRows, ppbRow);
-        var failedAnalytes = EvaluateConcentrations(ppbRow, containerType, settings);
-        var pressureFailed = EvaluatePressure(pressureReading, containerType, settings);
-        var failDescriptions = new List<string>();
-
-        if (pressureFailed)
+        var evaluation = EvaluateCore(ppbRow, portRawRows, settings);
+        if (string.Equals(evaluation.Snapshot.Result, QcResultValues.Unknown, StringComparison.OrdinalIgnoreCase))
         {
-            failDescriptions.Add(PressureFailDesc);
+            return null;
         }
 
-        if (failedAnalytes.Count > 0)
-        {
-            failDescriptions.Add($"Conc({string.Join(",", failedAnalytes)})");
-        }
-
-        var result = failDescriptions.Count == 0 ? QcResultValues.Pass : QcResultValues.Fail;
-        ppbRow.QcResult = result;
-        ppbRow.FailDesc = failDescriptions.Count == 0 ? null : string.Join("; ", failDescriptions);
-
-        return new MfgLotQcUpdate(
-            ppbRow.LotNo.Trim(),
-            ppbRow.Si0Id is 0 ? null : ppbRow.Si0Id,
-            ResolveProdOrder(ppbRow.LotNo),
-            CalType,
-            ResolveCalId(ppbRow),
-            pressureReading.IniPrsText,
-            QcComplete,
-            QcInst,
-            NullIfWhiteSpace(ppbRow.Port),
-            ppbRow.AnlzTime,
-            result,
-            NullIfWhiteSpace(rf?.Id),
-            pressureReading.FnlPrsText,
-            ppbRow.FailDesc);
+        return BuildUpdate(ppbRow, rf, evaluation);
     }
 
-    public IReadOnlyList<MfgLotQcUpdate> EvaluateExportRows(
+    public QcExportEvaluationBatch EvaluateExportRowsDetailed(
         IReadOnlyList<Query2ExportRow> rows,
         string? rfId,
         QcResultSettingsDto settings)
@@ -69,30 +47,33 @@ public sealed partial class QcResultEvaluator : IQcResultEvaluator
             .Where(row => row.RowType == Query2ExportRowType.Raw && !IsStd(row.Row))
             .Select(row => row.Row)
             .ToArray();
+        var snapshots = new List<QcJudgmentSnapshot>();
         var updates = new List<MfgLotQcUpdate>();
+        var rf = string.IsNullOrWhiteSpace(rfId) ? null : new QcDataRow { Id = rfId };
 
         foreach (var ppbRow in rows.Where(row => row.RowType == Query2ExportRowType.Ppb).Select(row => row.Row))
         {
-            var sourceRawRows = rawRows
-                .Where(row =>
-                    string.Equals(row.LotNo, ppbRow.LotNo, StringComparison.OrdinalIgnoreCase) &&
-                    string.Equals(row.Port, ppbRow.Port, StringComparison.OrdinalIgnoreCase))
-                .OrderBy(row => row.AnlzTime)
-                .ThenBy(row => row.SampleNo)
-                .ThenBy(row => row.SourceFolderName, StringComparer.OrdinalIgnoreCase)
-                .ThenBy(row => row.DataFilename, StringComparer.OrdinalIgnoreCase)
-                .ToArray();
-
-            var rf = string.IsNullOrWhiteSpace(rfId) ? null : new QcDataRow { Id = rfId };
-            var update = Evaluate(ppbRow, sourceRawRows, rf, settings);
-            if (update is not null)
+            var evaluation = EvaluateCore(ppbRow, ResolveSourceRawRows(rawRows, ppbRow), settings);
+            snapshots.Add(evaluation.Snapshot);
+            if (!string.IsNullOrWhiteSpace(ppbRow.LotNo) &&
+                !string.Equals(evaluation.Snapshot.Result, QcResultValues.Unknown, StringComparison.OrdinalIgnoreCase))
             {
-                updates.Add(update);
+                updates.Add(BuildUpdate(ppbRow, rf, evaluation));
             }
         }
 
-        return updates;
+        return new QcExportEvaluationBatch
+        {
+            Snapshots = snapshots,
+            Updates = updates
+        };
     }
+
+    public IReadOnlyList<MfgLotQcUpdate> EvaluateExportRows(
+        IReadOnlyList<Query2ExportRow> rows,
+        string? rfId,
+        QcResultSettingsDto settings) =>
+        EvaluateExportRowsDetailed(rows, rfId, settings).Updates;
 
     public IReadOnlyList<QcParameterWarningDto> BuildParameterWarnings(
         IReadOnlyList<Query2ExportRow> rows,
@@ -177,31 +158,107 @@ public sealed partial class QcResultEvaluator : IQcResultEvaluator
         return failed;
     }
 
-    private static bool EvaluatePressure(
-        QcPressureReading reading,
-        string? containerType,
+    private static EvaluationContext EvaluateCore(
+        QcDataRow ppbRow,
+        IReadOnlyList<QcDataRow> portRawRows,
         QcResultSettingsDto settings)
     {
-        if (containerType is null)
+        var containerType = ResolveContainerType(ppbRow.Container);
+        var pressureReading = ResolvePressureReading(portRawRows, ppbRow);
+        var pressureRule = containerType is null
+            ? null
+            : settings.PressureRules.FirstOrDefault(rule =>
+                rule.IsActive &&
+                string.Equals(rule.ContainerType, containerType, StringComparison.OrdinalIgnoreCase));
+        var iniPrsMin = pressureRule?.IniPrsMin;
+        var fnlPrsMin = pressureRule?.FnlPrsMin;
+        var iniPrsFailed = IsBelowRequiredMin(pressureReading.IniPrs, iniPrsMin);
+        var fnlPrsFailed = IsBelowRequiredMin(pressureReading.FnlPrs, fnlPrsMin);
+        var pressureFailed = iniPrsFailed || fnlPrsFailed;
+        var hasCompletePressureCriteria =
+            pressureRule is not null &&
+            iniPrsMin.HasValue &&
+            fnlPrsMin.HasValue;
+        var pressureResult = pressureFailed
+            ? QcPressureResultValues.Fail
+            : hasCompletePressureCriteria
+                ? QcPressureResultValues.Pass
+                : QcPressureResultValues.NotEvaluated;
+        var failedAnalytes = EvaluateConcentrations(ppbRow, containerType, settings);
+        var failDescriptions = new List<string>();
+
+        if (pressureFailed)
         {
-            return false;
+            failDescriptions.Add(PressureFailDesc);
         }
 
-        var rule = settings.PressureRules.FirstOrDefault(rule =>
-            rule.IsActive &&
-            string.Equals(rule.ContainerType, containerType, StringComparison.OrdinalIgnoreCase));
-
-        if (rule is null)
+        if (failedAnalytes.Count > 0)
         {
-            return false;
+            failDescriptions.Add($"Conc({string.Join(",", failedAnalytes)})");
         }
 
-        return IsBelowRequiredMin(reading.IniPrs, rule.IniPrsMin) ||
-            IsBelowRequiredMin(reading.FnlPrs, rule.FnlPrsMin);
+        var result = failDescriptions.Count > 0
+            ? QcResultValues.Fail
+            : hasCompletePressureCriteria
+                ? QcResultValues.Pass
+                : QcResultValues.Unknown;
+        ppbRow.QcResult = result;
+        ppbRow.FailDesc = failDescriptions.Count == 0 ? null : string.Join("; ", failDescriptions);
+
+        return new EvaluationContext(
+            new QcJudgmentSnapshot(
+                ppbRow.Id,
+                ppbRow.AnlzTime,
+                ppbRow.LotNo,
+                ppbRow.Port,
+                ppbRow.Container,
+                pressureReading.IniPrs,
+                iniPrsMin,
+                pressureReading.FnlPrs,
+                fnlPrsMin,
+                pressureResult,
+                result,
+                ppbRow.FailDesc,
+                iniPrsFailed,
+                fnlPrsFailed),
+            pressureReading);
     }
 
     private static bool IsBelowRequiredMin(decimal? value, decimal? min) =>
         min.HasValue && (!value.HasValue || value.Value < min.Value);
+
+    private static MfgLotQcUpdate BuildUpdate(
+        QcDataRow ppbRow,
+        QcDataRow? rf,
+        EvaluationContext evaluation) =>
+        new(
+            ppbRow.LotNo!.Trim(),
+            ppbRow.Si0Id is 0 ? null : ppbRow.Si0Id,
+            ResolveProdOrder(ppbRow.LotNo),
+            CalType,
+            ResolveCalId(ppbRow),
+            evaluation.PressureReading.IniPrsText,
+            QcComplete,
+            QcInst,
+            NullIfWhiteSpace(ppbRow.Port),
+            ppbRow.AnlzTime,
+            evaluation.Snapshot.Result,
+            NullIfWhiteSpace(rf?.Id),
+            evaluation.PressureReading.FnlPrsText,
+            evaluation.Snapshot.FailDesc);
+
+    private static IReadOnlyList<QcDataRow> ResolveSourceRawRows(
+        IReadOnlyList<QcDataRow> rawRows,
+        QcDataRow ppbRow) =>
+        rawRows
+            .Where(row =>
+                string.Equals(row.LotNo, ppbRow.LotNo, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(row.Port, ppbRow.Port, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(row => row.AnlzTime)
+            .ThenBy(row => row.SampleNo)
+            .ThenBy(row => row.SourceFolderName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(row => row.DataFilename, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
 
     private static void AddPressureParameterWarnings(
         List<QcParameterWarningDto> warnings,
@@ -405,6 +462,10 @@ public sealed partial class QcResultEvaluator : IQcResultEvaluator
 
     private static string? NullIfWhiteSpace(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private sealed record EvaluationContext(
+        QcJudgmentSnapshot Snapshot,
+        QcPressureReading PressureReading);
 
     [GeneratedRegex(@"(?<![\d.])(?<ini>\d+(?:\.\d+)?)\s*>\s*(?<fnl>\d+(?:\.\d+)?)?", RegexOptions.Compiled)]
     private static partial Regex PressureArrowRegex();

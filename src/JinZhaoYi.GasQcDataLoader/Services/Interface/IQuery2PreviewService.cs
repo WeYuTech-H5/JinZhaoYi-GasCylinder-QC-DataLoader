@@ -12,11 +12,21 @@ public interface IQuery2PreviewService
         IReadOnlyList<string> portRawIds,
         IReadOnlyList<Query2ExportRow> rows,
         IReadOnlyList<Query2DynamicAreaField> dynamicAreaFields,
-        IReadOnlyList<Query2DynamicAreaPortValue> dynamicAreaPortValues);
+        IReadOnlyList<Query2DynamicAreaPortValue> dynamicAreaPortValues,
+        QcResultSettingsDto? qcSettings = null);
 
-    Query2PreviewState Recalculate(Query2PreviewState preview);
+    Query2PreviewState Recalculate(
+        Query2PreviewState preview,
+        QcResultSettingsDto? qcSettings = null);
 
-    IReadOnlyList<Query2ExportRow> ToExportRows(Query2PreviewState preview);
+    Query2PreviewState RecalculateFromCanonical(
+        Query2PreviewState canonicalPreview,
+        Query2PreviewState submittedPreview,
+        QcResultSettingsDto? qcSettings = null);
+
+    IReadOnlyList<Query2ExportRow> ToExportRows(
+        Query2PreviewState preview,
+        QcResultSettingsDto? qcSettings = null);
 
     IReadOnlyList<Query2PreviewEditLogRow> BuildEditLogs(
         Query2PreviewState preview,

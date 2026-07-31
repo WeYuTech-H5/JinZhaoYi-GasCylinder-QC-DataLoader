@@ -21,4 +21,12 @@ public interface IQuery2WorkbookExporter
         IReadOnlyList<Query2DynamicAreaField> dynamicAreaFields,
         QcResultSettingsDto? qcSettings,
         CancellationToken cancellationToken);
+
+    Task<byte[]?> ExportAsync(
+        string batchDate,
+        IReadOnlyList<Query2ExportRow> rows,
+        IReadOnlyList<Query2DynamicAreaField> dynamicAreaFields,
+        QcResultSettingsDto? qcSettings,
+        IReadOnlyList<QcJudgmentSnapshot> qcJudgments,
+        CancellationToken cancellationToken);
 }

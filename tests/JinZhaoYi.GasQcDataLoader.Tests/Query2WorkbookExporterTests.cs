@@ -338,6 +338,210 @@ public sealed class Query2WorkbookExporterTests : IDisposable
         worksheet.Cell(9, 56).GetValue<decimal>().Should().Be(90m);
     }
 
+    [Fact]
+    public async Task ExportAsync_adds_qc_judgment_sheet_without_changing_query2_layout()
+    {
+        var templateDirectory = Path.Combine(_rootPath, "template-qc-judgment");
+        Directory.CreateDirectory(templateDirectory);
+        var templatePath = Path.Combine(templateDirectory, "template.xlsx");
+        CreateTemplateWorkbook(templatePath);
+
+        var exporter = new Query2WorkbookExporter(
+            Options.Create(new SchedulerOptions
+            {
+                ExcelExport = new SchedulerExcelExportOptions
+                {
+                    Enabled = true,
+                    TemplatePath = templatePath
+                }
+            }),
+            NullLogger<Query2WorkbookExporter>.Instance);
+        var rows = new[]
+        {
+            new Query2ExportRow(Query2ExportRowType.Ppb, Row("ppb(5900)", "PORT 1", "LOT-PASS", acetone: 100m)),
+            new Query2ExportRow(Query2ExportRowType.Ppb, Row("ppb(5901)", "PORT 2", "LOT-FAIL", acetone: 100m)),
+            new Query2ExportRow(Query2ExportRowType.Ppb, Row("ppb(5902)", "PORT 3", "LOT-UNKNOWN", acetone: 100m, container: "2L_Cylinder"))
+        };
+        var settings = new QcResultSettingsDto
+        {
+            PressureRules =
+            [
+                new QcPressureRuleDto(QcResultSettingRules.Container05, 1050m, 950m),
+                new QcPressureRuleDto(QcResultSettingRules.Container1L, 1050m, 1000m)
+            ]
+        };
+        var judgments = new[]
+        {
+            new QcJudgmentSnapshot(
+                "ppb(5900)",
+                new DateTime(2026, 6, 3, 9, 0, 0),
+                "LOT-PASS",
+                "PORT 1",
+                "0.5L_Cylinder",
+                1050m,
+                1050m,
+                950m,
+                950m,
+                QcPressureResultValues.Pass,
+                QcResultValues.Pass,
+                null,
+                false,
+                false),
+            new QcJudgmentSnapshot(
+                "ppb(5901)",
+                new DateTime(2026, 6, 3, 9, 15, 0),
+                "LOT-FAIL",
+                "PORT 2",
+                "0.5L_Cylinder",
+                1050m,
+                1050m,
+                null,
+                950m,
+                QcPressureResultValues.Fail,
+                QcResultValues.Fail,
+                "壓力不足",
+                false,
+                true),
+            new QcJudgmentSnapshot(
+                "ppb(5902)",
+                new DateTime(2026, 6, 3, 9, 30, 0),
+                "LOT-UNKNOWN",
+                "PORT 3",
+                "2L_Cylinder",
+                100m,
+                null,
+                50m,
+                null,
+                QcPressureResultValues.NotEvaluated,
+                QcResultValues.Unknown,
+                null,
+                false,
+                false)
+        };
+
+        var content = await exporter.ExportAsync(
+            "20260603",
+            rows,
+            [],
+            settings,
+            judgments,
+            CancellationToken.None);
+
+        using var workbook = new XLWorkbook(new MemoryStream(content!));
+        workbook.Worksheets.Select(sheet => sheet.Name).Should().Equal("Query2", "QC判定");
+
+        var query2 = workbook.Worksheet("Query2");
+        query2.Cell(4, 1).GetString().Should().Be("ppb(5900)");
+        query2.Cell(4, 17).GetValue<decimal>().Should().Be(100m);
+
+        var qc = workbook.Worksheet("QC判定");
+        qc.Row(1).Cells(1, 12).Select(cell => cell.GetString()).Should().Equal(
+            "PPB ID",
+            "AnlzTime",
+            "LotNo",
+            "Port",
+            "Container",
+            "QC_IniPrs",
+            "QC_IniPrsMin",
+            "QC_FnlPrs",
+            "QC_FnlPrsMin",
+            "QC_PressureResult",
+            "QC_Result",
+            "QC_FailDesc");
+        qc.Cell(2, 6).GetValue<decimal>().Should().Be(1050m);
+        qc.Cell(2, 8).GetValue<decimal>().Should().Be(950m);
+        qc.Cell(2, 6).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFE2EFDA));
+        qc.Cell(2, 10).GetString().Should().Be(QcPressureResultValues.Pass);
+        qc.Cell(2, 10).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFE2EFDA));
+
+        qc.Cell(3, 8).IsEmpty().Should().BeTrue();
+        qc.Cell(3, 8).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFFF6969));
+        qc.Cell(3, 10).GetString().Should().Be(QcPressureResultValues.Fail);
+        qc.Cell(3, 10).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFFF6969));
+        qc.Cell(3, 12).GetString().Should().Be("壓力不足");
+
+        qc.Cell(4, 7).IsEmpty().Should().BeTrue();
+        qc.Cell(4, 7).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFFFF2CC));
+        qc.Cell(4, 10).GetString().Should().Be(QcPressureResultValues.NotEvaluated);
+        qc.Cell(4, 10).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFFFF2CC));
+        qc.Cell(4, 11).GetString().Should().Be(QcResultValues.Unknown);
+        qc.Cell(4, 11).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFFFF2CC));
+        qc.AutoFilter.IsEnabled.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ExportAsync_uses_evaluator_snapshots_for_concentration_only_and_combined_failures()
+    {
+        var templateDirectory = Path.Combine(_rootPath, "template-qc-evaluator-integration");
+        Directory.CreateDirectory(templateDirectory);
+        var templatePath = Path.Combine(templateDirectory, "template.xlsx");
+        CreateTemplateWorkbook(templatePath);
+
+        var exporter = new Query2WorkbookExporter(
+            Options.Create(new SchedulerOptions
+            {
+                ExcelExport = new SchedulerExcelExportOptions
+                {
+                    Enabled = true,
+                    TemplatePath = templatePath
+                }
+            }),
+            NullLogger<Query2WorkbookExporter>.Instance);
+        var rawConcentrationOnly = Row("RAW-1", "PORT 1", "LOT-CONC", acetone: 100m);
+        rawConcentrationOnly.SourceKind = "PORT";
+        rawConcentrationOnly.Description = "port 1 1050>950 #LOT-CONC";
+        var ppbConcentrationOnly = Row("ppb(6001)", "PORT 1", "LOT-CONC", acetone: 120m);
+        ppbConcentrationOnly.Si0Id = 6001;
+
+        var rawCombined = Row("RAW-2", "PORT 2", "LOT-COMBINED", acetone: 100m);
+        rawCombined.SourceKind = "PORT";
+        rawCombined.Description = "port 2 1049>950 #LOT-COMBINED";
+        var ppbCombined = Row("ppb(6002)", "PORT 2", "LOT-COMBINED", acetone: 120m);
+        ppbCombined.Si0Id = 6002;
+
+        var rows = new[]
+        {
+            new Query2ExportRow(Query2ExportRowType.Raw, rawConcentrationOnly),
+            new Query2ExportRow(Query2ExportRowType.Ppb, ppbConcentrationOnly),
+            new Query2ExportRow(Query2ExportRowType.Raw, rawCombined),
+            new Query2ExportRow(Query2ExportRowType.Ppb, ppbCombined)
+        };
+        var settings = new QcResultSettingsDto
+        {
+            PressureRules =
+            [
+                new QcPressureRuleDto(QcResultSettingRules.Container05, 1050m, 950m)
+            ],
+            ConcentrationRules =
+            [
+                new QcConcentrationRuleDto("Acetone", "Acetone", 1, 90m, 110m, 90m, 110m)
+            ]
+        };
+        var evaluation = new QcResultEvaluator().EvaluateExportRowsDetailed(rows, "RF-001", settings);
+
+        var content = await exporter.ExportAsync(
+            "20260603",
+            rows,
+            [],
+            settings,
+            evaluation.Snapshots,
+            CancellationToken.None);
+
+        using var workbook = new XLWorkbook(new MemoryStream(content!));
+        var qc = workbook.Worksheet("QC判定");
+
+        qc.Cell(2, 10).GetString().Should().Be(QcPressureResultValues.Pass);
+        qc.Cell(2, 11).GetString().Should().Be(QcResultValues.Fail);
+        qc.Cell(2, 12).GetString().Should().Be("Conc(Acetone)");
+        qc.Cell(2, 12).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFFF6969));
+
+        qc.Cell(3, 6).GetValue<decimal>().Should().Be(1049m);
+        qc.Cell(3, 6).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFFF6969));
+        qc.Cell(3, 10).GetString().Should().Be(QcPressureResultValues.Fail);
+        qc.Cell(3, 11).GetString().Should().Be(QcResultValues.Fail);
+        qc.Cell(3, 12).GetString().Should().Be("壓力不足; Conc(Acetone)");
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_rootPath))

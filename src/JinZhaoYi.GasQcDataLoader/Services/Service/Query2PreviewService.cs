@@ -4,11 +4,21 @@ using JinZhaoYi.GasQcDataLoader.Services.Interface;
 
 namespace JinZhaoYi.GasQcDataLoader.Services.Service;
 
-public sealed class Query2PreviewService(ICalculationService calculationService) : IQuery2PreviewService
+public sealed class Query2PreviewService(
+    ICalculationService calculationService,
+    IQcResultEvaluator? qcResultEvaluator = null) : IQuery2PreviewService
 {
     private const string AreaKind = "area";
     private const string PpbKind = "ppb";
     private const string RtKind = "rt";
+    private const string QcKind = "qc";
+    private const string QcIniPrsKey = "qc:iniPrs";
+    private const string QcIniPrsMinKey = "qc:iniPrsMin";
+    private const string QcFnlPrsKey = "qc:fnlPrs";
+    private const string QcFnlPrsMinKey = "qc:fnlPrsMin";
+    private const string QcPressureResultKey = "qc:pressureResult";
+    private const string QcResultKey = "qc:result";
+    private const string QcFailDescKey = "qc:failDesc";
     private const string AverageFormula = "average";
     private const string RpdFormula = "rpd";
     private const string QcFormula = "qc";
@@ -19,6 +29,21 @@ public sealed class Query2PreviewService(ICalculationService calculationService)
     private const string HiddenId1Key = "_id1";
     private const string HiddenId2Key = "_id2";
     private const NumberStyles DecimalNumberStyles = NumberStyles.Number | NumberStyles.AllowExponent;
+    private readonly IQcResultEvaluator _qcResultEvaluator = qcResultEvaluator ?? new QcResultEvaluator();
+
+    private static readonly (string Key, string Header, string DataType)[] QcColumnDefinitions =
+    [
+        (QcIniPrsKey, "QC_IniPrs", "decimal"),
+        (QcIniPrsMinKey, "QC_IniPrsMin", "decimal"),
+        (QcFnlPrsKey, "QC_FnlPrs", "decimal"),
+        (QcFnlPrsMinKey, "QC_FnlPrsMin", "decimal"),
+        (QcPressureResultKey, "QC_PressureResult", "text"),
+        (QcResultKey, "QC_Result", "text"),
+        (QcFailDescKey, "QC_FailDesc", "text")
+    ];
+
+    private static readonly string[] QcFieldKeys =
+        QcColumnDefinitions.Select(column => column.Key).ToArray();
 
     private static readonly Query2PreviewColumn[] BaseColumns =
     [
@@ -48,7 +73,8 @@ public sealed class Query2PreviewService(ICalculationService calculationService)
         IReadOnlyList<string> portRawIds,
         IReadOnlyList<Query2ExportRow> rows,
         IReadOnlyList<Query2DynamicAreaField> dynamicAreaFields,
-        IReadOnlyList<Query2DynamicAreaPortValue> dynamicAreaPortValues)
+        IReadOnlyList<Query2DynamicAreaPortValue> dynamicAreaPortValues,
+        QcResultSettingsDto? qcSettings = null)
     {
         var activeDynamicAreaFields = NormalizeDynamicAreaFields(dynamicAreaFields);
         var dynamicAreaValues = BuildDynamicAreaPortValueMap(dynamicAreaPortValues);
@@ -87,10 +113,21 @@ public sealed class Query2PreviewService(ICalculationService calculationService)
             Rows = previewRows
         };
 
-        return Recalculate(state);
+        var recalculated = Recalculate(state, qcSettings);
+        foreach (var row in recalculated.Rows)
+        {
+            foreach (var key in QcFieldKeys)
+            {
+                row.OriginalValues[key] = row.CurrentValues.GetValueOrDefault(key);
+            }
+        }
+
+        return recalculated;
     }
 
-    public Query2PreviewState Recalculate(Query2PreviewState preview)
+    public Query2PreviewState Recalculate(
+        Query2PreviewState preview,
+        QcResultSettingsDto? qcSettings = null)
     {
         var state = CloneState(preview);
         state.DynamicAreaFields = NormalizeDynamicAreaFields(state.DynamicAreaFields);
@@ -108,21 +145,140 @@ public sealed class Query2PreviewService(ICalculationService calculationService)
 
         ApplyFormulas(workingRows, state.DynamicAreaFields);
 
+        var exportRows = workingRows
+            .Select(workingRow => new Query2ExportRow(workingRow.Preview.RowType, workingRow.Row))
+            .ToArray();
+        var evaluation = _qcResultEvaluator.EvaluateExportRowsDetailed(
+            exportRows,
+            state.RfId,
+            qcSettings ?? new QcResultSettingsDto());
+        var snapshotIndex = 0;
+
         foreach (var workingRow in workingRows)
         {
-            workingRow.Preview.CurrentValues = BuildValueMap(new Query2ExportRow(workingRow.Preview.RowType, workingRow.Row), state.DynamicAreaFields);
+            var snapshot = workingRow.Preview.RowType == Query2ExportRowType.Ppb
+                ? evaluation.Snapshots[snapshotIndex++]
+                : null;
+            workingRow.Preview.CurrentValues = BuildValueMap(
+                new Query2ExportRow(workingRow.Preview.RowType, workingRow.Row),
+                state.DynamicAreaFields,
+                snapshot);
             workingRow.Preview.DisplayId = workingRow.Preview.CurrentValues.GetValueOrDefault("id");
         }
 
         return state;
     }
 
-    public IReadOnlyList<Query2ExportRow> ToExportRows(Query2PreviewState preview)
+    public Query2PreviewState RecalculateFromCanonical(
+        Query2PreviewState canonicalPreview,
+        Query2PreviewState submittedPreview,
+        QcResultSettingsDto? qcSettings = null)
     {
-        var state = Recalculate(preview);
+        var state = CloneState(canonicalPreview);
+        var canonicalRows = BuildUniqueRowMap(state.Rows, "Server preview");
+        var submittedRows = BuildUniqueRowMap(submittedPreview.Rows, "Submitted preview");
+
+        if (canonicalRows.Count != submittedRows.Count ||
+            canonicalRows.Keys.Any(rowKey => !submittedRows.ContainsKey(rowKey)))
+        {
+            throw new InvalidOperationException("Preview rows no longer match the server data. Reload the preview and try again.");
+        }
+
+        foreach (var (rowKey, canonicalRow) in canonicalRows)
+        {
+            var submittedRow = submittedRows[rowKey];
+            if (canonicalRow.RowType != submittedRow.RowType)
+            {
+                throw new InvalidOperationException($"Preview row '{rowKey}' has an invalid row type. Reload the preview and try again.");
+            }
+
+            if (!FormulasEqual(canonicalRow.Formula, submittedRow.Formula))
+            {
+                throw new InvalidOperationException($"Preview row '{rowKey}' has an invalid formula. Reload the preview and try again.");
+            }
+
+            if (submittedRow.ManualOverrides is null)
+            {
+                throw new InvalidOperationException($"Preview row '{rowKey}' has invalid manual overrides.");
+            }
+
+            canonicalRow.ManualOverrides = CopyUniqueManualOverrides(
+                submittedRow.ManualOverrides,
+                rowKey);
+        }
+
+        return Recalculate(state, qcSettings);
+    }
+
+    public IReadOnlyList<Query2ExportRow> ToExportRows(
+        Query2PreviewState preview,
+        QcResultSettingsDto? qcSettings = null)
+    {
+        var state = Recalculate(preview, qcSettings);
         return state.Rows
             .Select(row => new Query2ExportRow(row.RowType, ToDataRow(row.RowType, row.CurrentValues, state.DynamicAreaFields)))
             .ToArray();
+    }
+
+    private static IReadOnlyDictionary<string, Query2PreviewRow> BuildUniqueRowMap(
+        IReadOnlyList<Query2PreviewRow> rows,
+        string sourceName)
+    {
+        if (rows is null)
+        {
+            throw new InvalidOperationException($"{sourceName} rows are required.");
+        }
+
+        var result = new Dictionary<string, Query2PreviewRow>(StringComparer.OrdinalIgnoreCase);
+        foreach (var row in rows)
+        {
+            if (row is null)
+            {
+                throw new InvalidOperationException($"{sourceName} contains an invalid row.");
+            }
+
+            if (string.IsNullOrWhiteSpace(row.RowKey))
+            {
+                throw new InvalidOperationException($"{sourceName} contains a row without rowKey.");
+            }
+
+            if (!result.TryAdd(row.RowKey, row))
+            {
+                throw new InvalidOperationException($"{sourceName} contains duplicate rowKey '{row.RowKey}'.");
+            }
+        }
+
+        return result;
+    }
+
+    private static Dictionary<string, string?> CopyUniqueManualOverrides(
+        IReadOnlyDictionary<string, string?> manualOverrides,
+        string rowKey)
+    {
+        var result = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (fieldKey, value) in manualOverrides)
+        {
+            if (!result.TryAdd(fieldKey, value))
+            {
+                throw new InvalidOperationException($"Preview row '{rowKey}' contains duplicate manual field '{fieldKey}'.");
+            }
+        }
+
+        return result;
+    }
+
+    private static bool FormulasEqual(Query2PreviewFormula? first, Query2PreviewFormula? second)
+    {
+        if (first is null || second is null)
+        {
+            return first is null && second is null;
+        }
+
+        return string.Equals(first.Kind, second.Kind, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(first.StdAverageRowKey, second.StdAverageRowKey, StringComparison.OrdinalIgnoreCase) &&
+            first.SourceRowKeys is not null &&
+            second.SourceRowKeys is not null &&
+            first.SourceRowKeys.SequenceEqual(second.SourceRowKeys, StringComparer.OrdinalIgnoreCase);
     }
 
     public IReadOnlyList<Query2PreviewEditLogRow> BuildEditLogs(
@@ -680,6 +836,19 @@ public sealed class Query2PreviewService(ICalculationService calculationService)
             });
         }
 
+        foreach (var definition in QcColumnDefinitions)
+        {
+            columns.Add(new Query2PreviewColumn
+            {
+                Key = definition.Key,
+                Header = definition.Header,
+                Order = ++order,
+                Editable = false,
+                ValueKind = QcKind,
+                DataType = definition.DataType
+            });
+        }
+
         return columns;
     }
 
@@ -698,7 +867,8 @@ public sealed class Query2PreviewService(ICalculationService calculationService)
 
     private static Dictionary<string, string?> BuildValueMap(
         Query2ExportRow exportRow,
-        IReadOnlyList<Query2DynamicAreaField> dynamicAreaFields)
+        IReadOnlyList<Query2DynamicAreaField> dynamicAreaFields,
+        QcJudgmentSnapshot? qcSnapshot = null)
     {
         var row = exportRow.Row;
         var layoutValues = Query2ColumnLayout.BuildValues(exportRow);
@@ -744,6 +914,15 @@ public sealed class Query2PreviewService(ICalculationService calculationService)
         {
             values[FieldKey(AreaKind, field.FieldKey)] = FormatValue(row.Areas.GetValueOrDefault(field.FieldKey));
         }
+
+        var qc = exportRow.RowType == Query2ExportRowType.Ppb ? qcSnapshot : null;
+        values[QcIniPrsKey] = FormatValue(qc?.IniPrs);
+        values[QcIniPrsMinKey] = FormatValue(qc?.IniPrsMin);
+        values[QcFnlPrsKey] = FormatValue(qc?.FnlPrs);
+        values[QcFnlPrsMinKey] = FormatValue(qc?.FnlPrsMin);
+        values[QcPressureResultKey] = qc?.PressureResult;
+        values[QcResultKey] = qc?.Result;
+        values[QcFailDescKey] = qc?.FailDesc;
 
         return values;
     }
