@@ -399,7 +399,7 @@ public sealed class Query2WorkbookExporterTests : IDisposable
                 950m,
                 QcPressureResultValues.Fail,
                 QcResultValues.Fail,
-                "壓力不足",
+                "分析後壓力缺失：MIN 950",
                 false,
                 true),
             new QcJudgmentSnapshot(
@@ -458,7 +458,7 @@ public sealed class Query2WorkbookExporterTests : IDisposable
         qc.Cell(3, 8).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFFF6969));
         qc.Cell(3, 10).GetString().Should().Be(QcPressureResultValues.Fail);
         qc.Cell(3, 10).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFFF6969));
-        qc.Cell(3, 12).GetString().Should().Be("壓力不足");
+        qc.Cell(3, 12).GetString().Should().Be("分析後壓力缺失：MIN 950");
 
         qc.Cell(4, 7).IsEmpty().Should().BeTrue();
         qc.Cell(4, 7).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFFFF2CC));
@@ -532,14 +532,17 @@ public sealed class Query2WorkbookExporterTests : IDisposable
 
         qc.Cell(2, 10).GetString().Should().Be(QcPressureResultValues.Pass);
         qc.Cell(2, 11).GetString().Should().Be(QcResultValues.Fail);
-        qc.Cell(2, 12).GetString().Should().Be("Conc(Acetone)");
+        qc.Cell(2, 12).GetString().Should().Be(
+            "濃度高於 MAX：Acetone");
         qc.Cell(2, 12).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFFF6969));
 
         qc.Cell(3, 6).GetValue<decimal>().Should().Be(1049m);
         qc.Cell(3, 6).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFFF6969));
         qc.Cell(3, 10).GetString().Should().Be(QcPressureResultValues.Fail);
         qc.Cell(3, 11).GetString().Should().Be(QcResultValues.Fail);
-        qc.Cell(3, 12).GetString().Should().Be("壓力不足; Conc(Acetone)");
+        qc.Cell(3, 12).GetString().Should().Be(
+            "分析前壓力不足：1049 < MIN 1050; " +
+            "濃度高於 MAX：Acetone");
     }
 
     public void Dispose()

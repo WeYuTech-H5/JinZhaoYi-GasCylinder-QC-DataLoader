@@ -10,7 +10,6 @@ public sealed partial class QcResultEvaluator : IQcResultEvaluator
     private const string CalType = "Au";
     private const string QcComplete = "1";
     private const string QcInst = "QC-01";
-    private const string PressureFailDesc = "壓力不足";
 
     public QcJudgmentSnapshot EvaluateSnapshot(
         QcDataRow ppbRow,
@@ -111,7 +110,7 @@ public sealed partial class QcResultEvaluator : IQcResultEvaluator
         return warnings;
     }
 
-    private static IReadOnlyList<string> EvaluateConcentrations(
+    private static IReadOnlyList<ConcentrationFailure> EvaluateConcentrations(
         QcDataRow ppbRow,
         string? containerType,
         QcResultSettingsDto settings)
@@ -124,7 +123,7 @@ public sealed partial class QcResultEvaluator : IQcResultEvaluator
         var rules = settings.ConcentrationRules
             .Where(rule => rule.IsActive)
             .ToDictionary(rule => rule.AnalyteKey, StringComparer.OrdinalIgnoreCase);
-        var failed = new List<string>();
+        var failed = new List<ConcentrationFailure>();
 
         foreach (var analyte in CompoundMap.Analytes)
         {
@@ -142,16 +141,30 @@ public sealed partial class QcResultEvaluator : IQcResultEvaluator
                 continue;
             }
 
+            var analyteName = string.IsNullOrWhiteSpace(rule.AnalyteName)
+                ? analyte.QuantName
+                : rule.AnalyteName.Trim();
             if (!ppbRow.Areas.TryGetValue(analyte.Suffix, out var value) || !value.HasValue)
             {
-                failed.Add(rule.AnalyteName);
+                failed.Add(new ConcentrationFailure(
+                    analyteName,
+                    ConcentrationFailureKind.Missing));
                 continue;
             }
 
-            if ((min.HasValue && value.Value < min.Value) ||
-                (max.HasValue && value.Value > max.Value))
+            if (min.HasValue && value.Value < min.Value)
             {
-                failed.Add(rule.AnalyteName);
+                failed.Add(new ConcentrationFailure(
+                    analyteName,
+                    ConcentrationFailureKind.BelowMin));
+                continue;
+            }
+
+            if (max.HasValue && value.Value > max.Value)
+            {
+                failed.Add(new ConcentrationFailure(
+                    analyteName,
+                    ConcentrationFailureKind.AboveMax));
             }
         }
 
@@ -187,14 +200,12 @@ public sealed partial class QcResultEvaluator : IQcResultEvaluator
         var failedAnalytes = EvaluateConcentrations(ppbRow, containerType, settings);
         var failDescriptions = new List<string>();
 
-        if (pressureFailed)
-        {
-            failDescriptions.Add(PressureFailDesc);
-        }
+        AddPressureFailureDescription(failDescriptions, "分析前", pressureReading.IniPrs, iniPrsMin);
+        AddPressureFailureDescription(failDescriptions, "分析後", pressureReading.FnlPrs, fnlPrsMin);
 
         if (failedAnalytes.Count > 0)
         {
-            failDescriptions.Add($"Conc({string.Join(",", failedAnalytes)})");
+            AddConcentrationFailureDescriptions(failDescriptions, failedAnalytes);
         }
 
         var result = failDescriptions.Count > 0
@@ -226,6 +237,74 @@ public sealed partial class QcResultEvaluator : IQcResultEvaluator
 
     private static bool IsBelowRequiredMin(decimal? value, decimal? min) =>
         min.HasValue && (!value.HasValue || value.Value < min.Value);
+
+    private static void AddPressureFailureDescription(
+        ICollection<string> failDescriptions,
+        string stage,
+        decimal? value,
+        decimal? min)
+    {
+        if (!min.HasValue)
+        {
+            return;
+        }
+
+        if (!value.HasValue)
+        {
+            failDescriptions.Add($"{stage}壓力缺失：MIN {FormatDecimal(min.Value)}");
+            return;
+        }
+
+        if (value.Value < min.Value)
+        {
+            failDescriptions.Add(
+                $"{stage}壓力不足：{FormatDecimal(value.Value)} < MIN {FormatDecimal(min.Value)}");
+        }
+    }
+
+    private static void AddConcentrationFailureDescriptions(
+        ICollection<string> failDescriptions,
+        IReadOnlyList<ConcentrationFailure> failures)
+    {
+        var missing = failures
+            .Where(failure => failure.Kind == ConcentrationFailureKind.Missing)
+            .Select(failure => failure.AnalyteName)
+            .ToArray();
+        if (missing.Length > 0)
+        {
+            failDescriptions.Add($"濃度資料缺失：{string.Join("、", missing)}");
+        }
+
+        AddConcentrationLimitFailureDescription(
+            failDescriptions,
+            failures,
+            ConcentrationFailureKind.BelowMin,
+            "濃度低於 MIN");
+        AddConcentrationLimitFailureDescription(
+            failDescriptions,
+            failures,
+            ConcentrationFailureKind.AboveMax,
+            "濃度高於 MAX");
+    }
+
+    private static void AddConcentrationLimitFailureDescription(
+        ICollection<string> failDescriptions,
+        IReadOnlyList<ConcentrationFailure> failures,
+        ConcentrationFailureKind kind,
+        string label)
+    {
+        var details = failures
+            .Where(failure => failure.Kind == kind)
+            .Select(failure => failure.AnalyteName)
+            .ToArray();
+        if (details.Length > 0)
+        {
+            failDescriptions.Add($"{label}：{string.Join("、", details)}");
+        }
+    }
+
+    private static string FormatDecimal(decimal value) =>
+        value.ToString("G29", CultureInfo.InvariantCulture);
 
     private static MfgLotQcUpdate BuildUpdate(
         QcDataRow ppbRow,
@@ -466,6 +545,17 @@ public sealed partial class QcResultEvaluator : IQcResultEvaluator
     private sealed record EvaluationContext(
         QcJudgmentSnapshot Snapshot,
         QcPressureReading PressureReading);
+
+    private sealed record ConcentrationFailure(
+        string AnalyteName,
+        ConcentrationFailureKind Kind);
+
+    private enum ConcentrationFailureKind
+    {
+        Missing,
+        BelowMin,
+        AboveMax
+    }
 
     [GeneratedRegex(@"(?<![\d.])(?<ini>\d+(?:\.\d+)?)\s*>\s*(?<fnl>\d+(?:\.\d+)?)?", RegexOptions.Compiled)]
     private static partial Regex PressureArrowRegex();

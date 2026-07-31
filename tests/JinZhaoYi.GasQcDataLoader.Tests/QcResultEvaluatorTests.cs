@@ -18,7 +18,7 @@ public sealed class QcResultEvaluatorTests
 
         update.Should().NotBeNull();
         update!.Result.Should().Be(QcResultValues.Fail);
-        update.FailDesc.Should().Be("Conc(Acetone)");
+        update.FailDesc.Should().Be("濃度高於 MAX：Acetone");
         update.RfId.Should().Be("RF-001");
         update.ProdOrder.Should().Be("001");
         update.CalId.Should().Be("ppb(5900)");
@@ -35,9 +35,69 @@ public sealed class QcResultEvaluatorTests
 
         update.Should().NotBeNull();
         update!.Result.Should().Be(QcResultValues.Fail);
-        update.FailDesc.Should().Be("壓力不足");
+        update.FailDesc.Should().Be(
+            "分析前壓力不足：872 < MIN 900; 分析後壓力缺失：MIN 900");
         update.IniPrs.Should().Be("872");
         update.FnlPrs.Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData(null, "濃度資料缺失：Acetone")]
+    [InlineData(89.0, "濃度低於 MIN：Acetone")]
+    public void Evaluate_describes_missing_and_below_min_concentration_clearly(
+        double? acetone,
+        string expectedFailDesc)
+    {
+        var row = CreatePpbRow();
+        if (acetone.HasValue)
+        {
+            row.Areas["Acetone"] = (decimal)acetone.Value;
+        }
+
+        var update = _evaluator.Evaluate(
+            row,
+            [CreateRawRow("port 1 1000>950 #20260615001")],
+            new QcDataRow { Id = "RF-001" },
+            CreateSettings());
+
+        update.Should().NotBeNull();
+        update!.Result.Should().Be(QcResultValues.Fail);
+        update.FailDesc.Should().Be(expectedFailDesc);
+    }
+
+    [Fact]
+    public void Evaluate_lists_multiple_missing_concentrations_in_compound_order()
+    {
+        var row = CreatePpbRow();
+        var settings = new QcResultSettingsDto
+        {
+            PressureRules =
+            [
+                new QcPressureRuleDto(QcResultSettingRules.Container05, 900m, 900m)
+            ],
+            ConcentrationRules =
+            [
+                new QcConcentrationRuleDto(
+                    "Chlorobenzene-D5",
+                    "Chlorobenzene-D5",
+                    1,
+                    0m,
+                    100m,
+                    0m,
+                    100m),
+                new QcConcentrationRuleDto("HCBD", "HCBD", 2, 0m, 100m, 0m, 100m)
+            ]
+        };
+
+        var update = _evaluator.Evaluate(
+            row,
+            [CreateRawRow("port 1 1000>950 #20260615001")],
+            new QcDataRow { Id = "RF-001" },
+            settings);
+
+        update.Should().NotBeNull();
+        update!.FailDesc.Should().Be(
+            "濃度資料缺失：Chlorobenzene-D5、HCBD");
     }
 
     [Fact]
@@ -109,14 +169,31 @@ public sealed class QcResultEvaluatorTests
     }
 
     [Theory]
-    [InlineData("1049.9999>950", true, false)]
-    [InlineData("1050>949.9999", false, true)]
-    [InlineData("1050>", false, true)]
-    [InlineData("", true, true)]
+    [InlineData(
+        "1049.9999>950",
+        true,
+        false,
+        "分析前壓力不足：1049.9999 < MIN 1050")]
+    [InlineData(
+        "1050>949.9999",
+        false,
+        true,
+        "分析後壓力不足：949.9999 < MIN 950")]
+    [InlineData(
+        "1050>",
+        false,
+        true,
+        "分析後壓力缺失：MIN 950")]
+    [InlineData(
+        "",
+        true,
+        true,
+        "分析前壓力缺失：MIN 1050; 分析後壓力缺失：MIN 950")]
     public void EvaluateSnapshot_marks_below_or_missing_required_pressure_as_fail(
         string pressureText,
         bool expectedIniFailed,
-        bool expectedFnlFailed)
+        bool expectedFnlFailed,
+        string expectedFailDesc)
     {
         var row = CreatePpbRow();
         var rawRows = string.IsNullOrWhiteSpace(pressureText)
@@ -129,17 +206,30 @@ public sealed class QcResultEvaluatorTests
         snapshot.FnlPrsFailed.Should().Be(expectedFnlFailed);
         snapshot.PressureResult.Should().Be(QcPressureResultValues.Fail);
         snapshot.Result.Should().Be(QcResultValues.Fail);
-        snapshot.FailDesc.Should().Be("壓力不足");
+        snapshot.FailDesc.Should().Be(expectedFailDesc);
     }
 
     [Theory]
-    [InlineData("1049>1000", true, false)]
-    [InlineData("1050>999", false, true)]
-    [InlineData("1050>", false, true)]
+    [InlineData(
+        "1049>1000",
+        true,
+        false,
+        "分析前壓力不足：1049 < MIN 1050")]
+    [InlineData(
+        "1050>999",
+        false,
+        true,
+        "分析後壓力不足：999 < MIN 1000")]
+    [InlineData(
+        "1050>",
+        false,
+        true,
+        "分析後壓力缺失：MIN 1000")]
     public void EvaluateSnapshot_applies_1l_pressure_thresholds(
         string pressureText,
         bool expectedIniFailed,
-        bool expectedFnlFailed)
+        bool expectedFnlFailed,
+        string expectedFailDesc)
     {
         var row = CreatePpbRow();
         row.Container = "1L_Cylinder";
@@ -153,7 +243,7 @@ public sealed class QcResultEvaluatorTests
         snapshot.FnlPrsFailed.Should().Be(expectedFnlFailed);
         snapshot.PressureResult.Should().Be(QcPressureResultValues.Fail);
         snapshot.Result.Should().Be(QcResultValues.Fail);
-        snapshot.FailDesc.Should().Be("壓力不足");
+        snapshot.FailDesc.Should().Be(expectedFailDesc);
     }
 
     [Theory]
@@ -226,7 +316,8 @@ public sealed class QcResultEvaluatorTests
         passingConfiguredThreshold.Result.Should().Be(QcResultValues.Unknown);
         failingConfiguredThreshold.PressureResult.Should().Be(QcPressureResultValues.Fail);
         failingConfiguredThreshold.Result.Should().Be(QcResultValues.Fail);
-        failingConfiguredThreshold.FailDesc.Should().Be("壓力不足");
+        failingConfiguredThreshold.FailDesc.Should().Be(
+            "分析前壓力不足：1049 < MIN 1050");
     }
 
     [Fact]
@@ -242,7 +333,10 @@ public sealed class QcResultEvaluatorTests
 
         snapshot.PressureResult.Should().Be(QcPressureResultValues.Fail);
         snapshot.Result.Should().Be(QcResultValues.Fail);
-        snapshot.FailDesc.Should().Be("壓力不足; Conc(Acetone)");
+        snapshot.FailDesc.Should().Be(
+            "分析前壓力不足：899 < MIN 900; " +
+            "分析後壓力不足：899 < MIN 900; " +
+            "濃度高於 MAX：Acetone");
     }
 
     [Fact]

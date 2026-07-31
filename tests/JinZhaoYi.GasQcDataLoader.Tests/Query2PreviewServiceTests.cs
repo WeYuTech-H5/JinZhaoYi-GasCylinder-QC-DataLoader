@@ -143,7 +143,8 @@ public sealed class Query2PreviewServiceTests
         ppb.CurrentValues[QcFnlPrsMinKey].Should().Be("950");
         ppb.CurrentValues[QcPressureResultKey].Should().Be(QcPressureResultValues.Fail);
         ppb.CurrentValues[QcResultKey].Should().Be(QcResultValues.Fail);
-        ppb.CurrentValues[QcFailDescKey].Should().Be("壓力不足");
+        ppb.CurrentValues[QcFailDescKey].Should().Be(
+            "分析後壓力不足：949 < MIN 950");
     }
 
     [Fact]
@@ -164,7 +165,8 @@ public sealed class Query2PreviewServiceTests
         recalculatedPpb.CurrentValues[QcIniPrsMinKey].Should().Be("1050");
         recalculatedPpb.CurrentValues[QcPressureResultKey].Should().Be(QcPressureResultValues.Fail);
         recalculatedPpb.CurrentValues[QcResultKey].Should().Be(QcResultValues.Fail);
-        recalculatedPpb.CurrentValues[QcFailDescKey].Should().Be("壓力不足");
+        recalculatedPpb.CurrentValues[QcFailDescKey].Should().Be(
+            "分析後壓力不足：949 < MIN 950");
     }
 
     [Fact]
@@ -330,7 +332,8 @@ public sealed class Query2PreviewServiceTests
         var recalculatedPpb = recalculated.Rows.Single(row => row.RowType == Query2ExportRowType.Ppb);
         recalculatedPpb.CurrentValues[QcPressureResultKey].Should().Be(QcPressureResultValues.Pass);
         recalculatedPpb.CurrentValues[QcResultKey].Should().Be(QcResultValues.Fail);
-        recalculatedPpb.CurrentValues[QcFailDescKey].Should().Be("Conc(Acetone)");
+        recalculatedPpb.CurrentValues[QcFailDescKey].Should().Be(
+            "濃度高於 MAX：Acetone");
     }
 
     [Fact]
