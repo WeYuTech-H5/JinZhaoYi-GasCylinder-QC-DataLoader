@@ -4,10 +4,12 @@ using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Spreadsheet;
 using FluentAssertions;
 using System.Diagnostics;
+using System.Dynamic;
 using System.Reflection;
 using System.Security.Cryptography;
 using JinZhaoYi.GasQcDataLoader.Configuration;
 using JinZhaoYi.GasQcDataLoader.DataModels;
+using JinZhaoYi.GasQcDataLoader.Services.Infrastructure;
 using JinZhaoYi.GasQcDataLoader.Services.Interface;
 using JinZhaoYi.GasQcDataLoader.Services.Service;
 using Microsoft.Extensions.Options;
@@ -41,7 +43,7 @@ public sealed class CoaWorkbookExporterTests
         workbook.Worksheet("COA_STD-N050").Cell("B10").GetString().Should().Be("NF-SEMI STD");
         workbook.Worksheet("COA_STD-L100").Cell("B10").GetString().Should().Be("STD Gas PC for Semiconductor");
         workbook.Worksheet("COA_STD-N050").Cell("B11").GetString().Should().Be("PG000-0006");
-        workbook.Worksheet("COA_STD-L100").Cell("B11").GetString().Should().Be("PG000-0100");
+        workbook.Worksheet("COA_STD-L100").Cell("B11").GetString().Should().Be("PG000-0010");
         workbook.Worksheet("COA_STD-N050").Cell("B12").GetString().Should().Be("2026/05/21");
         workbook.Worksheet("COA_STD-N050").Cell("B13").GetString().Should().Be("2026/09/15");
         workbook.Worksheet("COA_STD-L100").Cell("B12").GetString().Should().Be("2026/05/21");
@@ -66,7 +68,7 @@ public sealed class CoaWorkbookExporterTests
     [InlineData("AZ-001", "PG000-0006")]
     [InlineData("TSMC-012", "PG000-0016")]
     [InlineData("VSMC-001", "PG000-0010")]
-    [InlineData("STD-L007", "PG000-0100")]
+    [InlineData("STD-L007", "PG000-0010")]
     public void ExportLargeForDownload_uses_sample_name_prefix_for_product_number(string sampleName, string expectedProductNumber)
     {
         var exporter = CreateExporter();
@@ -238,6 +240,29 @@ public sealed class CoaWorkbookExporterTests
         firstSheet.Cell("K19").GetString().Should().Be("母瓶 NO.  BOMB1-002");
         firstSheet.Cell("F19").GetString().Should().Be("QC: 2026/05/21");
         firstSheet.Cell("B20").GetString().Should().Contain("2027/05/20");
+    }
+
+    [Fact]
+    public void ExportSmallForDownload_uses_parent_expiration_after_mfg_container_fallback()
+    {
+        dynamic historyRecord = new ExpandoObject();
+        var values = (IDictionary<string, object?>)historyRecord;
+        values["AnlzTime"] = new DateTime(2026, 7, 22, 10, 0, 0);
+        values["LotNo"] = "CC-526369";
+        values["SampleName"] = "TSMC-005";
+        values["SampleNo"] = 1;
+        values["Container"] = " ";
+        values["MfgContainer"] = "0.5L_Cylinder";
+        values["ParentExpirationDate"] = new DateTime(2027, 5, 31);
+        var row = DapperRepository.DynamicToQcDataRow(historyRecord);
+        var exporter = CreateExporter();
+
+        var download = exporter.ExportSmallForDownload([row], "20260722", 9);
+
+        using var workbook = Open(download);
+        var expirationText = workbook.Worksheets.Single().Cell("B20").GetString();
+        expirationText.Should().EndWith("2027/05/31");
+        expirationText.Should().NotContain("2027/07/21");
     }
 
     [Fact]

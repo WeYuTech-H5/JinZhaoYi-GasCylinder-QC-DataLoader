@@ -241,6 +241,49 @@ public sealed class DapperRepository(
           AND CAST(AnlzTime AS date) <= @EndDate
         """;
 
+    private const string RawRowsByDateWithMfgContainerSqlFormat = """
+        SELECT
+            rows.*,
+            mfg.Container AS MfgContainer
+        FROM dbo.{0} rows
+        OUTER APPLY
+        (
+            SELECT TOP (1)
+                lot.Container
+            FROM dbo.{1} lot
+            WHERE (rows.LotNo IS NOT NULL AND lot.LotNo = rows.LotNo)
+               OR (rows.si0_id IS NOT NULL AND TRY_CONVERT(int, lot.si0_id) = rows.si0_id)
+            ORDER BY
+                CASE WHEN rows.LotNo IS NOT NULL AND lot.LotNo = rows.LotNo THEN 0 ELSE 1 END,
+                lot.EDIT_TIME DESC,
+                lot.CREATE_TIME DESC,
+                lot.ID DESC
+        ) mfg
+        WHERE CAST(rows.AnlzTime AS date) = @BatchDate
+        """;
+
+    private const string RawRowsByDateRangeWithMfgContainerSqlFormat = """
+        SELECT
+            rows.*,
+            mfg.Container AS MfgContainer
+        FROM dbo.{0} rows
+        OUTER APPLY
+        (
+            SELECT TOP (1)
+                lot.Container
+            FROM dbo.{1} lot
+            WHERE (rows.LotNo IS NOT NULL AND lot.LotNo = rows.LotNo)
+               OR (rows.si0_id IS NOT NULL AND TRY_CONVERT(int, lot.si0_id) = rows.si0_id)
+            ORDER BY
+                CASE WHEN rows.LotNo IS NOT NULL AND lot.LotNo = rows.LotNo THEN 0 ELSE 1 END,
+                lot.EDIT_TIME DESC,
+                lot.CREATE_TIME DESC,
+                lot.ID DESC
+        ) mfg
+        WHERE CAST(rows.AnlzTime AS date) >= @StartDate
+          AND CAST(rows.AnlzTime AS date) <= @EndDate
+        """;
+
     private const string PortPpbGroupCountSqlFormat = """
         SELECT COUNT(1)
         FROM (
@@ -355,6 +398,7 @@ public sealed class DapperRepository(
             mfg.Prod_Bomb1_LotNo AS ProdBomb1LotNo,
             mfg.Result AS [Result],
             mfg.FailDesc AS [FailDesc],
+            mfg.Container AS MfgContainer,
             parent.ExpirationDate AS ParentExpirationDate
         FROM dbo.{0} rows
         OUTER APPLY
@@ -362,7 +406,8 @@ public sealed class DapperRepository(
             SELECT TOP (1)
                 lot.Prod_Bomb1_LotNo,
                 lot.Result,
-                lot.FailDesc
+                lot.FailDesc,
+                lot.Container
             FROM dbo.{1} lot
             WHERE lot.LotNo = rows.LotNo
                OR TRY_CONVERT(int, lot.si0_id) = rows.si0_id
@@ -2313,8 +2358,8 @@ public sealed class DapperRepository(
     private async Task<IReadOnlyList<QcDataRow>> GetRawRowsByDateAsync(DateTime batchDate, CancellationToken cancellationToken)
     {
         var rows = new List<QcDataRow>();
-        rows.AddRange(await GetRowsByDateAsync(_tables.StdRaw, batchDate, cancellationToken));
-        rows.AddRange(await GetRowsByDateAsync(_tables.PortRaw, batchDate, cancellationToken));
+        rows.AddRange(await GetRawRowsByDateFromTableAsync(_tables.StdRaw, batchDate, cancellationToken));
+        rows.AddRange(await GetRawRowsByDateFromTableAsync(_tables.PortRaw, batchDate, cancellationToken));
         return rows;
     }
 
@@ -2324,9 +2369,48 @@ public sealed class DapperRepository(
         CancellationToken cancellationToken)
     {
         var rows = new List<QcDataRow>();
-        rows.AddRange(await GetRowsByDateRangeAsync(_tables.StdRaw, startDate, endDate, cancellationToken));
-        rows.AddRange(await GetRowsByDateRangeAsync(_tables.PortRaw, startDate, endDate, cancellationToken));
+        rows.AddRange(await GetRawRowsByDateRangeFromTableAsync(_tables.StdRaw, startDate, endDate, cancellationToken));
+        rows.AddRange(await GetRawRowsByDateRangeFromTableAsync(_tables.PortRaw, startDate, endDate, cancellationToken));
         return rows;
+    }
+
+    private async Task<IReadOnlyList<QcDataRow>> GetRawRowsByDateFromTableAsync(
+        string tableName,
+        DateTime batchDate,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
+        var sql = string.Format(
+            RawRowsByDateWithMfgContainerSqlFormat,
+            Quote(tableName),
+            Quote(_tables.MfgLot));
+        var rows = await connection.QueryAsync(
+            new CommandDefinition(
+                sql,
+                new { BatchDate = batchDate.Date },
+                cancellationToken: cancellationToken));
+
+        return rows.Select(DynamicToQcDataRow).ToArray();
+    }
+
+    private async Task<IReadOnlyList<QcDataRow>> GetRawRowsByDateRangeFromTableAsync(
+        string tableName,
+        DateTime startDate,
+        DateTime endDate,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
+        var sql = string.Format(
+            RawRowsByDateRangeWithMfgContainerSqlFormat,
+            Quote(tableName),
+            Quote(_tables.MfgLot));
+        var rows = await connection.QueryAsync(
+            new CommandDefinition(
+                sql,
+                new { StartDate = startDate.Date, EndDate = endDate.Date },
+                cancellationToken: cancellationToken));
+
+        return rows.Select(DynamicToQcDataRow).ToArray();
     }
 
     private async Task<IReadOnlyList<QcDataRow>> GetRowsByDateAsync(
@@ -2991,7 +3075,7 @@ public sealed class DapperRepository(
         return values;
     }
 
-    private static QcDataRow DynamicToQcDataRow(dynamic row)
+    internal static QcDataRow DynamicToQcDataRow(dynamic row)
     {
         var dictionary = (IDictionary<string, object?>)row;
         var result = new QcDataRow
@@ -3009,7 +3093,9 @@ public sealed class DapperRepository(
             DataFilename = ReadString(dictionary, "DataFilename"),
             DataFilepath = ReadString(dictionary, "DataFilepath"),
             PcName = ReadString(dictionary, "PCName"),
-            Container = ReadString(dictionary, "Container"),
+            Container = ResolveContainer(
+                ReadString(dictionary, "Container"),
+                ReadString(dictionary, "MfgContainer")),
             Description = ReadString(dictionary, "Description"),
             EmVolts = ReadString(dictionary, "EMVolts"),
             RelativeEm = ReadString(dictionary, "RelativeEM"),
@@ -3046,6 +3132,9 @@ public sealed class DapperRepository(
 
         return result;
     }
+
+    private static string? ResolveContainer(string? rowContainer, string? mfgContainer) =>
+        NormalizeOptionalText(rowContainer) ?? NormalizeOptionalText(mfgContainer);
 
     private static StdCylinderSummaryRow DynamicToStdCylinderSummaryRow(dynamic row)
     {

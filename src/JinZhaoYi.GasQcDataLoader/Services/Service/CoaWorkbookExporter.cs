@@ -314,8 +314,8 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
     private static string ResolveLargeProductNumber(string? sampleName)
     {
         var value = sampleName?.Trim() ?? string.Empty;
-        // Product Number follows the COA rule image and later correction:
-        // STD-N/STD-T/AZ => PG000-0006, TSMC => PG000-0016, VSMC => PG000-0010, STD-L => PG000-0100.
+        // Product Number follows the COA mapping confirmed by the requirements:
+        // STD-N/STD-T/AZ => PG000-0006, TSMC => PG000-0016, VSMC/STD-L => PG000-0010.
         if (StartsWithAny(value, "STD-N", "STD-T", "AZ"))
         {
             return "PG000-0006";
@@ -326,14 +326,9 @@ public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : IC
             return "PG000-0016";
         }
 
-        if (StartsWithAny(value, "VSMC"))
+        if (StartsWithAny(value, "VSMC", "STD-L"))
         {
             return "PG000-0010";
-        }
-
-        if (StartsWithAny(value, "STD-L"))
-        {
-            return "PG000-0100";
         }
 
         return string.Empty;
