@@ -76,6 +76,10 @@ public sealed class Query2SelectionExportBuilder(
             if (portStdAverage is not null)
             {
                 var ppb = calculationService.CreatePortPpbRow($"ppb({average.Si0Id})", average, rf, portStdAverage);
+                // QC 壓力判定固定使用同一 Lot／Port 最早一筆 Raw。
+                // PPB 是衍生列，讓其 Description 使用相同來源，避免畫面顯示末筆缺值，
+                // 但 QC 判定實際上讀到首筆完整壓力的矛盾；每筆 Raw 原文仍保持不變。
+                ppb.Description = ResolveQcPressureDescription(displayPortRawRows, ppb);
                 exportRows.Add(new Query2ExportRow(Query2ExportRowType.Ppb, ppb));
             }
             else
@@ -169,6 +173,15 @@ public sealed class Query2SelectionExportBuilder(
             .ThenBy(row => row.SampleNo)
             .ThenBy(row => row.SourceFolderName, StringComparer.OrdinalIgnoreCase)
             .ThenBy(row => row.DataFilename, StringComparer.OrdinalIgnoreCase);
+
+    private static string? ResolveQcPressureDescription(
+        IEnumerable<QcDataRow> portRawRows,
+        QcDataRow ppbRow) =>
+        OrderRows(portRawRows.Where(row =>
+                string.Equals(row.LotNo, ppbRow.LotNo, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(row.Port, ppbRow.Port, StringComparison.OrdinalIgnoreCase)))
+            .FirstOrDefault()
+            ?.Description ?? ppbRow.Description;
 
     private static (QcDataRow First, QcDataRow Second) LastTwo(IReadOnlyList<QcDataRow> rows) =>
         (rows[^2], rows[^1]);

@@ -133,6 +133,79 @@ public sealed class Query2SelectionExportBuilderTests
             .Equal(5m, 20m);
     }
 
+    [Fact]
+    public void BuildRows_uses_earliest_raw_description_for_ppb_without_changing_raw_descriptions()
+    {
+        var builder = new Query2SelectionExportBuilder(
+            new CalculationService(),
+            NullLogger<Query2SelectionExportBuilder>.Instance);
+        var rf = Row("RF,ppb(6514)", "STD", "RFLOT", 903, new DateTime(2026, 6, 1), sourceKind: "Rf", acetone: 10m);
+        var stdRows = new[]
+        {
+            Row("STD1", "STD", "20260601001", 904, new DateTime(2026, 7, 1, 1, 0, 0), sourceKind: "Std", acetone: 100m),
+            Row("STD2", "STD", "20260601001", 904, new DateTime(2026, 7, 1, 1, 15, 0), sourceKind: "Std", acetone: 100m),
+            Row("STD3", "STD", "20260601001", 904, new DateTime(2026, 7, 1, 3, 0, 0), sourceKind: "Std", acetone: 100m),
+            Row("STD4", "STD", "20260601001", 904, new DateTime(2026, 7, 1, 3, 15, 0), sourceKind: "Std", acetone: 100m)
+        };
+        const string completePressure = "port 12  008  1089>1032  #20260629008";
+        const string missingFinalPressure = "port 12  008  1089>  #20260629008";
+        const string laterSegmentMissingFinalPressure = "port 12  008  1088>  #20260629008";
+        var portRows = new[]
+        {
+            Row(
+                "PORT1",
+                "PORT 12",
+                "20260629008",
+                8,
+                new DateTime(2026, 7, 1, 2, 25, 0),
+                sourceKind: "Port",
+                acetone: 100m,
+                description: completePressure),
+            Row(
+                "PORT2",
+                "PORT 12",
+                "20260629008",
+                8,
+                new DateTime(2026, 7, 1, 2, 40, 0),
+                sourceKind: "Port",
+                acetone: 100m,
+                description: missingFinalPressure),
+            Row(
+                "PORT3",
+                "PORT 12",
+                "20260629008",
+                8,
+                new DateTime(2026, 7, 1, 4, 0, 0),
+                sourceKind: "Port",
+                acetone: 100m,
+                description: laterSegmentMissingFinalPressure),
+            Row(
+                "PORT4",
+                "PORT 12",
+                "20260629008",
+                8,
+                new DateTime(2026, 7, 1, 4, 15, 0),
+                sourceKind: "Port",
+                acetone: 100m,
+                description: laterSegmentMissingFinalPressure)
+        };
+
+        var rows = builder.BuildRows(rf, stdRows, portRows.Reverse().ToArray());
+
+        rows.Where(row => row.RowType == Query2ExportRowType.Raw && row.Row.Port == "PORT 12")
+            .Select(row => row.Row.Description)
+            .Should()
+            .Equal(
+                completePressure,
+                missingFinalPressure,
+                laterSegmentMissingFinalPressure,
+                laterSegmentMissingFinalPressure);
+        rows.Where(row => row.RowType == Query2ExportRowType.Ppb)
+            .Select(row => row.Row.Description)
+            .Should()
+            .Equal(completePressure, completePressure);
+    }
+
     private static QcDataRow Row(
         string id,
         string port,
@@ -140,7 +213,8 @@ public sealed class Query2SelectionExportBuilderTests
         int sampleNo,
         DateTime anlzTime,
         string sourceKind,
-        decimal acetone)
+        decimal acetone,
+        string? description = null)
     {
         var row = new QcDataRow
         {
@@ -153,7 +227,8 @@ public sealed class Query2SelectionExportBuilderTests
             SourceFolderName = $"{port}[{anlzTime:yyyyMMdd HHmm}]_{sampleNo:000}.D",
             DataFilename = "Quant.txt",
             SampleName = $"{port}-{sampleNo:000}",
-            Si0Id = sampleNo
+            Si0Id = sampleNo,
+            Description = description
         };
         row.Areas["Acetone"] = acetone;
         return row;

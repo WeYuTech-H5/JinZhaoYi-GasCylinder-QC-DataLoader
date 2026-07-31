@@ -18,10 +18,12 @@ public sealed class Query2WorkbookExporter(
     private const int BaseColumnCount = 16;
     private static readonly XLColor WithinRangeFill = XLColor.FromHtml("#E2EFDA");
     private static readonly XLColor OutOfRangeFill = XLColor.FromHtml("#FF6969");
-    private static readonly XLColor QcHeaderFill = XLColor.FromHtml("#1E40AF");
-    private static readonly XLColor QcNotEvaluatedFill = XLColor.FromHtml("#FFF2CC");
-    private static readonly XLColor QcRuleFill = XLColor.FromHtml("#DBEAFE");
-    private static readonly XLColor QcBorderColor = XLColor.FromHtml("#B8C4D6");
+    private static readonly XLColor QcHeaderFill = XLColor.FromHtml("#F2F4F7");
+    private static readonly XLColor QcHeaderFont = XLColor.FromHtml("#344054");
+    private static readonly XLColor QcFailureFill = XLColor.FromHtml("#FDECEC");
+    private static readonly XLColor QcFailureFont = XLColor.FromHtml("#B42318");
+    private static readonly XLColor QcMutedFont = XLColor.FromHtml("#667085");
+    private static readonly XLColor QcBorderColor = XLColor.FromHtml("#D0D5DD");
     private static readonly string[] QcJudgmentHeaders =
     [
         "PPB ID",
@@ -246,7 +248,7 @@ public sealed class Query2WorkbookExporter(
 
         var headerRange = worksheet.Range(1, 1, 1, QcJudgmentHeaders.Length);
         headerRange.Style.Fill.BackgroundColor = QcHeaderFill;
-        headerRange.Style.Font.FontColor = XLColor.White;
+        headerRange.Style.Font.FontColor = QcHeaderFont;
         headerRange.Style.Font.Bold = true;
         headerRange.Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Center;
         headerRange.Style.Alignment.Vertical = XLAlignmentVerticalValues.Center;
@@ -273,22 +275,21 @@ public sealed class Query2WorkbookExporter(
             worksheet.Cell(rowNumber, 11).Value = judgment.Result;
             WriteOptionalText(worksheet.Cell(rowNumber, 12), judgment.FailDesc);
 
-            ApplyPressureValueFill(
+            ApplyPressureValueStyle(
                 worksheet.Cell(rowNumber, 6),
                 worksheet.Cell(rowNumber, 7),
                 judgment.IniPrsMin,
                 judgment.IniPrsFailed);
-            ApplyPressureValueFill(
+            ApplyPressureValueStyle(
                 worksheet.Cell(rowNumber, 8),
                 worksheet.Cell(rowNumber, 9),
                 judgment.FnlPrsMin,
                 judgment.FnlPrsFailed);
-            ApplyQcStatusFill(worksheet.Cell(rowNumber, 10), judgment.PressureResult);
-            ApplyQcStatusFill(worksheet.Cell(rowNumber, 11), judgment.Result);
+            ApplyQcStatusStyle(worksheet.Cell(rowNumber, 10), judgment.PressureResult);
+            ApplyQcStatusStyle(worksheet.Cell(rowNumber, 11), judgment.Result);
             if (!string.IsNullOrWhiteSpace(judgment.FailDesc))
             {
-                worksheet.Cell(rowNumber, 12).Style.Fill.BackgroundColor = OutOfRangeFill;
-                worksheet.Cell(rowNumber, 12).Style.Font.Bold = true;
+                worksheet.Cell(rowNumber, 12).Style.Font.FontColor = QcFailureFont;
             }
 
             rowNumber++;
@@ -332,7 +333,7 @@ public sealed class Query2WorkbookExporter(
         }
     }
 
-    private static void ApplyPressureValueFill(
+    private static void ApplyPressureValueStyle(
         IXLCell valueCell,
         IXLCell minCell,
         decimal? min,
@@ -340,28 +341,33 @@ public sealed class Query2WorkbookExporter(
     {
         if (!min.HasValue)
         {
-            valueCell.Style.Fill.BackgroundColor = QcNotEvaluatedFill;
-            minCell.Style.Fill.BackgroundColor = QcNotEvaluatedFill;
+            valueCell.Style.Font.FontColor = QcMutedFont;
+            minCell.Style.Font.FontColor = QcMutedFont;
             return;
         }
 
-        valueCell.Style.Fill.BackgroundColor = failed ? OutOfRangeFill : WithinRangeFill;
-        minCell.Style.Fill.BackgroundColor = QcRuleFill;
         if (failed)
         {
+            valueCell.Style.Fill.BackgroundColor = QcFailureFill;
+            valueCell.Style.Font.FontColor = QcFailureFont;
             valueCell.Style.Font.Bold = true;
         }
     }
 
-    private static void ApplyQcStatusFill(IXLCell cell, string status)
+    private static void ApplyQcStatusStyle(IXLCell cell, string status)
     {
-        cell.Style.Fill.BackgroundColor = string.Equals(status, QcResultValues.Fail, StringComparison.OrdinalIgnoreCase)
-            ? OutOfRangeFill
-            : string.Equals(status, QcResultValues.Pass, StringComparison.OrdinalIgnoreCase)
-                ? WithinRangeFill
-                : QcNotEvaluatedFill;
-        cell.Style.Font.Bold = true;
         cell.Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Center;
+        if (string.Equals(status, QcResultValues.Fail, StringComparison.OrdinalIgnoreCase))
+        {
+            cell.Style.Font.FontColor = QcFailureFont;
+            cell.Style.Font.Bold = true;
+            return;
+        }
+
+        if (!string.Equals(status, QcResultValues.Pass, StringComparison.OrdinalIgnoreCase))
+        {
+            cell.Style.Font.FontColor = QcMutedFont;
+        }
     }
 
     private static void ApplyDynamicAreaColumns(
@@ -650,14 +656,16 @@ public sealed class Query2WorkbookExporter(
                 continue;
             }
 
-            if (ClassifyRow(worksheet.Cell(rowNumber, 1).GetString()) == Query2ExportRowType.Ppb)
+            var rowType = ClassifyRow(worksheet.Cell(rowNumber, 1).GetString());
+            if (rowType == Query2ExportRowType.Ppb)
             {
                 ApplyConfiguredRangeFills(
                     worksheet,
                     rowNumber,
                     FirstAreaColumn,
                     qcSettings,
-                    containerType);
+                    containerType,
+                    markMissingAsFailure: true);
             }
 
             ApplyConfiguredRangeFills(
@@ -665,7 +673,8 @@ public sealed class Query2WorkbookExporter(
                 rowNumber,
                 ResolveFirstPpbColumn(dynamicAreaCount),
                 qcSettings,
-                containerType);
+                containerType,
+                markMissingAsFailure: rowType == Query2ExportRowType.Ppb);
         }
     }
 
@@ -674,7 +683,8 @@ public sealed class Query2WorkbookExporter(
         int rowNumber,
         int firstColumn,
         QcResultSettingsDto qcSettings,
-        string containerType)
+        string containerType,
+        bool markMissingAsFailure)
     {
         for (var index = 0; index < CompoundMap.Analytes.Count; index++)
         {
@@ -687,6 +697,11 @@ public sealed class Query2WorkbookExporter(
             var cell = worksheet.Cell(rowNumber, firstColumn + index);
             if (!TryGetDecimal(cell, out var value))
             {
+                if (markMissingAsFailure)
+                {
+                    cell.Style.Fill.BackgroundColor = OutOfRangeFill;
+                }
+
                 continue;
             }
 

@@ -339,6 +339,54 @@ public sealed class Query2WorkbookExporterTests : IDisposable
     }
 
     [Fact]
+    public async Task ExportAsync_marks_missing_configured_ppb_concentration_cells_red()
+    {
+        var templateDirectory = Path.Combine(_rootPath, "template-qc-missing-concentration");
+        Directory.CreateDirectory(templateDirectory);
+        var templatePath = Path.Combine(templateDirectory, "template.xlsx");
+        CreateTemplateWorkbook(templatePath);
+        var exporter = new Query2WorkbookExporter(
+            Options.Create(new SchedulerOptions
+            {
+                ExcelExport = new SchedulerExcelExportOptions
+                {
+                    Enabled = true,
+                    TemplatePath = templatePath
+                }
+            }),
+            NullLogger<Query2WorkbookExporter>.Instance);
+        var rows = new[]
+        {
+            new Query2ExportRow(
+                Query2ExportRowType.Raw,
+                Row("RAW-5900", "PORT 12", "20260629008", acetone: null)),
+            new Query2ExportRow(
+                Query2ExportRowType.Ppb,
+                Row("ppb(5900)", "PORT 12", "20260629008", acetone: null))
+        };
+        var settings = new QcResultSettingsDto
+        {
+            ConcentrationRules =
+            [
+                new QcConcentrationRuleDto("Acetone", "Acetone", 1, 95m, 105m, 90m, 110m)
+            ]
+        };
+
+        var content = await exporter.ExportAsync("20260701", rows, [], settings, CancellationToken.None);
+
+        using var workbook = new XLWorkbook(new MemoryStream(content!));
+        var worksheet = workbook.Worksheet("Query2");
+        worksheet.Cell(4, 17).IsEmpty().Should().BeTrue();
+        worksheet.Cell(4, 17).Style.Fill.BackgroundColor.Color.ToArgb().Should().NotBe(unchecked((int)0xFFFF6969));
+        worksheet.Cell(4, 56).IsEmpty().Should().BeTrue();
+        worksheet.Cell(4, 56).Style.Fill.BackgroundColor.Color.ToArgb().Should().NotBe(unchecked((int)0xFFFF6969));
+        worksheet.Cell(5, 17).IsEmpty().Should().BeTrue();
+        worksheet.Cell(5, 17).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFFF6969));
+        worksheet.Cell(5, 56).IsEmpty().Should().BeTrue();
+        worksheet.Cell(5, 56).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFFF6969));
+    }
+
+    [Fact]
     public async Task ExportAsync_adds_qc_judgment_sheet_without_changing_query2_layout()
     {
         var templateDirectory = Path.Combine(_rootPath, "template-qc-judgment");
@@ -448,24 +496,52 @@ public sealed class Query2WorkbookExporterTests : IDisposable
             "QC_PressureResult",
             "QC_Result",
             "QC_FailDesc");
+        qc.Cell(1, 1).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFF2F4F7));
+        qc.Cell(1, 1).Style.Font.FontColor.Color.ToArgb().Should().Be(unchecked((int)0xFF344054));
         qc.Cell(2, 6).GetValue<decimal>().Should().Be(1050m);
         qc.Cell(2, 8).GetValue<decimal>().Should().Be(950m);
-        qc.Cell(2, 6).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFE2EFDA));
+        qc.Cell(2, 6).Style.Fill.PatternType.Should().Be(XLFillPatternValues.None);
+        qc.Cell(2, 7).Style.Fill.PatternType.Should().Be(XLFillPatternValues.None);
         qc.Cell(2, 10).GetString().Should().Be(QcPressureResultValues.Pass);
-        qc.Cell(2, 10).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFE2EFDA));
+        qc.Cell(2, 10).Style.Fill.PatternType.Should().Be(XLFillPatternValues.None);
 
         qc.Cell(3, 8).IsEmpty().Should().BeTrue();
-        qc.Cell(3, 8).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFFF6969));
+        qc.Cell(3, 8).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFFDECEC));
+        qc.Cell(3, 8).Style.Font.FontColor.Color.ToArgb().Should().Be(unchecked((int)0xFFB42318));
         qc.Cell(3, 10).GetString().Should().Be(QcPressureResultValues.Fail);
-        qc.Cell(3, 10).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFFF6969));
+        qc.Cell(3, 10).Style.Fill.PatternType.Should().Be(XLFillPatternValues.None);
+        qc.Cell(3, 10).Style.Font.FontColor.Color.ToArgb().Should().Be(unchecked((int)0xFFB42318));
         qc.Cell(3, 12).GetString().Should().Be("分析後壓力缺失：MIN 950");
+        qc.Cell(3, 12).Style.Fill.PatternType.Should().Be(XLFillPatternValues.None);
+        qc.Cell(3, 12).Style.Font.FontColor.Color.ToArgb().Should().Be(unchecked((int)0xFFB42318));
 
         qc.Cell(4, 7).IsEmpty().Should().BeTrue();
-        qc.Cell(4, 7).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFFFF2CC));
+        qc.Cell(4, 7).Style.Fill.PatternType.Should().Be(XLFillPatternValues.None);
         qc.Cell(4, 10).GetString().Should().Be(QcPressureResultValues.NotEvaluated);
-        qc.Cell(4, 10).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFFFF2CC));
+        qc.Cell(4, 10).Style.Fill.PatternType.Should().Be(XLFillPatternValues.None);
+        qc.Cell(4, 10).Style.Font.FontColor.Color.ToArgb().Should().Be(unchecked((int)0xFF667085));
         qc.Cell(4, 11).GetString().Should().Be(QcResultValues.Unknown);
-        qc.Cell(4, 11).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFFFF2CC));
+        qc.Cell(4, 11).Style.Fill.PatternType.Should().Be(XLFillPatternValues.None);
+        qc.Cell(4, 11).Style.Font.FontColor.Color.ToArgb().Should().Be(unchecked((int)0xFF667085));
+        var noFillAddresses = new[]
+        {
+            "F2", "G2", "H2", "I2", "J2", "K2", "L2",
+            "F3", "G3", "I3", "J3", "K3", "L3",
+            "F4", "G4", "H4", "I4", "J4", "K4", "L4"
+        };
+        foreach (var address in noFillAddresses)
+        {
+            qc.Cell(address).Style.Fill.PatternType.Should().Be(
+                XLFillPatternValues.None,
+                $"{address} 不是異常壓力實際值，不應套用背景色");
+        }
+
+        qc.Range(2, 1, 4, 12).Cells()
+            .Where(cell => cell.Style.Fill.PatternType != XLFillPatternValues.None)
+            .Select(cell => cell.Style.Fill.BackgroundColor.Color.ToArgb())
+            .Distinct()
+            .Should()
+            .Equal(unchecked((int)0xFFFDECEC));
         qc.AutoFilter.IsEnabled.Should().BeTrue();
     }
 
@@ -534,12 +610,16 @@ public sealed class Query2WorkbookExporterTests : IDisposable
         qc.Cell(2, 11).GetString().Should().Be(QcResultValues.Fail);
         qc.Cell(2, 12).GetString().Should().Be(
             "濃度高於 MAX：Acetone");
-        qc.Cell(2, 12).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFFF6969));
+        qc.Cell(2, 12).Style.Fill.PatternType.Should().Be(XLFillPatternValues.None);
+        qc.Cell(2, 12).Style.Font.FontColor.Color.ToArgb().Should().Be(unchecked((int)0xFFB42318));
 
         qc.Cell(3, 6).GetValue<decimal>().Should().Be(1049m);
-        qc.Cell(3, 6).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFFF6969));
+        qc.Cell(3, 6).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFFDECEC));
+        qc.Cell(3, 6).Style.Font.FontColor.Color.ToArgb().Should().Be(unchecked((int)0xFFB42318));
         qc.Cell(3, 10).GetString().Should().Be(QcPressureResultValues.Fail);
+        qc.Cell(3, 10).Style.Fill.PatternType.Should().Be(XLFillPatternValues.None);
         qc.Cell(3, 11).GetString().Should().Be(QcResultValues.Fail);
+        qc.Cell(3, 11).Style.Fill.PatternType.Should().Be(XLFillPatternValues.None);
         qc.Cell(3, 12).GetString().Should().Be(
             "分析前壓力不足：1049 < MIN 1050; " +
             "濃度高於 MAX：Acetone");

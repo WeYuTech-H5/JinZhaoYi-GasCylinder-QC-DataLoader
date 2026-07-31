@@ -209,6 +209,31 @@ public sealed class QcResultEvaluatorTests
         snapshot.FailDesc.Should().Be(expectedFailDesc);
     }
 
+    [Fact]
+    public void EvaluateSnapshot_uses_earliest_raw_when_later_raw_is_missing_final_pressure()
+    {
+        var row = CreatePpbRow();
+        row.LotNo = "20260629008";
+        row.Port = "PORT 12";
+        var earliest = CreateRawRow("port 12  008  1089>1032  #20260629008");
+        earliest.LotNo = row.LotNo;
+        earliest.Port = row.Port;
+        earliest.AnlzTime = new DateTime(2026, 7, 1, 2, 25, 0);
+        var later = CreateRawRow("port 12  008  1089>  #20260629008");
+        later.LotNo = row.LotNo;
+        later.Port = row.Port;
+        later.AnlzTime = new DateTime(2026, 7, 1, 2, 40, 0);
+
+        var snapshot = _evaluator.EvaluateSnapshot(row, [later, earliest], CreatePressureSettings());
+
+        snapshot.IniPrs.Should().Be(1089m);
+        snapshot.FnlPrs.Should().Be(1032m);
+        snapshot.IniPrsMin.Should().Be(1050m);
+        snapshot.FnlPrsMin.Should().Be(950m);
+        snapshot.PressureResult.Should().Be(QcPressureResultValues.Pass);
+        snapshot.FailDesc.Should().BeNull();
+    }
+
     [Theory]
     [InlineData(
         "1049>1000",
