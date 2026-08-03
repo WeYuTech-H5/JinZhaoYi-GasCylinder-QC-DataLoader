@@ -20,9 +20,34 @@ public sealed class QcResultEvaluatorTests
         update!.Result.Should().Be(QcResultValues.Fail);
         update.FailDesc.Should().Be("濃度高於 MAX：Acetone");
         update.RfId.Should().Be("RF-001");
-        update.ProdOrder.Should().Be("001");
+        update.ProdOrder.Should().Be("1");
         update.CalId.Should().Be("ppb(5900)");
         row.QcResult.Should().Be(QcResultValues.Fail);
+    }
+
+    [Theory]
+    [InlineData("20260701001", "1")]
+    [InlineData("20260701005", "5")]
+    [InlineData("20260701010", "10")]
+    [InlineData("20260701000", "0")]
+    [InlineData("005", "5")]
+    [InlineData("LOT-ABC", "ABC")]
+    public void Evaluate_normalizes_numeric_prod_order_without_leading_zeroes(
+        string lotNo,
+        string expectedProdOrder)
+    {
+        var row = CreatePpbRow();
+        row.LotNo = lotNo;
+        row.Areas["Acetone"] = 100m;
+
+        var update = _evaluator.Evaluate(
+            row,
+            [CreateRawRow("port 1 1000>950 #20260615001")],
+            new QcDataRow { Id = "RF-001" },
+            CreateSettings());
+
+        update.Should().NotBeNull();
+        update!.ProdOrder.Should().Be(expectedProdOrder);
     }
 
     [Fact]

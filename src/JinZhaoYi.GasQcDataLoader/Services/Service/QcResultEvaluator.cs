@@ -508,7 +508,10 @@ public sealed partial class QcResultEvaluator : IQcResultEvaluator
             return null;
         }
 
-        return normalized.Length <= 3 ? normalized : normalized[^3..];
+        var suffix = normalized.Length <= 3 ? normalized : normalized[^3..];
+        return int.TryParse(suffix, NumberStyles.None, CultureInfo.InvariantCulture, out var prodOrder)
+            ? prodOrder.ToString(CultureInfo.InvariantCulture)
+            : suffix;
     }
 
     private static string? ResolveCalId(QcDataRow row)
