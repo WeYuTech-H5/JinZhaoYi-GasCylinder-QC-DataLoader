@@ -41,7 +41,85 @@
 | Excel PPB history | `ZZ_NF_GAS_QC_EXCEL_PPB_HISTORY` |
 | 匯入錯誤紀錄 | `ZZ_NF_GAS_QC_ERROR_LOG` |
 
-`ZZ_NF_GAS_QC_LOT_PORT_PPB` 是匯入計算流程使用的 PPB table；手動 CSV/COA 匯出清單改讀 `ZZ_NF_GAS_QC_EXCEL_PPB_HISTORY`，代表使用者成功產生 Query2 Excel 後保存的 PPB 快照。
+`ZZ_NF_GAS_QC_LOT_PORT_PPB` 是舊版匯入計算流程使用的 PPB table，目前已停止寫入新資料；手動 CSV/COA 匯出清單改讀 `ZZ_NF_GAS_QC_EXCEL_PPB_HISTORY`，代表使用者成功產生 Query2 Excel 後保存的 PPB 快照。
+
+## 手動 Query2 與自動匯入計算
+
+目前使用者手動產生 Query2 Excel 時，API 只會取得當次選取的 RF、STD raw 與 PORT raw，再由 `Query2SelectionExportBuilder` 重新計算 AVG、QC、RPD 與 PPB。手動 Query2 不讀取自動 Quant 匯入時寫入的 AVG/QC/RPD/PPB 計算表。
+
+### 目前程式邏輯圖
+
+```mermaid
+flowchart TD
+    Start["程式啟動"] --> QuantWorker["Quant 背景匯入"]
+    Start --> MfgWorker["MFG JSON 背景匯入"]
+    Start --> Api["Web API"]
+
+    QuantWorker --> Scan["掃描穩定的 Quant.txt"]
+    Scan --> Parse["解析 Quant 與 acqmeth"]
+    Parse --> Validate["驗證 LOT、建立 raw identity、排除重複資料"]
+    Validate --> RawOnly["raw-only transaction"]
+    RawOnly --> StdRaw[("STD raw")]
+    RawOnly --> PortRaw[("PORT raw")]
+    RawOnly --> Processed["記錄為已處理檔案"]
+
+    MfgWorker --> MfgScan["掃描 MFGExport_*.json"]
+    MfgScan --> MfgLot[("MFG LOT 主檔")]
+    MfgLot -. "提供 LOT 驗證資料" .-> Validate
+
+    Api --> Select["使用者選取 RF、STD raw、PORT raw"]
+    StdRaw --> Select
+    PortRaw --> Select
+    Select --> Recalculate["Query2SelectionExportBuilder 重新計算 AVG、QC、RPD、PPB"]
+    Recalculate --> Query2["產生 Query2 Excel"]
+    Query2 --> History[("Excel PPB history")]
+    Query2 --> QcWriteback["手動匯出後回寫 MFG LOT QC 結果"]
+    History --> CsvCoa["匯出 CSV／COA"]
+
+    Validate -. "已註解停用" .-> OldRf["匯入時自動取得 RF"]
+    OldRf -.-> OldCalc["匯入時計算 AVG／QC／RPD／PPB"]
+    OldCalc -.-> OldTables[("衍生計算表")]
+    OldCalc -.-> OldQc["OnQuantImport QC 回寫"]
+
+    classDef disabled fill:#f4f4f4,stroke:#999,color:#777,stroke-dasharray: 5 5;
+    class OldRf,OldCalc,OldTables,OldQc disabled;
+```
+
+實線是目前仍會執行的流程；灰色虛線是已保留程式碼、但暫時註解停用的自動匯入計算流程。
+
+| 流程 | 手動 Query2 是否需要 | 目前處理 |
+| --- | --- | --- |
+| 解析 `Quant.txt` 與 acqmeth | 需要 | 保留，提供 raw 測量值與 EM 資料。 |
+| 驗證 LOT、建立 raw identity、防止重複匯入 | 需要 | 保留。 |
+| 寫入 `STD raw` / `PORT raw` | 需要 | 保留，這是手動 Query2 的資料來源。 |
+| 匯入時取得 RF | 不需要 | **已暫時停用**；使用者在手動 Query2 匯出時才選擇 RF。 |
+| 匯入時計算 AVG/QC/RPD/PPB | 不需要 | **已暫時停用**；舊計算程式碼保留在 `ImportWriteSetBuilder` 與 `DapperRepository`。 |
+| 寫入 AVG/QC/RPD/PPB 計算表 | 不需要 | **已暫時停用**；Quant 匯入 transaction 目前只寫入 raw。 |
+
+### 為什麼現在不直接移除
+
+這些匯入計算是專案初期「Quant 自動匯入並將原始資料與計算結果寫入 DB」的流程。後來才加入由使用者選擇 raw 與 RF、手動產生 Query2 的流程。目前已將自動匯入階段的 RF 取得、衍生計算、衍生表寫入與匯入時 QC 回寫暫時停用，但舊程式碼仍保留並在呼叫點註解，沒有刪除。
+
+### 停用後的影響範圍
+
+- 不影響手動 Query2 Excel：仍從使用者選取的 RF、STD raw 與 PORT raw 重新計算。
+- 不影響 Query2 匯出後的 Excel PPB history、`/api/exports/excel-ppb-csv`、COA 大卡與小卡。
+- `STD_AVG`、`STD_QC`、`STD_RPD`、`PORT_AVG`、`PORT_PPB`、`PORT_RPD` 不再產生新資料，既有資料不會被刪除。
+- 舊版 `GET /api/port-ppb-options` 與 `POST /api/exports/port-ppb-csv` 仍可讀取現有 `PORT_PPB` 資料，但不會再看到新 Quant 匯入產生的 PPB。新流程應使用 Excel PPB history 匯出 API。
+- `Scheduler:QcResultWriteback:OnQuantImport` 目前不會執行；手動 Query2 成功匯出後的 QC 回寫仍正常執行。
+
+### 如何恢復舊自動計算
+
+1. 在 `ImportOrchestrator.ImportCandidatesAsync` 取消 RF 查詢與 `BuildWriteSet` 區塊的註解，並移除 raw-only `rf` / `writeSet`。
+2. 在 `DapperRepository.ExecuteImportAsync` 取消 `ProcessStdGroupAsync` / `ProcessPortGroupAsync` 與 QC 回寫區塊的註解，並停用 `ProcessRawGroupOnlyAsync`。
+3. 執行完整測試，並用正式資料比對 AVG、QC、RPD、PPB 與 MFG LOT QC 回寫。
+
+若未來要正式移除而非暫時停用，必須先完成：
+
+1. 確認外部 MES、報表或其他程式沒有直接讀取 `STD_AVG`、`STD_QC`、`STD_RPD`、`PORT_AVG`、`PORT_PPB`、`PORT_RPD` 表。
+2. 將舊版 `GET /api/port-ppb-options` 與 `POST /api/exports/port-ppb-csv` 改為重新計算，或改讀 `ZZ_NF_GAS_QC_EXCEL_PPB_HISTORY`。
+3. 確認 `Scheduler:QcResultWriteback:OnQuantImport` 永久停用，或將該 QC 回寫完整移到手動 Query2 匯出流程。
+4. 使用正式資料回歸驗證 Query2、CSV、COA 與 QC 回寫結果後，才移除匯入階段的 RF 依賴與衍生表寫入。
 
 ## 重要設定
 

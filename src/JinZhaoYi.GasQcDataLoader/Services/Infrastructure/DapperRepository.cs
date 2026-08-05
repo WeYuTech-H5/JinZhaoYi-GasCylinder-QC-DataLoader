@@ -2177,18 +2177,31 @@ public sealed class DapperRepository(
         await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
         await connection.OpenAsync(cancellationToken);
 
-        // raw 與 AVG/RPD/PPB 必須在同一個交易內完成，任一錯誤就整批日期資料夾 rollback。
+        // 目前 Quant 自動匯入只寫入 STD/PORT raw；手動 Query2 會從 raw 另行重新計算。
+        // rf 參數與下方舊計算方法都保留，方便日後恢復，但 raw-only 路徑不會使用 rf。
+        _ = rf;
         await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
 
         try
         {
             var sidCounters = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
+
+            // raw-only：保留原有分組與單一 transaction，但每組只寫 raw table。
+            foreach (var group in BuildRawGroups(writeSet))
+            {
+                await ProcessRawGroupOnlyAsync(connection, transaction, group, importDate, sidCounters, cancellationToken);
+            }
+
+            /*
+             * 暫時停用：Quant 匯入階段的 STD AVG/QC/RPD、PORT raw PPB、PORT AVG/PPB/RPD
+             * 與 QcResultWriteback.OnQuantImport。舊方法 ProcessStdGroupAsync / ProcessPortGroupAsync 仍保留在本類別中。
+             * 如要恢復，移除上方 ProcessRawGroupOnlyAsync 呼叫，並取消下列區塊註解。
+
             var qcSettings = _options.QcResultWriteback.OnQuantImport
                 ? await QueryQcResultSettingsAsync(connection, transaction, cancellationToken)
                 : null;
             var qcUpdates = new List<MfgLotQcUpdate>();
 
-            // 依 Quant 時間還原 STD / PORT 連續區段；每組寫完 raw 後，再從 DB 查最新兩筆 raw 計算。
             foreach (var group in BuildRawGroups(writeSet))
             {
                 if (group.SourceKind == QuantSourceKind.Std)
@@ -2204,6 +2217,7 @@ public sealed class DapperRepository(
             {
                 await InsertRowIfMissingAsync(connection, transaction, _tables.StdQc, stdQcRow, IncludePpb: false, IncludeRt: false, IncludeIdRefs: true, importDate, sidCounters, cancellationToken);
             }
+            */
 
             await UpdateMfgLotEmMetadataAsync(
                 connection,
@@ -2211,10 +2225,13 @@ public sealed class DapperRepository(
                 writeSet.StdRawRows.Concat(writeSet.PortRawRows).ToArray(),
                 _options.CreateUser,
                 cancellationToken);
+
+            /* 暫時停用：Quant 匯入時不回寫 QC，手動 Query2 成功匯出時的 QC 回寫仍保留。
             if (qcSettings is not null)
             {
                 await UpdateMfgLotQcResultsAsync(connection, transaction, qcUpdates, _options.CreateUser, cancellationToken);
             }
+            */
 
             await transaction.CommitAsync(cancellationToken);
         }
@@ -2222,6 +2239,34 @@ public sealed class DapperRepository(
         {
             await transaction.RollbackAsync(cancellationToken);
             throw;
+        }
+    }
+
+    private async Task ProcessRawGroupOnlyAsync(
+        SqlConnection connection,
+        IDbTransaction transaction,
+        RawRowGroup group,
+        DateTime importDate,
+        IDictionary<string, decimal> sidCounters,
+        CancellationToken cancellationToken)
+    {
+        var tableName = group.SourceKind == QuantSourceKind.Std
+            ? _tables.StdRaw
+            : _tables.PortRaw;
+
+        foreach (var rawRow in group.Rows)
+        {
+            await InsertRowIfMissingAsync(
+                connection,
+                transaction,
+                tableName,
+                rawRow,
+                IncludePpb: true,
+                IncludeRt: true,
+                IncludeIdRefs: false,
+                importDate,
+                sidCounters,
+                cancellationToken);
         }
     }
 

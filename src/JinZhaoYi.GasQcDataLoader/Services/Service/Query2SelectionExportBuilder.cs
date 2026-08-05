@@ -13,6 +13,9 @@ public sealed class Query2SelectionExportBuilder(
         IReadOnlyCollection<QcDataRow> stdRawRows,
         IReadOnlyCollection<QcDataRow> portRawRows)
     {
+        // 手動 Query2 匯出的計算入口。本流程只使用當次選取的 RF、STD raw 與 PORT raw，
+        // 並在記憶體內重新建立 AVG、QC、RPD 與 PPB；不讀取自動 Quant 匯入產生的衍生資料表。
+        // 因此目前停用匯入階段的衍生計算，不會改變本 Query2 公式。
         var displayStdRawRows = BuildDisplayRawRows(stdRawRows);
         var displayPortRawRows = BuildDisplayRawRows(portRawRows);
         var exportRows = new List<Query2ExportRow>

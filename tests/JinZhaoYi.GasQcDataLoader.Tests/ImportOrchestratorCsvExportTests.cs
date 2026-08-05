@@ -19,6 +19,10 @@ public sealed class ImportOrchestratorCsvExportTests
 
         result.Succeeded.Should().BeTrue();
         context.Repository.ExecuteImportCallCount.Should().Be(1);
+        context.Repository.GetLatestRfCallCount.Should().Be(0);
+        context.Repository.LastWriteSet.Should().NotBeNull();
+        context.Repository.LastWriteSet!.PortRawRows.Should().ContainSingle();
+        context.Repository.LastWriteSet.PortPpbRows.Should().BeEmpty();
         context.Repository.GetPortPpbCallCount.Should().Be(0);
         context.CsvExporter.ExportCallCount.Should().Be(0);
         result.Messages.Should().NotContain(message => message.Contains("TO14C PPB CSV", StringComparison.Ordinal));
@@ -107,6 +111,16 @@ public sealed class ImportOrchestratorCsvExportTests
             LotNo = lotNo,
             SampleNo = 24
         };
+        var portRawRow = new QcDataRow
+        {
+            Id = "20251118024",
+            Port = "PORT 2",
+            SourceKind = QuantSourceKind.Port.ToString(),
+            LotNo = lotNo,
+            DataFilename = candidate.DataFilename,
+            SampleName = "TSMC-024",
+            AnlzTime = parsed.AcquiredAt
+        };
         var portPpbRow = new QcDataRow
         {
             Id = "ppb(5900)",
@@ -117,6 +131,8 @@ public sealed class ImportOrchestratorCsvExportTests
             AnlzTime = parsed.AcquiredAt
         };
         var writeSet = new ImportWriteSet();
+        writeSet.PortRawRows.Add(portRawRow);
+        writeSet.Query2Rows.Add(new Query2ExportRow(Query2ExportRowType.Raw, portRawRow));
         writeSet.PortPpbRows.Add(portPpbRow);
 
         var repository = new FakeRepository(portPpbRow, lotNo);
@@ -163,7 +179,11 @@ public sealed class ImportOrchestratorCsvExportTests
 
         public int ExecuteImportCallCount { get; private set; }
 
+        public int GetLatestRfCallCount { get; private set; }
+
         public int GetPortPpbCallCount { get; private set; }
+
+        public ImportWriteSet? LastWriteSet { get; private set; }
 
         public bool ThrowOnExecute { get; set; }
 
@@ -180,8 +200,11 @@ public sealed class ImportOrchestratorCsvExportTests
             CancellationToken cancellationToken) =>
             Task.FromResult(new MfgJsonImportResult());
 
-        public Task<QcDataRow?> GetLatestRfAsync(DateTime asOf, CancellationToken cancellationToken) =>
-            Task.FromResult<QcDataRow?>(new QcDataRow { Id = "RF,ppb(5841)" });
+        public Task<QcDataRow?> GetLatestRfAsync(DateTime asOf, CancellationToken cancellationToken)
+        {
+            GetLatestRfCallCount++;
+            return Task.FromResult<QcDataRow?>(null);
+        }
 
         public Task<IReadOnlyList<QcDataRow>> GetPortPpbRowsAsync(IReadOnlyCollection<PpbRowSelector> selectors, CancellationToken cancellationToken)
         {
@@ -323,6 +346,7 @@ public sealed class ImportOrchestratorCsvExportTests
         public Task ExecuteImportAsync(ImportWriteSet writeSet, QcDataRow rf, DateTime importDate, CancellationToken cancellationToken)
         {
             ExecuteImportCallCount++;
+            LastWriteSet = writeSet;
             if (ThrowOnExecute)
             {
                 throw new InvalidOperationException("commit failed");

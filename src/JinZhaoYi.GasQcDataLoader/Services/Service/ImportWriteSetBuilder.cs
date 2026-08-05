@@ -31,6 +31,12 @@ public sealed class ImportWriteSetBuilder(
         IReadOnlyDictionary<string, MfgLot> lots,
         QcDataRow rf)
     {
+        // 舊版完整匯入計算方法：程式碼保留供日後恢復，目前自動 Quant 匯入不會呼叫本方法。
+        // 對目前的「使用者手動產生 Query2 Excel」流程而言，匯入階段只需完整保存 raw。
+        // Query2SelectionExportBuilder 會依使用者選取的 RF、STD raw 與 PORT raw 重新計算
+        // AVG、QC、RPD 與 PPB，不依賴本方法建立的衍生資料表。
+        //
+        // 以下衍生列建立程式並未刪除；如要恢復，可在 ImportOrchestrator 取消舊 BuildWriteSet 呼叫的註解。
         var writeSet = new ImportWriteSet();
         writeSet.Query2Rows.Add(new Query2ExportRow(Query2ExportRowType.Rf, rf.DeepClone()));
 

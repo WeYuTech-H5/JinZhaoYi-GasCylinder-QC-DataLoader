@@ -192,6 +192,11 @@ public sealed class ImportOrchestrator(
         // 匯入日期優先使用日期資料夾名稱，若格式不符則退回最早採樣日期
         var importDate = ParseImportDate(dayFolderPath, newParsedFiles.Min(file => file.AcquiredAt).Date);
 
+        /*
+         * 暫時停用：Quant 自動匯入階段不再取得 RF，也不再建立 AVG/QC/RPD/PPB 衍生列。
+         * 手動 Query2 會在使用者匯出時另外選擇 RF，並從 STD/PORT raw 重新計算，因此不受影響。
+         * 若未來要恢復舊流程，將下列區塊取消註解，並移除後方 raw-only 的 rf/writeSet 即可。
+
         logger.LogInformation("開始取得 RF 資料，基準時間={AsOf}。", newParsedFiles.Min(file => file.AcquiredAt));
 
         // RF 目前以最早採樣時間往前找最近一筆可用資料
@@ -204,8 +209,17 @@ public sealed class ImportOrchestrator(
             return new ImportResult(dayFolderPath, orderedCandidates.Length, 0, _options.DryRun, false, messages);
         }
 
-        // 建立整批資料的寫入集合，內含 STD、PORT 與各種衍生計算列
+        // 建立整批資料的寫入集合，內含必要的 STD/PORT raw，
+        // 以及為了相容既有資料表與舊版匯出流程而保留的 AVG/QC/RPD/PPB 衍生列。
+        // 手動 Query2 不會讀取這些衍生列，而是從使用者選取的 raw 重新計算。
         var writeSet = writeSetBuilder.BuildWriteSet(newParsedFiles, lots, rf);
+        */
+
+        // raw-only 流程仍使用既有的單檔 builder，不刪除舊計算程式碼。
+        var writeSet = BuildRawOnlyWriteSet(newParsedFiles, lots);
+
+        // IDapperRepository 舊介面仍保留 rf 參數，方便日後恢復舊流程；raw-only 寫入不會使用此值。
+        var rf = new QcDataRow();
 
         messages.Add($"Quant 檔案解析完成，正式檔案數：{newParsedFiles.Length}。");
         messages.Add($"預計資料庫資料列數：{writeSet.TotalRows}。");
@@ -222,6 +236,30 @@ public sealed class ImportOrchestrator(
 
         messages.Add("資料庫交易已提交。");
         return new ImportResult(dayFolderPath, orderedCandidates.Length, writeSet.TotalRows, false, true, messages);
+    }
+
+    private ImportWriteSet BuildRawOnlyWriteSet(
+        IReadOnlyCollection<ParsedQuantFile> parsedFiles,
+        IReadOnlyDictionary<string, MfgLot> lots)
+    {
+        var writeSet = new ImportWriteSet();
+
+        foreach (var parsed in parsedFiles
+                     .OrderBy(file => file.AcquiredAt)
+                     .ThenBy(file => file.Source.Port, StringComparer.OrdinalIgnoreCase)
+                     .ThenBy(file => file.Source.DataFilename, StringComparer.OrdinalIgnoreCase))
+        {
+            var singleFileWriteSet = writeSetBuilder.BuildSingleFileWriteSet(parsed, lots[parsed.LotNo]);
+            writeSet.StdRawRows.AddRange(singleFileWriteSet.StdRawRows);
+            writeSet.PortRawRows.AddRange(singleFileWriteSet.PortRawRows);
+
+            foreach (var rawRow in singleFileWriteSet.Query2Rows.Where(row => row.RowType == Query2ExportRowType.Raw))
+            {
+                writeSet.Query2Rows.Add(rawRow);
+            }
+        }
+
+        return writeSet;
     }
 
     private static bool IsIgnorableQuantData(InvalidDataException ex) =>
