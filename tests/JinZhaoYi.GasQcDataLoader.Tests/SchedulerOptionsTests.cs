@@ -3,6 +3,7 @@ using JinZhaoYi.GasQcDataLoader.Configuration;
 using JinZhaoYi.GasQcDataLoader.DataModels;
 using JinZhaoYi.GasQcDataLoader.Services.Processing;
 using JinZhaoYi.GasQcDataLoader.Services.Service;
+using Microsoft.Extensions.Configuration;
 
 namespace JinZhaoYi.GasQcDataLoader.Tests;
 
@@ -58,6 +59,34 @@ public sealed class SchedulerOptionsTests
         options.NormalTargetDayOffset.Should().Be(-1);
         options.BackfillEnabled.Should().BeFalse();
         options.BackfillTargetDate.Should().BeNull();
+    }
+
+    [Fact]
+    public void Quant_import_qc_writeback_is_disabled_by_default()
+    {
+        var options = new SchedulerOptions();
+
+        options.QcResultWriteback.OnQuantImport.Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData("true", true)]
+    [InlineData("false", false)]
+    public void Quant_import_qc_writeback_can_be_configured(string configuredValue, bool expected)
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Scheduler:QcResultWriteback:OnQuantImport"] = configuredValue
+            })
+            .Build();
+
+        var options = configuration
+            .GetSection(SchedulerOptions.SectionName)
+            .Get<SchedulerOptions>();
+
+        options.Should().NotBeNull();
+        options!.QcResultWriteback.OnQuantImport.Should().Be(expected);
     }
 
     [Fact]

@@ -67,6 +67,9 @@ public sealed class SchedulerOptions
     // TO14C PPB CSV 匯出設定。
     public SchedulerCsvExportOptions CsvExport { get; init; } = new();
 
+    // QC 結果回寫時機設定。
+    public SchedulerQcResultWritebackOptions QcResultWriteback { get; init; } = new();
+
     // COA 大卡 / 小卡匯出設定；資料來源固定為 Excel PPB history。
     public SchedulerCoaExportOptions CoaExport { get; init; } = new();
 
@@ -152,6 +155,12 @@ public sealed class SchedulerCsvExportOptions
     public string OxygenValue { get; init; } = "0.01";
 
     public string NitrogenValue { get; init; } = "99.9995";
+}
+
+public sealed class SchedulerQcResultWritebackOptions
+{
+    // true 時 Quant 自動匯入會回寫 MFG LOT QC；false 時只接受使用者成功匯出 Query2 Excel 的結果。
+    public bool OnQuantImport { get; init; }
 }
 
 public sealed class SchedulerCoaExportOptions

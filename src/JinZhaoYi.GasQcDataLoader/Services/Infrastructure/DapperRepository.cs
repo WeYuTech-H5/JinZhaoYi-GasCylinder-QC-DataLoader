@@ -2183,7 +2183,9 @@ public sealed class DapperRepository(
         try
         {
             var sidCounters = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
-            var qcSettings = await QueryQcResultSettingsAsync(connection, transaction, cancellationToken);
+            var qcSettings = _options.QcResultWriteback.OnQuantImport
+                ? await QueryQcResultSettingsAsync(connection, transaction, cancellationToken)
+                : null;
             var qcUpdates = new List<MfgLotQcUpdate>();
 
             // 依 Quant 時間還原 STD / PORT 連續區段；每組寫完 raw 後，再從 DB 查最新兩筆 raw 計算。
@@ -2209,7 +2211,10 @@ public sealed class DapperRepository(
                 writeSet.StdRawRows.Concat(writeSet.PortRawRows).ToArray(),
                 _options.CreateUser,
                 cancellationToken);
-            await UpdateMfgLotQcResultsAsync(connection, transaction, qcUpdates, _options.CreateUser, cancellationToken);
+            if (qcSettings is not null)
+            {
+                await UpdateMfgLotQcResultsAsync(connection, transaction, qcUpdates, _options.CreateUser, cancellationToken);
+            }
 
             await transaction.CommitAsync(cancellationToken);
         }
@@ -2548,7 +2553,7 @@ public sealed class DapperRepository(
         IDbTransaction transaction,
         IReadOnlyList<QcDataRow> rawRows,
         QcDataRow rf,
-        QcResultSettingsDto qcSettings,
+        QcResultSettingsDto? qcSettings,
         ICollection<MfgLotQcUpdate> qcUpdates,
         DateTime importDate,
         IDictionary<string, decimal> sidCounters,
@@ -2582,7 +2587,8 @@ public sealed class DapperRepository(
         await WriteAverageRowAsync(connection, transaction, _tables.PortAvg, portAverage, IncludePpb: true, IncludeRt: true, IncludeIdRefs: true, importDate, sidCounters, cancellationToken);
         // PPB 的 ID 依 si0_id 命名；同一 Port/Lot 重算時需替換成最新 AVG 對應的 PPB。
         await ReplaceComputedRowAsync(connection, transaction, _tables.PortPpb, portPpb, IncludePpb: false, IncludeRt: false, IncludeIdRefs: true, importDate, sidCounters, cancellationToken);
-        if (qcResultEvaluator.Evaluate(portPpb, rawRows, rf, qcSettings) is { } qcUpdate)
+        if (qcSettings is not null &&
+            qcResultEvaluator.Evaluate(portPpb, rawRows, rf, qcSettings) is { } qcUpdate)
         {
             qcUpdates.Add(qcUpdate);
         }
