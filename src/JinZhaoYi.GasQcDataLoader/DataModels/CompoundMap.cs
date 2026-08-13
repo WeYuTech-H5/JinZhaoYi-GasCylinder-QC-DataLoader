@@ -50,7 +50,7 @@ public static class CompoundMap
     ];
 
     private static readonly Dictionary<string, AnalyteDefinition> ByQuantName =
-        OrderedAnalytes.ToDictionary(a => NormalizeQuantName(a.QuantName), StringComparer.OrdinalIgnoreCase);
+        BuildByQuantName();
 
     public static IReadOnlyList<AnalyteDefinition> Analytes { get; } =
         new ReadOnlyCollection<AnalyteDefinition>(OrderedAnalytes);
@@ -68,4 +68,16 @@ public static class CompoundMap
 
     private static AnalyteDefinition Define(string suffix, string quantName, string? areaColumn = null) =>
         new(suffix, quantName, areaColumn ?? $"Area_{suffix}", $"ppb_{suffix}", $"RT_{suffix}");
+
+    private static Dictionary<string, AnalyteDefinition> BuildByQuantName()
+    {
+        var items = new Dictionary<string, AnalyteDefinition>(StringComparer.OrdinalIgnoreCase);
+        foreach (var analyte in OrderedAnalytes)
+        {
+            items.TryAdd(NormalizeQuantName(analyte.QuantName), analyte);
+            items.TryAdd(NormalizeQuantName(analyte.Suffix), analyte);
+        }
+
+        return items;
+    }
 }

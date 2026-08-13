@@ -1,0 +1,200 @@
+using FluentAssertions;
+using System.IO.Compression;
+using JinZhaoYi.GasQcDataLoader.Configuration;
+using JinZhaoYi.GasQcDataLoader.DataModels;
+using JinZhaoYi.GasQcDataLoader.Services.Service;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
+
+namespace JinZhaoYi.GasQcDataLoader.Tests;
+
+public sealed class PortPpbCsvExporterTests : IDisposable
+{
+    private readonly string _rootPath = Path.Combine(Path.GetTempPath(), "PortPpbCsvExporterTests", Guid.NewGuid().ToString("N"));
+
+    [Fact]
+    public async Task ExportAsync_writes_csv_with_to14c_order_and_escaped_values()
+    {
+        var exporter = CreateExporter(new SchedulerCsvExportOptions
+        {
+            Enabled = true,
+            Maker = "New-Fast Technology Co., LTD",
+            ValveType = "1/4\" VCR Female"
+        });
+        var row = CreatePpbRow();
+        row.Areas["Acetone"] = 97m;
+        row.Areas["Benzene"] = 93m;
+        row.Areas["1,2,4-TCB"] = 94m;
+
+        var paths = await exporter.ExportAsync([row], [CreateCandidate()], CancellationToken.None);
+
+        paths.Should().ContainSingle();
+        var lines = await File.ReadAllLinesAsync(paths[0]);
+        lines.Should().Contain("CoACompletionDate,2025/11/18");
+        lines.Should().Contain("Maker,\"New-Fast Technology Co., LTD\"");
+        lines.Should().Contain("ValveType,\"1/4\"\" VCR Female\"");
+        lines.Should().Contain("ManufacturingDate,2026/4/20");
+        lines.Should().Contain("ContainerID,TSMC-024");
+        lines.Should().Contain("RawLotId,CC-706988");
+
+        var itemHeaderIndex = Array.IndexOf(lines, "Item,N,MEAN,SD,MAX,MIN,VALUE,DL");
+        itemHeaderIndex.Should().BeGreaterThan(0);
+        lines[itemHeaderIndex + 1].Should().Be("Acetone,,,,,,97,");
+        lines[itemHeaderIndex + 2].Should().Be("Benzene,,,,,,93,");
+        lines[itemHeaderIndex + 3].Should().Be("Benzene-1-2-4-trichloro,,,,,,94,");
+        lines.Should().Contain("Water,,,,,,0.02,");
+        lines.Should().Contain("Oxygen,,,,,,0.01,");
+        lines.Should().Contain("Nitrogen,,,,,,99.9995,");
+    }
+
+    [Fact]
+    public void BuildFileName_uses_manufacturing_date_sample_name_and_raw_lot_id()
+    {
+        var row = CreatePpbRow();
+
+        PortPpbCsvExporter.BuildFileName(row, "CC-706988").Should().Be("2026-04-20_TSMC-024_CC-706988_pass.csv");
+    }
+
+    [Fact]
+    public void BuildFileName_uses_qc_result_for_file_name_suffix()
+    {
+        var row = CreatePpbRow();
+        row.QcResult = QcResultValues.Fail;
+
+        PortPpbCsvExporter.BuildFileName(row, "CC-706988").Should().Be("2026-04-20_TSMC-024_CC-706988_fail.csv");
+    }
+
+    [Fact]
+    public void ExportToBytes_emits_utf8_bom_for_excel_compatibility()
+    {
+        var exporter = CreateExporter(new SchedulerCsvExportOptions { Enabled = true });
+
+        var bytes = exporter.ExportToBytes([CreatePpbRow()]);
+
+        bytes.Take(3).Should().Equal(0xEF, 0xBB, 0xBF);
+        var content = System.Text.Encoding.UTF8.GetString(bytes);
+        content.Should().Contain("SupplierName,金兆益科技股份有限公司");
+        content.Should().NotContain("\uFFFD");
+    }
+
+    [Fact]
+    public void ExportForDownload_returns_single_csv_when_one_row_is_selected()
+    {
+        var exporter = CreateExporter(new SchedulerCsvExportOptions
+        {
+            Enabled = true,
+            RawLotId = "CC-706988"
+        });
+        var row = CreatePpbRow();
+        row.ProdBomb1LotNo = "BOMB1-202605";
+
+        var download = exporter.ExportForDownload([row], "20251118");
+
+        download.ContentType.Should().Be("text/csv; charset=utf-8");
+        download.FileName.Should().Be("2026-04-20_TSMC-024_BOMB1-202605_pass.csv");
+        download.Content.Take(3).Should().Equal(0xEF, 0xBB, 0xBF);
+        System.Text.Encoding.UTF8.GetString(download.Content).Should().Contain("RawLotId,BOMB1-202605");
+    }
+
+    [Fact]
+    public void ExportForDownload_returns_zip_with_one_csv_per_row_when_multiple_rows_are_selected()
+    {
+        var exporter = CreateExporter(new SchedulerCsvExportOptions
+        {
+            Enabled = true,
+            RawLotId = "CC-706988"
+        });
+        var firstRow = CreatePpbRow();
+        firstRow.ProdBomb1LotNo = "BOMB1-A";
+        var secondRow = CreatePpbRow();
+        secondRow.SampleName = "TSMC-025";
+        secondRow.LotNo = "20260421004";
+        secondRow.ProdBomb1LotNo = "BOMB1-B";
+
+        var download = exporter.ExportForDownload([secondRow, firstRow], "20251118");
+
+        download.ContentType.Should().Be("application/zip");
+        download.FileName.Should().Be("TO14C_PPB[20251118].zip");
+
+        using var archive = new ZipArchive(new MemoryStream(download.Content), ZipArchiveMode.Read);
+        archive.Entries.Select(entry => entry.FullName).Should().Equal(
+            "2026-04-20_TSMC-024_BOMB1-A_pass.csv",
+            "2026-04-21_TSMC-025_BOMB1-B_pass.csv");
+
+        foreach (var entry in archive.Entries)
+        {
+            using var stream = entry.Open();
+            using var reader = new StreamReader(stream);
+            reader.ReadToEnd().Should().Contain("SchemaName");
+        }
+    }
+
+    [Fact]
+    public async Task ExportAsync_uses_export_root_and_overwrites_in_all_new_mode()
+    {
+        var exportRoot = Path.Combine(_rootPath, "out");
+        var exporter = new PortPpbCsvExporter(
+            Options.Create(new SchedulerOptions
+            {
+                ExportRoot = exportRoot,
+                TargetMode = SchedulerTargetMode.AllNewStableFiles,
+                CsvExport = new SchedulerCsvExportOptions { Enabled = true }
+            }),
+            NullLogger<PortPpbCsvExporter>.Instance);
+        var row = CreatePpbRow();
+
+        var firstPaths = await exporter.ExportAsync([row], [CreateCandidate()], CancellationToken.None);
+        await File.WriteAllTextAsync(firstPaths[0], "stale");
+
+        var secondPaths = await exporter.ExportAsync([row], [CreateCandidate()], CancellationToken.None);
+
+        firstPaths.Should().ContainSingle();
+        secondPaths.Should().ContainSingle().Which.Should().Be(firstPaths[0]);
+        Directory.GetFiles(Path.Combine(exportRoot, "QC"), "*.csv").Should().ContainSingle();
+        File.ReadAllText(secondPaths[0]).Should().NotBe("stale");
+    }
+
+    public void Dispose()
+    {
+        if (Directory.Exists(_rootPath))
+        {
+            Directory.Delete(_rootPath, true);
+        }
+    }
+
+    private PortPpbCsvExporter CreateExporter(SchedulerCsvExportOptions csvOptions) =>
+        new(
+            Options.Create(new SchedulerOptions { CsvExport = csvOptions }),
+            NullLogger<PortPpbCsvExporter>.Instance);
+
+    private QcDataRow CreatePpbRow() =>
+        new()
+        {
+            Id = "ppb(5900)",
+            AnlzTime = new DateTime(2025, 11, 18, 14, 30, 0),
+            Port = "PORT 2",
+            LotNo = "20260420004",
+            DataFilename = "Quant.txt",
+            SampleName = "TSMC-024",
+            QcResult = QcResultValues.Pass
+        };
+
+    private QuantFileCandidate CreateCandidate()
+    {
+        var dayFolder = Path.Combine(_rootPath, "20251118");
+        Directory.CreateDirectory(dayFolder);
+
+        return new QuantFileCandidate(
+            FullPath: Path.Combine(dayFolder, "PORT 2", "Quant.txt"),
+            DayFolderPath: dayFolder,
+            SourceRootPath: dayFolder,
+            OutputRootPath: _rootPath,
+            LogicalBatchDate: "20251118",
+            IsArchivedInput: false,
+            TopFolderName: "PORT 2",
+            SourceKind: QuantSourceKind.Port,
+            Port: "PORT 2",
+            DataFilename: "PORT 2\\Quant.txt",
+            DataFilepath: Path.Combine(dayFolder, "PORT 2"));
+    }
+}

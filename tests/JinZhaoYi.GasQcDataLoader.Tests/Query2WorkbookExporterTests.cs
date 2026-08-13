@@ -1,0 +1,729 @@
+using ClosedXML.Excel;
+using FluentAssertions;
+using JinZhaoYi.GasQcDataLoader.Configuration;
+using JinZhaoYi.GasQcDataLoader.DataModels;
+using JinZhaoYi.GasQcDataLoader.Services.Service;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
+
+namespace JinZhaoYi.GasQcDataLoader.Tests;
+
+public sealed class Query2WorkbookExporterTests : IDisposable
+{
+    private readonly string _rootPath = Path.Combine(Path.GetTempPath(), "Query2WorkbookExporterTests", Guid.NewGuid().ToString("N"));
+
+    [Fact]
+    public async Task ExportAsync_rewrites_query2_only_and_preserves_template_styles()
+    {
+        var templateDirectory = Path.Combine(_rootPath, "template");
+        var batchDirectory = Path.Combine(_rootPath, "20251119");
+        Directory.CreateDirectory(templateDirectory);
+        Directory.CreateDirectory(batchDirectory);
+
+        var templatePath = Path.Combine(templateDirectory, "template.xlsx");
+        CreateTemplateWorkbook(templatePath);
+
+        var exporter = new Query2WorkbookExporter(
+            Options.Create(new SchedulerOptions
+            {
+                ExcelExport = new SchedulerExcelExportOptions
+                {
+                    Enabled = true,
+                    TemplatePath = templatePath
+                }
+            }),
+            NullLogger<Query2WorkbookExporter>.Instance);
+
+        var writeSet = new ImportWriteSet();
+        writeSet.Query2Rows.Add(new Query2ExportRow(Query2ExportRowType.Rf, Row("RF,ppb(5841)", "STD", "20251030001", acetone: 98.68m)));
+        writeSet.Query2Rows.Add(new Query2ExportRow(Query2ExportRowType.Raw, Row("20251119023", "PORT 2", "20251117006", acetone: 100m, ppbAcetone: 99m, rtAcetone: 2.1m)));
+        writeSet.Query2Rows.Add(new Query2ExportRow(Query2ExportRowType.Avg, Row("AVG(1:2)", "PORT 2", "20251117006", acetone: 101m)));
+        writeSet.Query2Rows.Add(new Query2ExportRow(Query2ExportRowType.Ppb, Row("ppb(5900)", "PORT 2", "20251117006", acetone: 102m)));
+        writeSet.Query2Rows.Add(new Query2ExportRow(Query2ExportRowType.Rpd, Row("RPD(1:2)", "PORT 2", "20251117006", acetone: 0.01m)));
+        writeSet.Query2Rows.Add(new Query2ExportRow(Query2ExportRowType.Qc, Row("QC(AVG1,AVG2)", "STD", "20251030001", acetone: 0.02m)));
+
+        var candidates = new[]
+        {
+            new QuantFileCandidate(
+                FullPath: @"C:\GAS\20251119\Done\STD\STD[20251119 0947]_903.D\Quant.txt",
+                DayFolderPath: batchDirectory,
+                SourceRootPath: @"C:\GAS\20251119\Done",
+                OutputRootPath: _rootPath,
+                LogicalBatchDate: "20251119",
+                IsArchivedInput: true,
+                TopFolderName: "STD",
+                SourceKind: QuantSourceKind.Std,
+                Port: "STD",
+                DataFilename: @"STD[20251119 0947]_903.D\Quant.txt",
+                DataFilepath: @"C:\GAS\20251119\Done\STD\STD[20251119 0947]_903.D")
+        };
+
+        var outputPath = await exporter.ExportAsync(writeSet, candidates, CancellationToken.None);
+
+        outputPath.Should().NotBeNull();
+        outputPath.Should().Be(Path.Combine(batchDirectory, "QC", "Cylinder_Qc[20251119].xlsx"));
+        Path.GetFileName(outputPath!).Should().Be("Cylinder_Qc[20251119].xlsx");
+        File.Exists(outputPath!).Should().BeTrue();
+
+        using var workbook = new XLWorkbook(outputPath);
+        workbook.Worksheets.Select(sheet => sheet.Name).Should().Equal("Query2");
+
+        var worksheet = workbook.Worksheet("Query2");
+        worksheet.Row(Query2ColumnLayout.HeaderRowNumber).Cells(1, Query2ColumnLayout.Headers.Count)
+            .Select(cell => cell.GetString())
+            .Should()
+            .Equal(Query2ColumnLayout.Headers);
+
+        worksheet.Cell(4, 1).GetString().Should().Be("RF,ppb(5841)");
+        worksheet.Cell(5, 1).GetString().Should().Be("20251119023");
+        worksheet.Cell(6, 1).GetString().Should().Be("AVG(1:2)");
+        worksheet.Cell(7, 1).GetString().Should().Be("ppb(5900)");
+        worksheet.Cell(8, 1).GetString().Should().Be("RPD(1:2)");
+        worksheet.Cell(9, 1).GetString().Should().Be("QC(AVG1,AVG2)");
+        worksheet.Cell(10, 1).GetString().Should().Be("Crit(MAX)");
+        worksheet.Cell(11, 1).GetString().Should().Be("Crit(MIN)");
+
+        worksheet.Cell(4, 1).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFFFC000));
+        worksheet.Cell(5, 1).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFF9DC3E6));
+        worksheet.Cell(6, 1).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFA9D18E));
+        worksheet.Cell(7, 1).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFFFE699));
+        worksheet.Cell(8, 1).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFF4B084));
+        worksheet.Cell(9, 1).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFD9B8E5));
+    }
+
+    [Fact]
+    public async Task ExportAsync_uses_sample_no_for_excel_si0_display_when_si0_id_is_missing()
+    {
+        var templateDirectory = Path.Combine(_rootPath, "template-fallback");
+        var batchDirectory = Path.Combine(_rootPath, "20260420-fallback");
+        Directory.CreateDirectory(templateDirectory);
+        Directory.CreateDirectory(batchDirectory);
+
+        var templatePath = Path.Combine(templateDirectory, "template.xlsx");
+        CreateTemplateWorkbook(templatePath);
+
+        var exporter = new Query2WorkbookExporter(
+            Options.Create(new SchedulerOptions
+            {
+                ExcelExport = new SchedulerExcelExportOptions
+                {
+                    Enabled = true,
+                    TemplatePath = templatePath
+                }
+            }),
+            NullLogger<Query2WorkbookExporter>.Instance);
+
+        var writeSet = new ImportWriteSet();
+        writeSet.Query2Rows.Add(new Query2ExportRow(Query2ExportRowType.Raw, Row("20260420009", "PORT 5", "20260420004", sampleNo: 9, si0Id: null, acetone: 100m)));
+        writeSet.Query2Rows.Add(new Query2ExportRow(Query2ExportRowType.Ppb, Row("ppb()", "PORT 5", "20260420004", sampleNo: 9, si0Id: null, acetone: 88m)));
+
+        var candidates = new[]
+        {
+            new QuantFileCandidate(
+                FullPath: @"C:\GAS\20260420\PORT 5\PORT 5[20260420 2334]_V009.D\Quant.txt",
+                DayFolderPath: batchDirectory,
+                SourceRootPath: @"C:\GAS\20260420",
+                OutputRootPath: _rootPath,
+                LogicalBatchDate: "20260420",
+                IsArchivedInput: false,
+                TopFolderName: "PORT 5",
+                SourceKind: QuantSourceKind.Port,
+                Port: "PORT 5",
+                DataFilename: @"PORT 5[20260420 2334]_V009.D\Quant.txt",
+                DataFilepath: @"C:\GAS\20260420\PORT 5\PORT 5[20260420 2334]_V009.D")
+        };
+
+        var outputPath = await exporter.ExportAsync(writeSet, candidates, CancellationToken.None);
+
+        using var workbook = new XLWorkbook(outputPath!);
+        var worksheet = workbook.Worksheet("Query2");
+
+        worksheet.Cell(4, 1).GetString().Should().Be("20260420009");
+        worksheet.Cell(4, 5).GetValue<int>().Should().Be(9);
+        worksheet.Cell(5, 1).GetString().Should().Be("ppb(S9)");
+        worksheet.Cell(5, 5).GetValue<int>().Should().Be(9);
+    }
+
+    [Fact]
+    public async Task ExportAsync_uses_export_root_when_configured()
+    {
+        var templateDirectory = Path.Combine(_rootPath, "template-export-root");
+        var batchDirectory = Path.Combine(_rootPath, "2026");
+        var exportRoot = Path.Combine(_rootPath, "out");
+        Directory.CreateDirectory(templateDirectory);
+        Directory.CreateDirectory(batchDirectory);
+
+        var templatePath = Path.Combine(templateDirectory, "template.xlsx");
+        CreateTemplateWorkbook(templatePath);
+
+        var exporter = new Query2WorkbookExporter(
+            Options.Create(new SchedulerOptions
+            {
+                ExportRoot = exportRoot,
+                ExcelExport = new SchedulerExcelExportOptions
+                {
+                    Enabled = true,
+                    TemplatePath = templatePath
+                }
+            }),
+            NullLogger<Query2WorkbookExporter>.Instance);
+
+        var writeSet = new ImportWriteSet();
+        writeSet.Query2Rows.Add(new Query2ExportRow(Query2ExportRowType.Raw, Row("20260505009", "PORT 12", "20260505004")));
+
+        var outputPath = await exporter.ExportAsync(writeSet, [CreateCandidate(batchDirectory, "20260505")], CancellationToken.None);
+
+        outputPath.Should().Be(Path.Combine(exportRoot, "QC", "Cylinder_Qc[20260505].xlsx"));
+        File.Exists(outputPath!).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ExportAsync_treats_zero_si0_id_as_missing_for_excel_display()
+    {
+        var templateDirectory = Path.Combine(_rootPath, "template-zero");
+        var batchDirectory = Path.Combine(_rootPath, "20260420-zero");
+        Directory.CreateDirectory(templateDirectory);
+        Directory.CreateDirectory(batchDirectory);
+
+        var templatePath = Path.Combine(templateDirectory, "template.xlsx");
+        CreateTemplateWorkbook(templatePath);
+
+        var exporter = new Query2WorkbookExporter(
+            Options.Create(new SchedulerOptions
+            {
+                ExcelExport = new SchedulerExcelExportOptions
+                {
+                    Enabled = true,
+                    TemplatePath = templatePath
+                }
+            }),
+            NullLogger<Query2WorkbookExporter>.Instance);
+
+        var writeSet = new ImportWriteSet();
+        writeSet.Query2Rows.Add(new Query2ExportRow(Query2ExportRowType.Raw, Row("20260420009", "PORT 5", "20260420004", sampleNo: 9, si0Id: 0, acetone: 100m)));
+        writeSet.Query2Rows.Add(new Query2ExportRow(Query2ExportRowType.Ppb, Row("ppb(0)", "PORT 5", "20260420004", sampleNo: 9, si0Id: 0, acetone: 88m)));
+
+        var candidates = new[]
+        {
+            new QuantFileCandidate(
+                FullPath: @"C:\GAS\20260420\PORT 5\PORT 5[20260420 2334]_V009.D\Quant.txt",
+                DayFolderPath: batchDirectory,
+                SourceRootPath: @"C:\GAS\20260420",
+                OutputRootPath: _rootPath,
+                LogicalBatchDate: "20260420",
+                IsArchivedInput: false,
+                TopFolderName: "PORT 5",
+                SourceKind: QuantSourceKind.Port,
+                Port: "PORT 5",
+                DataFilename: @"PORT 5[20260420 2334]_V009.D\Quant.txt",
+                DataFilepath: @"C:\GAS\20260420\PORT 5\PORT 5[20260420 2334]_V009.D")
+        };
+
+        var outputPath = await exporter.ExportAsync(writeSet, candidates, CancellationToken.None);
+
+        using var workbook = new XLWorkbook(outputPath!);
+        var worksheet = workbook.Worksheet("Query2");
+
+        worksheet.Cell(4, 5).GetValue<int>().Should().Be(9);
+        worksheet.Cell(5, 1).GetString().Should().Be("ppb(S9)");
+        worksheet.Cell(5, 5).GetValue<int>().Should().Be(9);
+    }
+
+    [Fact]
+    public async Task ExportAsync_writes_and_colors_area_and_ppb_blocks_by_crit_range()
+    {
+        var templateDirectory = Path.Combine(_rootPath, "template-ppb-colors");
+        var batchDirectory = Path.Combine(_rootPath, "20260603-ppb-colors");
+        Directory.CreateDirectory(templateDirectory);
+        Directory.CreateDirectory(batchDirectory);
+
+        var templatePath = Path.Combine(templateDirectory, "template.xlsx");
+        CreateTemplateWorkbook(templatePath);
+
+        var exporter = new Query2WorkbookExporter(
+            Options.Create(new SchedulerOptions
+            {
+                ExcelExport = new SchedulerExcelExportOptions
+                {
+                    Enabled = true,
+                    TemplatePath = templatePath
+                }
+            }),
+            NullLogger<Query2WorkbookExporter>.Instance);
+
+        var writeSet = new ImportWriteSet();
+        writeSet.Query2Rows.Add(new Query2ExportRow(Query2ExportRowType.Raw, Row("20260603001", "PORT 2", "20260603001", acetone: 100m, ppbAcetone: 100m)));
+        writeSet.Query2Rows.Add(new Query2ExportRow(Query2ExportRowType.Raw, Row("20260603002", "PORT 2", "20260603001", acetone: 120m, ppbAcetone: 120m)));
+        writeSet.Query2Rows.Add(new Query2ExportRow(Query2ExportRowType.Ppb, Row("ppb(5900)", "PORT 2", "20260603001", acetone: 100m)));
+        writeSet.Query2Rows.Add(new Query2ExportRow(Query2ExportRowType.Ppb, Row("ppb(5901)", "PORT 2", "20260603001", acetone: 120m)));
+
+        var outputPath = await exporter.ExportAsync(writeSet, [CreateCandidate(batchDirectory, "20260603")], CancellationToken.None);
+
+        using var workbook = new XLWorkbook(outputPath!);
+        var worksheet = workbook.Worksheet("Query2");
+
+        worksheet.Cell(4, 17).GetValue<decimal>().Should().Be(100m);
+        worksheet.Cell(5, 17).GetValue<decimal>().Should().Be(120m);
+        worksheet.Cell(6, 17).GetValue<decimal>().Should().Be(100m);
+        worksheet.Cell(7, 17).GetValue<decimal>().Should().Be(120m);
+        worksheet.Cell(4, 17).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFF9DC3E6));
+        worksheet.Cell(5, 17).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFF9DC3E6));
+        worksheet.Cell(6, 17).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFE2EFDA));
+        worksheet.Cell(7, 17).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFFF6969));
+        worksheet.Cell(8, 17).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFFFE699));
+        worksheet.Cell(9, 17).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFFFE699));
+        worksheet.Cell(4, 56).GetValue<decimal>().Should().Be(100m);
+        worksheet.Cell(5, 56).GetValue<decimal>().Should().Be(120m);
+        worksheet.Cell(6, 56).GetValue<decimal>().Should().Be(100m);
+        worksheet.Cell(7, 56).GetValue<decimal>().Should().Be(120m);
+        worksheet.Cell(4, 56).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFE2EFDA));
+        worksheet.Cell(5, 56).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFFF6969));
+        worksheet.Cell(6, 56).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFE2EFDA));
+        worksheet.Cell(7, 56).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFFF6969));
+        worksheet.Cell(8, 56).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFFFE699));
+        worksheet.Cell(9, 56).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFFFE699));
+    }
+
+    [Fact]
+    public async Task ExportAsync_uses_qc_settings_for_ppb_crit_ranges_when_provided()
+    {
+        var templateDirectory = Path.Combine(_rootPath, "template-qc-settings");
+        Directory.CreateDirectory(templateDirectory);
+
+        var templatePath = Path.Combine(templateDirectory, "template.xlsx");
+        CreateTemplateWorkbook(templatePath);
+
+        var exporter = new Query2WorkbookExporter(
+            Options.Create(new SchedulerOptions
+            {
+                ExcelExport = new SchedulerExcelExportOptions
+                {
+                    Enabled = true,
+                    TemplatePath = templatePath
+                }
+            }),
+            NullLogger<Query2WorkbookExporter>.Instance);
+        var rows = new[]
+        {
+            new Query2ExportRow(Query2ExportRowType.Ppb, Row("ppb(5900)", "PORT 2", "20260603001", acetone: 108m)),
+            new Query2ExportRow(Query2ExportRowType.Ppb, Row("ppb(5901)", "PORT 3", "20260603002", acetone: 92m, container: "1L_Cylinder"))
+        };
+        var settings = new QcResultSettingsDto
+        {
+            ConcentrationRules =
+            [
+                new QcConcentrationRuleDto("Acetone", "Acetone", 1, 95m, 105m, 90m, 110m)
+            ]
+        };
+
+        var content = await exporter.ExportAsync("20260603", rows, [], settings, CancellationToken.None);
+
+        using var workbook = new XLWorkbook(new MemoryStream(content!));
+        var worksheet = workbook.Worksheet("Query2");
+        worksheet.Cell(4, 17).GetValue<decimal>().Should().Be(108m);
+        worksheet.Cell(4, 17).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFFF6969));
+        worksheet.Cell(5, 17).GetValue<decimal>().Should().Be(92m);
+        worksheet.Cell(5, 17).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFE2EFDA));
+        worksheet.Cell(6, 1).GetString().Should().Be("Crit(MAX)-0.5L");
+        worksheet.Cell(7, 1).GetString().Should().Be("Crit(MIN)-0.5L");
+        worksheet.Cell(8, 1).GetString().Should().Be("Crit(MAX)-1L");
+        worksheet.Cell(9, 1).GetString().Should().Be("Crit(MIN)-1L");
+        worksheet.Cell(6, 17).GetValue<decimal>().Should().Be(105m);
+        worksheet.Cell(7, 17).GetValue<decimal>().Should().Be(95m);
+        worksheet.Cell(8, 17).GetValue<decimal>().Should().Be(110m);
+        worksheet.Cell(9, 17).GetValue<decimal>().Should().Be(90m);
+        worksheet.Cell(6, 56).GetValue<decimal>().Should().Be(105m);
+        worksheet.Cell(7, 56).GetValue<decimal>().Should().Be(95m);
+        worksheet.Cell(8, 56).GetValue<decimal>().Should().Be(110m);
+        worksheet.Cell(9, 56).GetValue<decimal>().Should().Be(90m);
+    }
+
+    [Fact]
+    public async Task ExportAsync_marks_missing_configured_ppb_concentration_cells_red()
+    {
+        var templateDirectory = Path.Combine(_rootPath, "template-qc-missing-concentration");
+        Directory.CreateDirectory(templateDirectory);
+        var templatePath = Path.Combine(templateDirectory, "template.xlsx");
+        CreateTemplateWorkbook(templatePath);
+        var exporter = new Query2WorkbookExporter(
+            Options.Create(new SchedulerOptions
+            {
+                ExcelExport = new SchedulerExcelExportOptions
+                {
+                    Enabled = true,
+                    TemplatePath = templatePath
+                }
+            }),
+            NullLogger<Query2WorkbookExporter>.Instance);
+        var rows = new[]
+        {
+            new Query2ExportRow(
+                Query2ExportRowType.Raw,
+                Row("RAW-5900", "PORT 12", "20260629008", acetone: null)),
+            new Query2ExportRow(
+                Query2ExportRowType.Ppb,
+                Row("ppb(5900)", "PORT 12", "20260629008", acetone: null))
+        };
+        var settings = new QcResultSettingsDto
+        {
+            ConcentrationRules =
+            [
+                new QcConcentrationRuleDto("Acetone", "Acetone", 1, 95m, 105m, 90m, 110m)
+            ]
+        };
+
+        var content = await exporter.ExportAsync("20260701", rows, [], settings, CancellationToken.None);
+
+        using var workbook = new XLWorkbook(new MemoryStream(content!));
+        var worksheet = workbook.Worksheet("Query2");
+        worksheet.Cell(4, 17).IsEmpty().Should().BeTrue();
+        worksheet.Cell(4, 17).Style.Fill.BackgroundColor.Color.ToArgb().Should().NotBe(unchecked((int)0xFFFF6969));
+        worksheet.Cell(4, 56).IsEmpty().Should().BeTrue();
+        worksheet.Cell(4, 56).Style.Fill.BackgroundColor.Color.ToArgb().Should().NotBe(unchecked((int)0xFFFF6969));
+        worksheet.Cell(5, 17).IsEmpty().Should().BeTrue();
+        worksheet.Cell(5, 17).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFFF6969));
+        worksheet.Cell(5, 56).IsEmpty().Should().BeTrue();
+        worksheet.Cell(5, 56).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFFF6969));
+    }
+
+    [Fact]
+    public async Task ExportAsync_adds_qc_judgment_sheet_without_changing_query2_layout()
+    {
+        var templateDirectory = Path.Combine(_rootPath, "template-qc-judgment");
+        Directory.CreateDirectory(templateDirectory);
+        var templatePath = Path.Combine(templateDirectory, "template.xlsx");
+        CreateTemplateWorkbook(templatePath);
+
+        var exporter = new Query2WorkbookExporter(
+            Options.Create(new SchedulerOptions
+            {
+                ExcelExport = new SchedulerExcelExportOptions
+                {
+                    Enabled = true,
+                    TemplatePath = templatePath
+                }
+            }),
+            NullLogger<Query2WorkbookExporter>.Instance);
+        var rows = new[]
+        {
+            new Query2ExportRow(Query2ExportRowType.Ppb, Row("ppb(5900)", "PORT 1", "LOT-PASS", acetone: 100m)),
+            new Query2ExportRow(Query2ExportRowType.Ppb, Row("ppb(5901)", "PORT 2", "LOT-FAIL", acetone: 100m)),
+            new Query2ExportRow(Query2ExportRowType.Ppb, Row("ppb(5902)", "PORT 3", "LOT-UNKNOWN", acetone: 100m, container: "2L_Cylinder"))
+        };
+        var settings = new QcResultSettingsDto
+        {
+            PressureRules =
+            [
+                new QcPressureRuleDto(QcResultSettingRules.Container05, 1050m, 950m),
+                new QcPressureRuleDto(QcResultSettingRules.Container1L, 1050m, 1000m)
+            ]
+        };
+        var judgments = new[]
+        {
+            new QcJudgmentSnapshot(
+                "ppb(5900)",
+                new DateTime(2026, 6, 3, 9, 0, 0),
+                "LOT-PASS",
+                "PORT 1",
+                "0.5L_Cylinder",
+                1050m,
+                1050m,
+                950m,
+                950m,
+                QcPressureResultValues.Pass,
+                QcResultValues.Pass,
+                null,
+                false,
+                false),
+            new QcJudgmentSnapshot(
+                "ppb(5901)",
+                new DateTime(2026, 6, 3, 9, 15, 0),
+                "LOT-FAIL",
+                "PORT 2",
+                "0.5L_Cylinder",
+                1050m,
+                1050m,
+                null,
+                950m,
+                QcPressureResultValues.Fail,
+                QcResultValues.Fail,
+                "分析後壓力缺失：MIN 950",
+                false,
+                true),
+            new QcJudgmentSnapshot(
+                "ppb(5902)",
+                new DateTime(2026, 6, 3, 9, 30, 0),
+                "LOT-UNKNOWN",
+                "PORT 3",
+                "2L_Cylinder",
+                100m,
+                null,
+                50m,
+                null,
+                QcPressureResultValues.NotEvaluated,
+                QcResultValues.Unknown,
+                null,
+                false,
+                false)
+        };
+
+        var content = await exporter.ExportAsync(
+            "20260603",
+            rows,
+            [],
+            settings,
+            judgments,
+            CancellationToken.None);
+
+        using var workbook = new XLWorkbook(new MemoryStream(content!));
+        workbook.Worksheets.Select(sheet => sheet.Name).Should().Equal("Query2", "QC判定");
+
+        var query2 = workbook.Worksheet("Query2");
+        query2.Cell(4, 1).GetString().Should().Be("ppb(5900)");
+        query2.Cell(4, 17).GetValue<decimal>().Should().Be(100m);
+
+        var qc = workbook.Worksheet("QC判定");
+        qc.Row(1).Cells(1, 12).Select(cell => cell.GetString()).Should().Equal(
+            "PPB ID",
+            "AnlzTime",
+            "LotNo",
+            "Port",
+            "Container",
+            "QC_IniPrs",
+            "QC_IniPrsMin",
+            "QC_FnlPrs",
+            "QC_FnlPrsMin",
+            "QC_PressureResult",
+            "QC_Result",
+            "QC_FailDesc");
+        qc.Cell(1, 1).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFF2F4F7));
+        qc.Cell(1, 1).Style.Font.FontColor.Color.ToArgb().Should().Be(unchecked((int)0xFF344054));
+        qc.Cell(2, 6).GetValue<decimal>().Should().Be(1050m);
+        qc.Cell(2, 8).GetValue<decimal>().Should().Be(950m);
+        qc.Cell(2, 6).Style.Fill.PatternType.Should().Be(XLFillPatternValues.None);
+        qc.Cell(2, 7).Style.Fill.PatternType.Should().Be(XLFillPatternValues.None);
+        qc.Cell(2, 10).GetString().Should().Be(QcPressureResultValues.Pass);
+        qc.Cell(2, 10).Style.Fill.PatternType.Should().Be(XLFillPatternValues.None);
+
+        qc.Cell(3, 8).IsEmpty().Should().BeTrue();
+        qc.Cell(3, 8).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFFDECEC));
+        qc.Cell(3, 8).Style.Font.FontColor.Color.ToArgb().Should().Be(unchecked((int)0xFFB42318));
+        qc.Cell(3, 10).GetString().Should().Be(QcPressureResultValues.Fail);
+        qc.Cell(3, 10).Style.Fill.PatternType.Should().Be(XLFillPatternValues.None);
+        qc.Cell(3, 10).Style.Font.FontColor.Color.ToArgb().Should().Be(unchecked((int)0xFFB42318));
+        qc.Cell(3, 12).GetString().Should().Be("分析後壓力缺失：MIN 950");
+        qc.Cell(3, 12).Style.Fill.PatternType.Should().Be(XLFillPatternValues.None);
+        qc.Cell(3, 12).Style.Font.FontColor.Color.ToArgb().Should().Be(unchecked((int)0xFFB42318));
+
+        qc.Cell(4, 7).IsEmpty().Should().BeTrue();
+        qc.Cell(4, 7).Style.Fill.PatternType.Should().Be(XLFillPatternValues.None);
+        qc.Cell(4, 10).GetString().Should().Be(QcPressureResultValues.NotEvaluated);
+        qc.Cell(4, 10).Style.Fill.PatternType.Should().Be(XLFillPatternValues.None);
+        qc.Cell(4, 10).Style.Font.FontColor.Color.ToArgb().Should().Be(unchecked((int)0xFF667085));
+        qc.Cell(4, 11).GetString().Should().Be(QcResultValues.Unknown);
+        qc.Cell(4, 11).Style.Fill.PatternType.Should().Be(XLFillPatternValues.None);
+        qc.Cell(4, 11).Style.Font.FontColor.Color.ToArgb().Should().Be(unchecked((int)0xFF667085));
+        var noFillAddresses = new[]
+        {
+            "F2", "G2", "H2", "I2", "J2", "K2", "L2",
+            "F3", "G3", "I3", "J3", "K3", "L3",
+            "F4", "G4", "H4", "I4", "J4", "K4", "L4"
+        };
+        foreach (var address in noFillAddresses)
+        {
+            qc.Cell(address).Style.Fill.PatternType.Should().Be(
+                XLFillPatternValues.None,
+                $"{address} 不是異常壓力實際值，不應套用背景色");
+        }
+
+        qc.Range(2, 1, 4, 12).Cells()
+            .Where(cell => cell.Style.Fill.PatternType != XLFillPatternValues.None)
+            .Select(cell => cell.Style.Fill.BackgroundColor.Color.ToArgb())
+            .Distinct()
+            .Should()
+            .Equal(unchecked((int)0xFFFDECEC));
+        qc.AutoFilter.IsEnabled.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ExportAsync_uses_evaluator_snapshots_for_concentration_only_and_combined_failures()
+    {
+        var templateDirectory = Path.Combine(_rootPath, "template-qc-evaluator-integration");
+        Directory.CreateDirectory(templateDirectory);
+        var templatePath = Path.Combine(templateDirectory, "template.xlsx");
+        CreateTemplateWorkbook(templatePath);
+
+        var exporter = new Query2WorkbookExporter(
+            Options.Create(new SchedulerOptions
+            {
+                ExcelExport = new SchedulerExcelExportOptions
+                {
+                    Enabled = true,
+                    TemplatePath = templatePath
+                }
+            }),
+            NullLogger<Query2WorkbookExporter>.Instance);
+        var rawConcentrationOnly = Row("RAW-1", "PORT 1", "LOT-CONC", acetone: 100m);
+        rawConcentrationOnly.SourceKind = "PORT";
+        rawConcentrationOnly.Description = "port 1 1050>950 #LOT-CONC";
+        var ppbConcentrationOnly = Row("ppb(6001)", "PORT 1", "LOT-CONC", acetone: 120m);
+        ppbConcentrationOnly.Si0Id = 6001;
+
+        var rawCombined = Row("RAW-2", "PORT 2", "LOT-COMBINED", acetone: 100m);
+        rawCombined.SourceKind = "PORT";
+        rawCombined.Description = "port 2 1049>950 #LOT-COMBINED";
+        var ppbCombined = Row("ppb(6002)", "PORT 2", "LOT-COMBINED", acetone: 120m);
+        ppbCombined.Si0Id = 6002;
+
+        var rows = new[]
+        {
+            new Query2ExportRow(Query2ExportRowType.Raw, rawConcentrationOnly),
+            new Query2ExportRow(Query2ExportRowType.Ppb, ppbConcentrationOnly),
+            new Query2ExportRow(Query2ExportRowType.Raw, rawCombined),
+            new Query2ExportRow(Query2ExportRowType.Ppb, ppbCombined)
+        };
+        var settings = new QcResultSettingsDto
+        {
+            PressureRules =
+            [
+                new QcPressureRuleDto(QcResultSettingRules.Container05, 1050m, 950m)
+            ],
+            ConcentrationRules =
+            [
+                new QcConcentrationRuleDto("Acetone", "Acetone", 1, 90m, 110m, 90m, 110m)
+            ]
+        };
+        var evaluation = new QcResultEvaluator().EvaluateExportRowsDetailed(rows, "RF-001", settings);
+
+        var content = await exporter.ExportAsync(
+            "20260603",
+            rows,
+            [],
+            settings,
+            evaluation.Snapshots,
+            CancellationToken.None);
+
+        using var workbook = new XLWorkbook(new MemoryStream(content!));
+        var qc = workbook.Worksheet("QC判定");
+
+        qc.Cell(2, 10).GetString().Should().Be(QcPressureResultValues.Pass);
+        qc.Cell(2, 11).GetString().Should().Be(QcResultValues.Fail);
+        qc.Cell(2, 12).GetString().Should().Be(
+            "濃度高於 MAX：Acetone");
+        qc.Cell(2, 12).Style.Fill.PatternType.Should().Be(XLFillPatternValues.None);
+        qc.Cell(2, 12).Style.Font.FontColor.Color.ToArgb().Should().Be(unchecked((int)0xFFB42318));
+
+        qc.Cell(3, 6).GetValue<decimal>().Should().Be(1049m);
+        qc.Cell(3, 6).Style.Fill.BackgroundColor.Color.ToArgb().Should().Be(unchecked((int)0xFFFDECEC));
+        qc.Cell(3, 6).Style.Font.FontColor.Color.ToArgb().Should().Be(unchecked((int)0xFFB42318));
+        qc.Cell(3, 10).GetString().Should().Be(QcPressureResultValues.Fail);
+        qc.Cell(3, 10).Style.Fill.PatternType.Should().Be(XLFillPatternValues.None);
+        qc.Cell(3, 11).GetString().Should().Be(QcResultValues.Fail);
+        qc.Cell(3, 11).Style.Fill.PatternType.Should().Be(XLFillPatternValues.None);
+        qc.Cell(3, 12).GetString().Should().Be(
+            "分析前壓力不足：1049 < MIN 1050; " +
+            "濃度高於 MAX：Acetone");
+    }
+
+    public void Dispose()
+    {
+        if (Directory.Exists(_rootPath))
+        {
+            Directory.Delete(_rootPath, true);
+        }
+    }
+
+    private static void CreateTemplateWorkbook(string templatePath)
+    {
+        using var workbook = new XLWorkbook();
+        var worksheet = workbook.AddWorksheet("Query2");
+        workbook.AddWorksheet("OtherSheet");
+
+        worksheet.Cell(1, 1).Value = "Template";
+        worksheet.Cell(2, 1).Value = "Keep headers";
+
+        for (var column = 1; column <= Query2ColumnLayout.Headers.Count; column++)
+        {
+            worksheet.Cell(Query2ColumnLayout.HeaderRowNumber, column).Value = Query2ColumnLayout.Headers[column - 1];
+        }
+
+        SeedTemplateRow(worksheet, 4, "RF,ppb(5841)", XLColor.FromHtml("#FFC000"));
+        SeedTemplateRow(worksheet, 5, "RAW_EXAMPLE", XLColor.FromHtml("#9DC3E6"));
+        SeedTemplateRow(worksheet, 6, "AVG(1:2)", XLColor.FromHtml("#A9D18E"));
+        SeedTemplateRow(worksheet, 7, "ppb(5900)", XLColor.FromHtml("#FFE699"));
+        SeedTemplateRow(worksheet, 8, "RPD(1:2)", XLColor.FromHtml("#F4B084"));
+        SeedTemplateRow(worksheet, 9, "QC(AVG1,AVG2)", XLColor.FromHtml("#D9B8E5"));
+        SeedTemplateRow(worksheet, 10, "Crit(MAX)", XLColor.FromHtml("#FFE699"));
+        SeedTemplateRow(worksheet, 11, "Crit(MIN)", XLColor.FromHtml("#FFE699"));
+        worksheet.Cell(10, 56).Value = 110;
+        worksheet.Cell(11, 56).Value = 90;
+        worksheet.Cell(10, 17).Value = 110;
+        worksheet.Cell(11, 17).Value = 90;
+
+        workbook.SaveAs(templatePath);
+    }
+
+    private static void SeedTemplateRow(IXLWorksheet worksheet, int rowNumber, string id, XLColor fillColor)
+    {
+        for (var column = 1; column <= Query2ColumnLayout.Headers.Count; column++)
+        {
+            var cell = worksheet.Cell(rowNumber, column);
+            cell.Style.Fill.BackgroundColor = fillColor;
+            cell.Style.Font.Bold = true;
+        }
+
+        worksheet.Row(rowNumber).Height = 24;
+        worksheet.Cell(rowNumber, 1).Value = id;
+        worksheet.Cell(rowNumber, 17).Value = rowNumber;
+    }
+
+    private static QuantFileCandidate CreateCandidate(string batchDirectory, string logicalBatchDate) =>
+        new(
+            FullPath: Path.Combine(batchDirectory, "PORT 12", "PORT 12[20260505 1732].D", "Quant.txt"),
+            DayFolderPath: batchDirectory,
+            SourceRootPath: batchDirectory,
+            OutputRootPath: batchDirectory,
+            LogicalBatchDate: logicalBatchDate,
+            IsArchivedInput: false,
+            TopFolderName: "PORT 12",
+            SourceKind: QuantSourceKind.Port,
+            Port: "PORT 12",
+            DataFilename: @"PORT 12[20260505 1732].D\Quant.txt",
+            DataFilepath: Path.Combine(batchDirectory, "PORT 12", "PORT 12[20260505 1732].D"));
+
+    private static QcDataRow Row(
+        string id,
+        string port,
+        string lotNo,
+        int sampleNo = 23,
+        int? si0Id = 5900,
+        decimal? acetone = null,
+        decimal? ppbAcetone = null,
+        decimal? rtAcetone = null,
+        string container = "0.5L_Cylinder")
+    {
+        var row = new QcDataRow
+        {
+            Id = id,
+            Port = port,
+            LotNo = lotNo,
+            Inst = "QC-01",
+            Si0Id = si0Id,
+            SampleNo = sampleNo,
+            DataFilename = "Quant.txt",
+            DataFilepath = @"C:\GAS\file",
+            Container = container,
+            Description = $"desc #{lotNo}",
+            EmVolts = "1458.82",
+            RelativeEm = "-23.529",
+            SampleName = "Sample",
+            SampleType = "TO14C1",
+            AnlzTime = new DateTime(2025, 11, 19, 9, 47, 0)
+        };
+
+        row.Areas["Acetone"] = acetone;
+        row.Ppbs["Acetone"] = ppbAcetone;
+        row.RetentionTimes["Acetone"] = rtAcetone;
+        return row;
+    }
+}

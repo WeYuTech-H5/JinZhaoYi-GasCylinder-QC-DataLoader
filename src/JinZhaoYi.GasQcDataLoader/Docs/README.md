@@ -1,214 +1,33 @@
-# JinZhaoYi Gas QC DataLoader
+# 文件索引
 
-`.NET 8 Worker Service` for importing Gas QC `Quant.txt` files into SQL Server. The application is built as `WinExe`, so it can stay resident in the background when deployed as a Windows Service. `RunOnce=true` is available for local verification.
+如果是第一次接觸專案，請先從專案根目錄的 [README](../../../README.md) 開始。這一層放的是操作、架構與各功能的深入文件。
 
-## 專案結構
+## 建議閱讀順序
 
-- `Configuration`: 排程設定、DB 表名、logging options。
-- `DataModels`: Quant、LOT、RF 與 DB row 用到的 DTO/model。
-- `Logging`: Serilog 初始化與檔案輸出設定。
-- `Logs`: Serilog 檔案輸出目錄，實際 `.log` 不提交。
-- `Services/Infrastructure`: SQL connection factory 與 Dapper repository。
-- `Services/Interface`: 介面契約。
-- `Services/Service`: parser、scanner、calculation、orchestrator、job 實作。
-- `Services/Processing`: `Worker`，負責 BackgroundService 宿主與輪詢。
+1. [現行架構](ARCHITECTURE.md)：先理解目前真正會執行的三條資料流。
+2. [操作手冊](RUNBOOK.md)：準備環境、設定、安全執行與查 Log。
+3. [API 參考](API.md)：查詢與匯出 endpoints。
+4. [資料庫說明](DATABASE.md)：資料表角色、讀寫方向與 SQL scripts。
+5. 依需求閱讀 Query2、Quant、COA 或 MFG JSON 的細節文件。
 
-## 設定
+## 文件一覽
 
-主要設定在 `src/JinZhaoYi.GasQcDataLoader/appsettings.json`。
-
-正式 DB 密碼不可提交到 GitHub。repo 內的 `appsettings.json` 只保留範例連線字串，實際開發機設定請放在被 `.gitignore` 排除的 `appsettings.Development.json`、user-secrets 或環境變數。
-
-主要設定項：
-
-| 設定 | 說明 |
+| 文件 | 用途 |
 | --- | --- |
-| `ConnectionStrings:Connection` | SQL Server 連線字串，repo 內只放範例值 |
-| `Scheduler:WatchRoot` | 每日資料夾根目錄，例如 `GAS` |
-| `Scheduler:IntervalSeconds` | 常駐輪詢秒數 |
-| `Scheduler:MinimumIntervalSeconds` | 最小輪詢秒數保護 |
-| `Scheduler:StableFolderMinutes` | 資料夾最後修改時間需穩定幾分鐘後才處理 |
-| `Scheduler:InstrumentName` | 寫入 `Inst`，預設 `QC-01` |
-| `Scheduler:SampleType` | `ZZ_NF_GAS_MFG_LOT.SampleType` 為空時的 fallback，預設 `TO14C1` |
-| `Scheduler:DryRun` | `true` 時只解析和驗證，不寫 DB、不搬移資料夾 |
-| `Scheduler:RunOnce` | `true` 時跑完一輪即結束，適合手動測試 |
-| `Scheduler:UseDailySchedule` | `true` 時常駐服務每天只在 `DailyWakeUpTime` 醒來執行一次 |
-| `Scheduler:DailyWakeUpTime` | 每日醒來時間，格式 `HH:mm`，例如 `02:00` |
-| `Scheduler:NormalTargetDayOffset` | 正常模式目標日期位移，`-1` 代表跑昨天資料夾 |
-| `Scheduler:BackfillEnabled` | `true` 時改跑 `BackfillTargetDate` 指定日期 |
-| `Scheduler:BackfillTargetDate` | 補跑日期，格式 `yyyyMMdd`，例如 `20251119` |
-| `Scheduler:MoveProcessedFilesToDone` | 成功匯入後是否搬移 `.D` 資料夾到 `Done` |
-| `Scheduler:UseAverageSnapshotTables` | `true` 時 AVG 表維持 snapshot 覆蓋；`false` 時保留 AVG 歷史 |
-| `Scheduler:CreateUser` | 寫入 DB 的 `CREATE_USER` |
-| `Scheduler:Tables` | 所有讀寫資料表名稱 |
-| `AppLogging` | Serilog 最小層級、檔案 sink、Seq sink |
+| [現行架構](ARCHITECTURE.md) | 系統邊界、執行流程、主要類別與重要不變條件。 |
+| [操作手冊](RUNBOOK.md) | SDK、設定、啟動模式、Windows Service、Log 與故障排查。 |
+| [API 參考](API.md) | 目前 `Program.cs` 實際註冊的完整 API 清單。 |
+| [資料庫說明](DATABASE.md) | 核心表、歷史表、設定表與 SQL scripts。 |
+| [Query2 Excel 演算法](Query2Excel_FromDbRawData_README.md) | DB raw 到 Query2 preview／Excel 的詳細計算與欄位規則。 |
+| [Quant Parser 與 DB Mapping](QuantParser_DB_Mapping_README.md) | `Quant.txt`、acqmeth、LOT、SampleNo 與 raw table mapping。 |
+| [COA 欄位對應](COA_Field_Mapping_README.md) | COA 大卡／小卡模板與欄位來源。 |
+| [MFG JSON 匯入](MFG_JSON_IMPORT_README.md) | MFG JSON 掃描、upsert、狀態檔與 Log。 |
+| [ADR-0001：Quant raw-only](ADR/0001-quant-raw-only.md) | 停用 Quant 自動衍生計算的背景、影響與恢復條件。 |
 
-user-secrets 範例：
+## 文件維護原則
 
-```powershell
-dotnet user-secrets set "ConnectionStrings:Connection" "<connection-string>" --project .\src\JinZhaoYi.GasQcDataLoader\JinZhaoYi.GasQcDataLoader.csproj
-```
-
-### 排程參數設定方式
-
-正式常駐服務建議設定如下。此模式會讓程式常駐，等到每天 `DailyWakeUpTime` 才醒來跑一次；例如今天是 `2026/04/16`，`NormalTargetDayOffset=-1` 會處理 `20260415` 資料夾。
-
-```json
-{
-  "Scheduler": {
-    "RunOnce": false,
-    "UseDailySchedule": true,
-    "DailyWakeUpTime": "02:00",
-    "NormalTargetDayOffset": -1,
-    "BackfillEnabled": false,
-    "BackfillTargetDate": "",
-    "DryRun": false
-  }
-}
-```
-
-手動補跑歷史日期時，指定 `BackfillTargetDate`。補跑日期格式固定是 `yyyyMMdd`。
-
-```json
-{
-  "Scheduler": {
-    "RunOnce": true,
-    "BackfillEnabled": true,
-    "BackfillTargetDate": "20251119",
-    "StableFolderMinutes": 0,
-    "DryRun": false
-  }
-}
-```
-
-補跑完成後，如果要回到每日常駐模式，務必改回：
-
-```json
-{
-  "Scheduler": {
-    "RunOnce": false,
-    "BackfillEnabled": false,
-    "BackfillTargetDate": ""
-  }
-}
-```
-
-也可以不改檔案，直接用命令列覆寫參數：
-
-```powershell
-dotnet run --project .\src\JinZhaoYi.GasQcDataLoader\JinZhaoYi.GasQcDataLoader.csproj -- --Scheduler:RunOnce=true --Scheduler:BackfillEnabled=true --Scheduler:BackfillTargetDate=20251119 --Scheduler:StableFolderMinutes=0 --Scheduler:DryRun=false
-```
-
-`RunOnce=true` 代表程式啟動後立刻跑一輪，跑完就結束，不會等待 `DailyWakeUpTime`。正式常駐服務請使用 `RunOnce=false`。
-
-### 公式異常處理
-
-AVG、RPD、PPB 遇到以下狀況會寫入 DB `NULL`，也就是查詢結果留白，不寫 `0`：
-
-- 必要輸入值缺失。
-- 除法分母為 `0` 或小於 `0`。
-- Area 或 RF 輸入值為負數。
-
-不使用 fallback `0` 的原因是 `0` 容易被誤判為有效測值；`NULL` 才表示本次公式無法成立。
-
-## 資料來源責任
-
-| 資料來源 | 用途 | 程式是否修改 |
-| --- | --- | --- |
-| `Quant.txt` | 正式匯入來源，提供 compound `Response`、`R.T.` 與 Misc 中的 `LotNo` | 不修改 |
-| `ZZ_NF_GAS_MFG_LOT` | 人工維護 LOT 主檔，提供 `LotNo` 驗證與 `SamplName`、`SampleNo`、`SampleType`、`Container`、`EMVolts`、`RelativeEM` | 只查詢，不修改 |
-| `ZZ_NF_GAS_QC_RF` | RF 參考係數來源，提供各 compound 的 `Area_*` | 只查詢，不修改 |
-| Excel `Query2` | 只作公式與結果驗證參考，不作正式匯入來源 | 不修改 |
-| `.D` 資料夾 | 匯入成功後搬移到 `Done` | 搬移 |
-
-## 匯入規則
-
-- 每個 `.D\Quant.txt` 轉成一筆 raw row。
-- `STD` 寫入 `ZZ_NF_GAS_QC_LOT_STD`。
-- `PORT X` 寫入 `ZZ_NF_GAS_QC_LOT_PORT`。
-- `PROT X` 會視為 `PORT X`，支援現場資料夾 typo。
-- `Area_*` 來自 Quant `Response`。
-- `RT_*` 來自 Quant `R.T.`。
-- STD raw 不採用 Quant `Conc ppb`，`ppb_*` 維持 `NULL`。
-- PORT raw `ppb_*` 使用 `RF.Area * PORT_RAW.Area / ACTIVE_STD_AVG.Area`。
-- `ACTIVE_STD_AVG` 是依 PORT 的 `AnlzTime`，從 `ZZ_NF_GAS_QC_LOT_STD` 找 `AnlzTime <= PORT時間` 的最近兩筆 STD raw 後即時計算，不直接讀 `ZZ_NF_GAS_QC_LOT_STD_AVG` 最後快照。
-- STD/PORT AVG、RPD、PPB 依同一輪同一天資料夾的連續群組處理，取該群組最後兩筆 raw 計算。
-- `ZZ_NF_GAS_QC_LOT_STD_AVG` 與 `ZZ_NF_GAS_QC_LOT_PORT_AVG` 由 `Scheduler:UseAverageSnapshotTables` 控制；`true` 時維持 snapshot 覆蓋，`false` 時保留 AVG 歷史紀錄。
-- AVG 表 `Area_*` 欄位需保留小數，現行 DB 已調整為 `decimal(18,6)`。
-- STD/PORT RPD 使用 `(MAX - MIN) / AVERAGE(MAX, MIN)`。
-- PORT PPB 使用 `RF.Area * PORT_AVG.Area / ACTIVE_STD_AVG.Area`，寫入 `ZZ_NF_GAS_QC_LOT_PORT_PPB` 的 `Area_*` 欄位。
-- `ZZ_NF_GAS_QC_RF` 和 `ZZ_NF_GAS_MFG_LOT` 只查詢，不修改。
-- 任一 LOT 查不到 `ZZ_NF_GAS_MFG_LOT.LotNo` 時，整批停止，不寫入任何資料，也不搬移 `.D` 資料夾。
-
-## 查重規則
-
-Raw 表查重：
-
-```text
-LotNo + Port + SampleNo + DataFilename
-```
-
-計算表查重：
-
-```text
-ID + LotNo + Port + DataFilename
-```
-
-加入 `DataFilename` 是因為 raw `ID` 目前使用 `yyyyMMdd + SampleNo`，同一天同 SampleNo 可能有多筆 raw。
-
-## 執行
-
-測試：
-
-```powershell
-dotnet test .\JinZhaoYi.GasQcDataLoader.sln
-```
-
-單輪正式匯入：
-
-```powershell
-dotnet run --project .\src\JinZhaoYi.GasQcDataLoader\JinZhaoYi.GasQcDataLoader.csproj -- --Scheduler:RunOnce=true --Scheduler:StableFolderMinutes=0 --Scheduler:DryRun=false
-```
-
-DryRun：
-
-```powershell
-dotnet run --project .\src\JinZhaoYi.GasQcDataLoader\JinZhaoYi.GasQcDataLoader.csproj -- --Scheduler:RunOnce=true --Scheduler:StableFolderMinutes=0 --Scheduler:DryRun=true
-```
-
-## 20251119 實跑結果
-
-以 `GAS\20251119` 實跑：
-
-| 類型 | 筆數 |
-| --- | ---: |
-| 掃描 Quant.txt | 68 |
-| 成功處理 | 68 |
-| 搬移到 Done | 68 |
-| `ZZ_NF_GAS_QC_LOT_STD` | 18 |
-| `ZZ_NF_GAS_QC_LOT_PORT` | 50 |
-| `ZZ_NF_GAS_QC_LOT_STD_AVG` | 1 |
-| `ZZ_NF_GAS_QC_LOT_STD_RPD` | 6 |
-| `ZZ_NF_GAS_QC_LOT_PORT_AVG` | 1 |
-| `ZZ_NF_GAS_QC_LOT_PORT_PPB` | 10 |
-| `ZZ_NF_GAS_QC_LOT_PORT_RPD` | 10 |
-
-代表性 Excel 比對：
-
-| 項目 | Acetone | IPA |
-| --- | ---: | ---: |
-| `PORT 2[20251119 1147]_023.D` PORT PPB | 98.228605394643 | 105.475527415479 |
-| `PORT 2[20251119 1147]_023.D` PORT RPD | 0.030336845014 | 0.021699853922 |
-| `STD[20251119 1032]_903.D` STD RPD | 0.000563829471 | 0.015242791187 |
-| 最新 STD AVG `STD[20251120 0412]_903.D` | 1041657.500000 | 3688957.500000 |
-| 最新 PORT AVG `PORT 12[20251120 0342]_034.D` | 1028027.500000 | 3469187.500000 |
-
-## 文件
-
-- `Docs/程式碼流程與資料流說明書.md`: 程式入口、排程、資料流、DB 寫入、Done 搬移與維運說明。
-- `Docs/ZZ_NF_GAS_QC_LOT_PORT欄位來源說明.md`: PORT raw 與 STD/PORT 計算表欄位來源。
-
-## 待確認
-
-- RF 每日來源規則目前以程式既有邏輯取可用 RF，若未來規則更明確，需調整 `DapperRepository.GetLatestRfAsync()`。
-- `STD_QC` 公式已保留在程式中，但目前未寫 DB，因尚未確認對應資料表。
+- README 與架構文件只描述「目前會執行的行為」；舊流程與決策原因放在 `ADR/`。
+- API 有新增、刪除或改名時，同步更新 `API.md`。
+- 設定模型或預設值改變時，同步更新 `RUNBOOK.md`。
+- DB table 或 SQL script 改變時，同步更新 `DATABASE.md`。
+- 不在文件中放入帳號、密碼、正式連線字串或其他機密。

@@ -13,12 +13,29 @@ public sealed class RawRowFactoryTests
     {
         var factory = new RawRowFactory(Options.Create(new SchedulerOptions()));
         var parsed = CreateParsedFile();
-        var lot = CreateLot(si0Id: "5907");
+        var lot = CreateLot(si0Id: 5907);
 
         var row = factory.Create(parsed, lot, "20251119903");
 
         row.EmVolts.Should().Be("1294");
         row.RelativeEm.Should().Be("1.05");
+        row.DataFilename.Should().Be(@"STD[20251119 0947]_903.D\0001.D");
+        row.DataFilepath.Should().Be(@"D:\data\");
+        row.SourceKind.Should().Be("Std");
+        row.SourceFolderName.Should().Be("STD[20251119 0947]_903.D");
+    }
+
+    [Fact]
+    public void Create_prefers_em_values_from_parsed_acqmeth()
+    {
+        var factory = new RawRowFactory(Options.Create(new SchedulerOptions()));
+        var parsed = CreateParsedFile(emVolts: "1458.82", relativeEm: "-23.529");
+        var lot = CreateLot(si0Id: 5907);
+
+        var row = factory.Create(parsed, lot, "20251119903");
+
+        row.EmVolts.Should().Be("1458.82");
+        row.RelativeEm.Should().Be("-23.529");
     }
 
     [Fact]
@@ -26,12 +43,12 @@ public sealed class RawRowFactoryTests
     {
         var factory = new RawRowFactory(Options.Create(new SchedulerOptions()));
         var parsed = CreateParsedFile();
-        var lot = CreateLot(id: 5841m, si0Id: "5907");
+        var lot = CreateLot(id: 5841m, si0Id: 5907);
 
         var row = factory.Create(parsed, lot, "20251119903");
 
-        row.Si0Id.Should().Be("5907");
-        row.Si0Id.Should().NotBe("5841");
+        row.Si0Id.Should().Be(5907);
+        row.Si0Id.Should().NotBe(5841);
     }
 
     [Fact]
@@ -46,12 +63,40 @@ public sealed class RawRowFactoryTests
         row.Si0Id.Should().BeNull();
     }
 
-    private static ParsedQuantFile CreateParsedFile() =>
+    [Fact]
+    public void Create_prefers_sample_no_from_mfg_lot()
+    {
+        var factory = new RawRowFactory(Options.Create(new SchedulerOptions()));
+        var parsed = CreateParsedFile();
+        var lot = CreateLot(sampleNo: "904");
+
+        var row = factory.Create(parsed, lot, "20251119904");
+
+        row.SampleNo.Should().Be(904);
+    }
+
+    [Fact]
+    public void Create_falls_back_to_quant_sample_no_when_mfg_sample_no_is_not_numeric()
+    {
+        var factory = new RawRowFactory(Options.Create(new SchedulerOptions()));
+        var parsed = CreateParsedFile();
+        var lot = CreateLot(sampleNo: "RF-904");
+
+        var row = factory.Create(parsed, lot, "20251119903");
+
+        row.SampleNo.Should().Be(903);
+    }
+
+    private static ParsedQuantFile CreateParsedFile(string? emVolts = null, string? relativeEm = null) =>
         new()
         {
             Source = new QuantFileCandidate(
                 FullPath: @"C:\GAS\20251119\STD\STD[20251119 0947]_903.D\Quant.txt",
                 DayFolderPath: @"C:\GAS\20251119",
+                SourceRootPath: @"C:\GAS\20251119\STD",
+                OutputRootPath: @"C:\GAS",
+                LogicalBatchDate: "20251119",
+                IsArchivedInput: false,
                 TopFolderName: "STD",
                 SourceKind: QuantSourceKind.Std,
                 Port: "STD",
@@ -59,22 +104,27 @@ public sealed class RawRowFactoryTests
                 DataFilepath: @"C:\GAS\20251119\STD\STD[20251119 0947]_903.D"),
             AcquiredAt = new DateTime(2025, 11, 19, 9, 47, 0),
             DataFile = "0001.D",
+            DataPath = @"D:\data\",
             Sample = "Sample 1",
             Misc = " port 1  903  872>  #20251030001",
             LotNo = "20251030001",
             SampleNo = 903,
+            EMVolts = emVolts,
+            RelativeEM = relativeEm,
             Compounds = new Dictionary<string, QuantCompound>(StringComparer.OrdinalIgnoreCase)
         };
 
-    private static MfgLot CreateLot(decimal id = 5841m, string? si0Id = "5907") =>
-        new(
-            Id: id,
-            LotNo: "20251030001",
-            Si0Id: si0Id,
-            SampleName: "SIM-20251030001",
-            SampleNo: "903",
-            SampleType: "TO14C1",
-            Container: "SIM",
-            EMVolts: "1294",
-            RelativeEM: "1.05");
+    private static MfgLot CreateLot(decimal id = 5841m, int? si0Id = 5907, string? sampleNo = "903") =>
+        new()
+        {
+            Id = id,
+            LotNo = "20251030001",
+            Si0Id = si0Id,
+            SampleName = "SIM-20251030001",
+            SampleNo = sampleNo,
+            SampleType = "TO14C1",
+            Container = "SIM",
+            EMVolts = "1294",
+            RelativeEM = "1.05"
+        };
 }

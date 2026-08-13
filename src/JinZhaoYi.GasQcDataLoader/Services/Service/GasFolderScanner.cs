@@ -5,108 +5,96 @@ using JinZhaoYi.GasQcDataLoader.Services.Interface;
 
 namespace JinZhaoYi.GasQcDataLoader.Services.Service;
 
-/// <summary>
-/// 掃描金兆益機台輸出的資料夾，找出「穩定可處理」的 Quant.txt 檔案
-/// </summary>
-/// <remarks>
-/// 設計重點：
-/// 1. 機台寫檔是「非原子操作」，會有半套資料問題
-/// 2. 必須透過「最後寫入時間 + 延遲」判斷是否穩定
-/// 3. 資料夾結構有固定規則：
-///    yyyyMMdd / (STD | PORT X) / *.D / Quant.txt
-/// </remarks>
-public sealed partial class GasFolderScanner : IGasFolderScanner
+public sealed partial class GasFolderScanner(ILogger<GasFolderScanner>? logger = null) : IGasFolderScanner
 {
-    /// <summary>
-    /// 取得已經「穩定」的日期資料夾（yyyyMMdd）
-    /// </summary>
-    /// <param name="watchRoot">監控根目錄</param>
-    /// <param name="stableAge">穩定時間（例如：5 分鐘）</param>
-    /// <returns>符合條件的日期資料夾路徑清單</returns>
     public IReadOnlyList<string> FindStableDayFolders(string watchRoot, TimeSpan stableAge)
     {
-        // Root 不存在直接回空，避免例外
-        if (!Directory.Exists(watchRoot))
-        {
-            return [];
-        }
-
-        // 計算穩定時間 cutoff（現在時間 - 延遲）
-        var cutoff = DateTime.Now.Subtract(stableAge);
-
-        return Directory.EnumerateDirectories(watchRoot)
-            // 只處理 yyyyMMdd 命名格式的資料夾（避免誤掃）
-            .Where(path => DayFolderRegex().IsMatch(Path.GetFileName(path)))
-            // 判斷資料夾是否已停止寫入（穩定）
-            .Where(path => Directory.GetLastWriteTime(path) <= cutoff)
-            // 固定排序，確保處理順序穩定（避免 DB 時間亂序）
+        return FindStableBatchContexts(watchRoot, stableAge)
+            .Select(batch => batch.DayFolderPath)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
             .ToArray();
     }
 
-    /// <summary>
-    /// 取得所有「穩定可處理」的 Quant.txt 檔案
-    /// </summary>
-    /// <remarks>
-    /// ⚠重點：
-    /// - Quant.txt 可能還在寫入中（尤其是 .D 資料夾）
-    /// - 必須同時確認：
-    ///   1. 檔案最後寫入時間
-    ///   2. 所在資料夾最後寫入時間
-    /// 
-    /// 排序策略：
-    /// - 依照資料夾時間（yyyyMMdd HHmm）
-    /// - 避免 DB CREATE_TIME 出現亂序
-    /// </remarks>
     public IReadOnlyList<QuantFileCandidate> FindStableQuantFiles(string watchRoot, TimeSpan stableAge)
     {
         var cutoff = DateTime.Now.Subtract(stableAge);
 
-        return FindStableDayFolders(watchRoot, TimeSpan.Zero)
+        var batches = FindStableBatchContexts(watchRoot, stableAge);
+        var candidates = batches
             .SelectMany(FindQuantFiles)
-            // 過濾仍在寫入中的資料
             .Where(candidate => IsStable(candidate, cutoff))
-            // 依資料時間排序（業務要求：舊 → 新）
             .OrderBy(GetCandidateSortTime)
             .ThenBy(candidate => candidate.FullPath, StringComparer.OrdinalIgnoreCase)
             .ToArray();
+
+        logger?.LogInformation(
+            "穩定 Quant 檔案掃描完成。WatchRoot={WatchRoot}, StableAgeMinutes={StableAgeMinutes}, BatchCount={BatchCount}, StableQuantCount={StableQuantCount}.",
+            watchRoot,
+            stableAge.TotalMinutes,
+            batches.Count,
+            candidates.Length);
+
+        return candidates;
     }
 
-    /// <summary>
-    /// 掃描單一日期資料夾中的 Quant.txt 檔案
-    /// </summary>
-    /// <param name="dayFolderPath">yyyyMMdd 資料夾</param>
-    /// <returns>Quant 檔案候選清單</returns>
     public IReadOnlyList<QuantFileCandidate> FindQuantFiles(string dayFolderPath)
     {
-        if (!Directory.Exists(dayFolderPath))
+        if (!DirectoryExists(dayFolderPath, "configured day folder"))
         {
             return [];
         }
 
-        var dayRoot = Path.GetFullPath(dayFolderPath);
+        return ResolveBatchContext(Path.GetFullPath(dayFolderPath)) is { } batch
+            ? FindQuantFiles(batch)
+            : [];
+    }
+
+    internal static string ResolveCandidateBusinessDate(QuantFileCandidate candidate) => candidate.LogicalBatchDate;
+
+    private IReadOnlyList<QuantFileCandidate> FindQuantFiles(BatchContext batch)
+    {
+        if (!DirectoryExists(batch.SourceRootPath, "Gas QC source root"))
+        {
+            return [];
+        }
+
         var candidates = new List<QuantFileCandidate>();
 
-        // 掃描 STD / PORT X
-        foreach (var topFolder in Directory.EnumerateDirectories(dayRoot))
+        foreach (var topFolder in EnumerateDirectories(batch.SourceRootPath, "Gas QC source root"))
         {
             var topFolderName = Path.GetFileName(topFolder);
-
-            // 只允許 STD 或 PORT X（避免亂資料）
             if (!TryClassifyTopFolder(topFolderName, out var sourceKind, out var port))
             {
                 continue;
             }
 
-            // 每個 .D 資料夾底下的 Quant.txt 都是一筆資料
-            foreach (var quantPath in Directory.EnumerateFiles(topFolder, "Quant.txt", SearchOption.AllDirectories))
+            foreach (var quantPath in EnumerateFiles(topFolder, "Quant.txt", SearchOption.AllDirectories, "Gas QC source folder"))
             {
+                if (IsUnderArchiveSubfolder(topFolder, quantPath))
+                {
+                    continue;
+                }
+
                 var dataFolder = Path.GetDirectoryName(quantPath) ?? topFolder;
+                if (!IsFormalDataFolder(dataFolder))
+                {
+                    logger?.LogInformation(
+                        "Skipping Quant file because .D folder does not contain an underscore suffix. QuantPath={QuantPath}, DataFolder={DataFolder}.",
+                        quantPath,
+                        dataFolder);
+                    continue;
+                }
+
                 var dataFilename = Path.GetRelativePath(topFolder, quantPath);
 
                 candidates.Add(new QuantFileCandidate(
                     FullPath: Path.GetFullPath(quantPath),
-                    DayFolderPath: dayRoot,
+                    DayFolderPath: batch.DayFolderPath,
+                    SourceRootPath: batch.SourceRootPath,
+                    OutputRootPath: batch.OutputRootPath,
+                    LogicalBatchDate: ResolveLogicalBatchDate(batch, dataFolder),
+                    IsArchivedInput: batch.IsArchivedInput,
                     TopFolderName: topFolderName,
                     SourceKind: sourceKind,
                     Port: port,
@@ -115,42 +103,157 @@ public sealed partial class GasFolderScanner : IGasFolderScanner
             }
         }
 
-        return candidates
+        if (candidates.Count == 0)
+        {
+            logger?.LogWarning(
+                "No formal Quant.txt candidates were found under source root. SourceRootPath={SourceRootPath}. Expected Quant.txt under STD or PORT folders, inside .D folders with an underscore suffix such as PORT 11[yyyyMMdd HHmm]_001.D.",
+                batch.SourceRootPath);
+        }
+
+        var orderedCandidates = candidates
             .OrderBy(candidate => candidate.FullPath, StringComparer.OrdinalIgnoreCase)
             .ToArray();
+
+        logger?.LogInformation(
+            "Quant 檔案掃描完成。SourceRootPath={SourceRootPath}, DayFolderPath={DayFolderPath}, CandidateCount={CandidateCount}.",
+            batch.SourceRootPath,
+            batch.DayFolderPath,
+            orderedCandidates.Length);
+
+        return orderedCandidates;
     }
 
-    /// <summary>
-    /// 判斷檔案與資料夾是否已穩定（不再寫入）
-    /// </summary>
-    /// <remarks>
-    /// 為什麼要雙重判斷？
-    /// - 有些情況：Quant.txt 已寫完，但 .D 資料夾還在更新
-    /// - 或反過來
-    /// → 必須兩者都穩定才安全
-    /// </remarks>
-    private static bool IsStable(QuantFileCandidate candidate, DateTime cutoff)
+    private IReadOnlyList<BatchContext> FindStableBatchContexts(string watchRoot, TimeSpan stableAge)
     {
-        // 檔案或資料夾不存在直接視為不穩定
-        if (!File.Exists(candidate.FullPath) || !Directory.Exists(candidate.DataFilepath))
+        if (!DirectoryExists(watchRoot, "Scheduler:WatchRoot"))
+        {
+            logger?.LogWarning(
+                "Gas QC watch root is not accessible. WatchRoot={WatchRoot}. If this is a UNC path, verify the IIS app pool or Windows service identity has share and NTFS permissions.",
+                watchRoot);
+            return [];
+        }
+
+        var rootPath = Path.GetFullPath(watchRoot);
+        if (ResolveBatchContext(rootPath) is { } rootBatch)
+        {
+            return [rootBatch];
+        }
+
+        var cutoff = DateTime.Now.Subtract(stableAge);
+
+        var batches = EnumerateDirectories(rootPath, "Scheduler:WatchRoot")
+            .Where(path => DayFolderRegex().IsMatch(Path.GetFileName(path)))
+            .Where(path => IsDirectoryStable(path, cutoff))
+            .Select(path => ResolveBatchContext(Path.GetFullPath(path)))
+            .Where(batch => batch is not null)
+            .Cast<BatchContext>()
+            .OrderBy(batch => batch.DayFolderPath, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        if (batches.Length == 0)
+        {
+            logger?.LogWarning(
+                "No Gas QC batch contexts were found under WatchRoot={WatchRoot}. Expected either source folders like STD/PORT 1 directly under the root, or yyyyMMdd day folders containing STD/PORT folders with Quant.txt files.",
+                rootPath);
+        }
+
+        return batches;
+    }
+
+    private bool IsStable(QuantFileCandidate candidate, DateTime cutoff)
+    {
+        if (!File.Exists(candidate.FullPath))
+        {
+            logger?.LogWarning("Skipping Quant candidate because the file is not accessible. QuantPath={QuantPath}.", candidate.FullPath);
+            return false;
+        }
+
+        if (!DirectoryExists(candidate.DataFilepath, "Quant data folder"))
         {
             return false;
         }
 
-        return File.GetLastWriteTime(candidate.FullPath) <= cutoff &&
-               Directory.GetLastWriteTime(candidate.DataFilepath) <= cutoff;
+        try
+        {
+            return File.GetLastWriteTime(candidate.FullPath) <= cutoff &&
+                   Directory.GetLastWriteTime(candidate.DataFilepath) <= cutoff;
+        }
+        catch (Exception ex) when (IsFileSystemAccessException(ex))
+        {
+            logger?.LogWarning(
+                ex,
+                "Skipping Quant candidate because last-write time could not be read. QuantPath={QuantPath}, DataFolder={DataFolder}.",
+                candidate.FullPath,
+                candidate.DataFilepath);
+            return false;
+        }
     }
 
-    /// <summary>
-    /// 取得排序時間（優先使用資料夾名稱中的時間）
-    /// </summary>
-    /// <remarks>
-    /// 資料夾命名格式：
-    /// [yyyyMMdd HHmm]
-    /// 
-    /// fallback：
-    /// 若解析失敗 → 使用資料夾 LastWriteTime
-    /// </remarks>
+    private BatchContext? ResolveBatchContext(string rootPath)
+    {
+        var folderName = Path.GetFileName(rootPath);
+        var parentPath = Directory.GetParent(rootPath)?.FullName;
+        var donePath = Path.Combine(rootPath, "Done");
+        var hasDirectSourceFolders = ContainsSourceFolders(rootPath);
+        var hasDirectQuantFiles = hasDirectSourceFolders && ContainsQuantFiles(rootPath);
+        var hasDoneSourceFolders = Directory.Exists(donePath) && ContainsSourceFolders(donePath);
+        var hasDoneQuantFiles = hasDoneSourceFolders && ContainsQuantFiles(donePath);
+
+        if (hasDirectSourceFolders && hasDirectQuantFiles)
+        {
+            if (IsDoneFolder(folderName) &&
+                parentPath is not null &&
+                DayFolderRegex().IsMatch(Path.GetFileName(parentPath)))
+            {
+                return new BatchContext(
+                    DayFolderPath: parentPath,
+                    SourceRootPath: rootPath,
+                    OutputRootPath: Directory.GetParent(parentPath)?.FullName ?? parentPath,
+                    LogicalBatchDate: Path.GetFileName(parentPath),
+                    IsArchivedInput: true);
+            }
+
+            if (DayFolderRegex().IsMatch(folderName))
+            {
+                return new BatchContext(
+                    DayFolderPath: rootPath,
+                    SourceRootPath: rootPath,
+                    OutputRootPath: parentPath ?? rootPath,
+                    LogicalBatchDate: folderName,
+                    IsArchivedInput: false);
+            }
+
+            return new BatchContext(
+                DayFolderPath: rootPath,
+                SourceRootPath: rootPath,
+                OutputRootPath: rootPath,
+                LogicalBatchDate: string.Empty,
+                IsArchivedInput: false);
+        }
+
+        if (DayFolderRegex().IsMatch(folderName) && hasDoneQuantFiles)
+        {
+            return new BatchContext(
+                DayFolderPath: rootPath,
+                SourceRootPath: donePath,
+                OutputRootPath: parentPath ?? rootPath,
+                LogicalBatchDate: folderName,
+                IsArchivedInput: true);
+        }
+
+        if (hasDirectSourceFolders)
+        {
+            return new BatchContext(
+                DayFolderPath: rootPath,
+                SourceRootPath: rootPath,
+                OutputRootPath: parentPath ?? rootPath,
+                LogicalBatchDate: DayFolderRegex().IsMatch(folderName) ? folderName : string.Empty,
+                IsArchivedInput: false);
+        }
+
+        return null;
+    }
+
     private static DateTime GetCandidateSortTime(QuantFileCandidate candidate)
     {
         var folderName = Path.GetFileName(candidate.DataFilepath);
@@ -167,17 +270,9 @@ public sealed partial class GasFolderScanner : IGasFolderScanner
             return parsed;
         }
 
-        // fallback（避免 parse 失敗導致排序亂掉）
         return Directory.GetLastWriteTime(candidate.DataFilepath);
     }
 
-    /// <summary>
-    /// 判斷頂層資料夾是 STD 還是 PORT X
-    /// </summary>
-    /// <remarks>
-    /// 現場資料容錯：
-    /// - 曾出現 "PROT 11" typo → 視為 "PORT 11"
-    /// </remarks>
     private static bool TryClassifyTopFolder(string topFolderName, out QuantSourceKind sourceKind, out string port)
     {
         if (topFolderName.Equals("STD", StringComparison.OrdinalIgnoreCase))
@@ -200,21 +295,161 @@ public sealed partial class GasFolderScanner : IGasFolderScanner
         return false;
     }
 
-    /// <summary>
-    /// yyyyMMdd 資料夾判斷
-    /// </summary>
+    private bool ContainsSourceFolders(string rootPath) =>
+        EnumerateDirectories(rootPath, "Gas QC root")
+            .Select(Path.GetFileName)
+            .Any(name => name is not null && TryClassifyTopFolder(name, out _, out _));
+
+    private bool ContainsQuantFiles(string rootPath) =>
+        EnumerateDirectories(rootPath, "Gas QC root")
+            .Where(path => TryClassifyTopFolder(Path.GetFileName(path), out _, out _))
+            .Any(path => EnumerateFiles(path, "Quant.txt", SearchOption.AllDirectories, "Gas QC source folder")
+                .Any(quantPath =>
+                    !IsUnderArchiveSubfolder(path, quantPath) &&
+                    IsFormalDataFolder(Path.GetDirectoryName(quantPath) ?? path)));
+
+    private static bool IsFormalDataFolder(string dataFolderPath)
+    {
+        var folderName = Path.GetFileName(dataFolderPath);
+        return !string.IsNullOrWhiteSpace(folderName) && FormalDataFolderRegex().IsMatch(folderName);
+    }
+
+    private static bool IsDoneFolder(string folderName) =>
+        folderName.Equals("Done", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsUnderArchiveSubfolder(string topFolder, string quantPath)
+    {
+        var relativePath = Path.GetRelativePath(topFolder, quantPath);
+        var segments = relativePath.Split(
+            [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+            StringSplitOptions.RemoveEmptyEntries);
+
+        return segments
+            .Take(Math.Max(0, segments.Length - 1))
+            .Any(segment => segment.Equals("archive", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string ResolveLogicalBatchDate(BatchContext batch, string dataFolderPath)
+    {
+        if (!string.IsNullOrWhiteSpace(batch.LogicalBatchDate))
+        {
+            return batch.LogicalBatchDate;
+        }
+
+        var folderName = Path.GetFileName(dataFolderPath);
+        var match = DataFolderTimeRegex().Match(folderName);
+        if (match.Success &&
+            DateTime.TryParseExact(
+                match.Groups["value"].Value,
+                "yyyyMMdd HHmm",
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.None,
+                out var parsed))
+        {
+            return parsed.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
+        }
+
+        return Directory.GetLastWriteTime(dataFolderPath).ToString("yyyyMMdd", CultureInfo.InvariantCulture);
+    }
+
+    private bool DirectoryExists(string path, string description)
+    {
+        try
+        {
+            if (Directory.Exists(path))
+            {
+                return true;
+            }
+
+            logger?.LogWarning(
+                "Directory is not accessible or does not exist. Description={Description}, Path={Path}. If this is a UNC path, verify the process identity has share and NTFS permissions.",
+                description,
+                path);
+            return false;
+        }
+        catch (Exception ex) when (IsFileSystemAccessException(ex))
+        {
+            logger?.LogWarning(
+                ex,
+                "Directory access check failed. Description={Description}, Path={Path}. If this is a UNC path, verify the process identity has share and NTFS permissions.",
+                description,
+                path);
+            return false;
+        }
+    }
+
+    private IReadOnlyList<string> EnumerateDirectories(string path, string description)
+    {
+        try
+        {
+            return Directory.EnumerateDirectories(path).ToArray();
+        }
+        catch (Exception ex) when (IsFileSystemAccessException(ex))
+        {
+            logger?.LogWarning(
+                ex,
+                "Failed to enumerate directories. Description={Description}, Path={Path}. If this is a UNC path, verify the process identity has share and NTFS permissions.",
+                description,
+                path);
+            return [];
+        }
+    }
+
+    private IReadOnlyList<string> EnumerateFiles(
+        string path,
+        string searchPattern,
+        SearchOption searchOption,
+        string description)
+    {
+        try
+        {
+            return Directory.EnumerateFiles(path, searchPattern, searchOption).ToArray();
+        }
+        catch (Exception ex) when (IsFileSystemAccessException(ex))
+        {
+            logger?.LogWarning(
+                ex,
+                "Failed to enumerate files. Description={Description}, Path={Path}, SearchPattern={SearchPattern}, SearchOption={SearchOption}. If this is a UNC path, verify the process identity has share and NTFS permissions.",
+                description,
+                path,
+                searchPattern,
+                searchOption);
+            return [];
+        }
+    }
+
+    private bool IsDirectoryStable(string path, DateTime cutoff)
+    {
+        try
+        {
+            return Directory.GetLastWriteTime(path) <= cutoff;
+        }
+        catch (Exception ex) when (IsFileSystemAccessException(ex))
+        {
+            logger?.LogWarning(ex, "Skipping directory because last-write time could not be read. Path={Path}.", path);
+            return false;
+        }
+    }
+
+    private static bool IsFileSystemAccessException(Exception ex) =>
+        ex is IOException or UnauthorizedAccessException or DirectoryNotFoundException or PathTooLongException;
+
+    private sealed record BatchContext(
+        string DayFolderPath,
+        string SourceRootPath,
+        string OutputRootPath,
+        string LogicalBatchDate,
+        bool IsArchivedInput);
+
     [GeneratedRegex(@"^\d{8}$", RegexOptions.Compiled)]
     private static partial Regex DayFolderRegex();
 
-    /// <summary>
-    /// PORT / PROT 資料夾判斷（含 typo 容錯）
-    /// </summary>
-    [GeneratedRegex(@"^P(?:OR|RO)T\s+(?<number>\d+)$", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
+    [GeneratedRegex(@"^P(?:OR|RO)T\s*(?<number>\d+)$", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
     private static partial Regex PortFolderRegex();
 
-    /// <summary>
-    /// 解析資料夾時間：[yyyyMMdd HHmm]
-    /// </summary>
     [GeneratedRegex(@"\[(?<value>\d{8}\s\d{4})\]", RegexOptions.Compiled)]
     private static partial Regex DataFolderTimeRegex();
+
+    [GeneratedRegex(@"_.+\.D$", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
+    private static partial Regex FormalDataFolderRegex();
 }

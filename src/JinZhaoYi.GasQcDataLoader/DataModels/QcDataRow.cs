@@ -14,7 +14,11 @@ public sealed class QcDataRow
 
     public string? Port { get; set; }
 
-    public string? Si0Id { get; set; }
+    public string? SourceKind { get; set; }
+
+    public string? SourceFolderName { get; set; }
+
+    public int? Si0Id { get; set; }
 
     public int? SampleNo { get; set; }
 
@@ -50,6 +54,34 @@ public sealed class QcDataRow
 
     public DateTime? EditTime { get; set; }
 
+    public string? ExcelPpbExportId { get; set; }
+
+    public string? ExcelExportKey { get; set; }
+
+    public Guid? ExcelExportSessionId { get; set; }
+
+    public DateTime? ExcelExportedAt { get; set; }
+
+    public string? ExcelExportUser { get; set; }
+
+    public DateTime? ExcelStartDate { get; set; }
+
+    public DateTime? ExcelEndDate { get; set; }
+
+    public string? ExcelRfId { get; set; }
+
+    public string? ExcelStdRawIds { get; set; }
+
+    public string? ExcelPortRawIds { get; set; }
+
+    public string? ProdBomb1LotNo { get; set; }
+
+    public DateTime? ParentExpirationDate { get; set; }
+
+    public string? QcResult { get; set; }
+
+    public string? FailDesc { get; set; }
+
     public Dictionary<string, decimal?> Areas { get; } = new(StringComparer.OrdinalIgnoreCase);
 
     public Dictionary<string, decimal?> Ppbs { get; } = new(StringComparer.OrdinalIgnoreCase);
@@ -66,6 +98,8 @@ public sealed class QcDataRow
             AnlzTime = AnlzTime,
             Inst = Inst,
             Port = Port,
+            SourceKind = SourceKind,
+            SourceFolderName = SourceFolderName,
             Si0Id = Si0Id,
             SampleNo = SampleNo,
             LotNo = LotNo,
@@ -83,7 +117,43 @@ public sealed class QcDataRow
             CreateUser = CreateUser,
             CreateTime = CreateTime,
             EditUser = EditUser,
-            EditTime = EditTime
+            EditTime = EditTime,
+            ExcelPpbExportId = ExcelPpbExportId,
+            ExcelExportKey = ExcelExportKey,
+            ExcelExportSessionId = ExcelExportSessionId,
+            ExcelExportedAt = ExcelExportedAt,
+            ExcelExportUser = ExcelExportUser,
+            ExcelStartDate = ExcelStartDate,
+            ExcelEndDate = ExcelEndDate,
+            ExcelRfId = ExcelRfId,
+            ExcelStdRawIds = ExcelStdRawIds,
+            ExcelPortRawIds = ExcelPortRawIds,
+            ProdBomb1LotNo = ProdBomb1LotNo,
+            ParentExpirationDate = ParentExpirationDate,
+            QcResult = QcResult,
+            FailDesc = FailDesc
         };
+    }
+
+    public QcDataRow DeepClone()
+    {
+        var clone = CloneMetadata();
+
+        foreach (var (key, value) in Areas)
+        {
+            clone.Areas[key] = value;
+        }
+
+        foreach (var (key, value) in Ppbs)
+        {
+            clone.Ppbs[key] = value;
+        }
+
+        foreach (var (key, value) in RetentionTimes)
+        {
+            clone.RetentionTimes[key] = value;
+        }
+
+        return clone;
     }
 }

@@ -2,9 +2,13 @@
 
 public sealed class ImportWriteSet
 {
+    public List<Query2ExportRow> Query2Rows { get; } = [];
+
     public List<QcDataRow> StdRawRows { get; } = [];
 
     public List<QcDataRow> StdAverageRows { get; } = [];
+
+    public List<QcDataRow> StdQcRows { get; } = [];
 
     public List<QcDataRow> StdRpdRows { get; } = [];
 
@@ -19,6 +23,7 @@ public sealed class ImportWriteSet
     public int TotalRows =>
         StdRawRows.Count +
         StdAverageRows.Count +
+        StdQcRows.Count +
         StdRpdRows.Count +
         PortRawRows.Count +
         PortAverageRows.Count +

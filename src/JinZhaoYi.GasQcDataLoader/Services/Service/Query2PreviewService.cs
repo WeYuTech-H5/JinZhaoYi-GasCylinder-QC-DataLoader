@@ -1,0 +1,1300 @@
+using System.Globalization;
+using JinZhaoYi.GasQcDataLoader.DataModels;
+using JinZhaoYi.GasQcDataLoader.Services.Interface;
+
+namespace JinZhaoYi.GasQcDataLoader.Services.Service;
+
+public sealed class Query2PreviewService(
+    ICalculationService calculationService,
+    IQcResultEvaluator? qcResultEvaluator = null) : IQuery2PreviewService
+{
+    private const string AreaKind = "area";
+    private const string PpbKind = "ppb";
+    private const string RtKind = "rt";
+    private const string QcKind = "qc";
+    private const string QcIniPrsKey = "qc:iniPrs";
+    private const string QcIniPrsMinKey = "qc:iniPrsMin";
+    private const string QcFnlPrsKey = "qc:fnlPrs";
+    private const string QcFnlPrsMinKey = "qc:fnlPrsMin";
+    private const string QcPressureResultKey = "qc:pressureResult";
+    private const string QcResultKey = "qc:result";
+    private const string QcFailDescKey = "qc:failDesc";
+    private const string AverageFormula = "average";
+    private const string RpdFormula = "rpd";
+    private const string QcFormula = "qc";
+    private const string PortRawPpbFormula = "portRawPpb";
+    private const string PortPpbFormula = "portPpb";
+    private const string HiddenSourceKindKey = "_sourceKind";
+    private const string HiddenSourceFolderNameKey = "_sourceFolderName";
+    private const string HiddenId1Key = "_id1";
+    private const string HiddenId2Key = "_id2";
+    private const NumberStyles DecimalNumberStyles = NumberStyles.Number | NumberStyles.AllowExponent;
+    private readonly IQcResultEvaluator _qcResultEvaluator = qcResultEvaluator ?? new QcResultEvaluator();
+
+    private static readonly (string Key, string Header, string DataType)[] QcColumnDefinitions =
+    [
+        (QcIniPrsKey, "QC_IniPrs", "decimal"),
+        (QcIniPrsMinKey, "QC_IniPrsMin", "decimal"),
+        (QcFnlPrsKey, "QC_FnlPrs", "decimal"),
+        (QcFnlPrsMinKey, "QC_FnlPrsMin", "decimal"),
+        (QcPressureResultKey, "QC_PressureResult", "text"),
+        (QcResultKey, "QC_Result", "text"),
+        (QcFailDescKey, "QC_FailDesc", "text")
+    ];
+
+    private static readonly string[] QcFieldKeys =
+        QcColumnDefinitions.Select(column => column.Key).ToArray();
+
+    private static readonly Query2PreviewColumn[] BaseColumns =
+    [
+        new() { Key = "id", Header = "id", Order = 1, DataType = "text" },
+        new() { Key = "anlzTime", Header = "AnlzTime", Order = 2, DataType = "datetime" },
+        new() { Key = "inst", Header = "Inst", Order = 3, DataType = "text" },
+        new() { Key = "port", Header = "Port", Order = 4, DataType = "text" },
+        new() { Key = "si0Id", Header = "si0_id", Order = 5, DataType = "number" },
+        new() { Key = "sampleNo", Header = "SampleNo", Order = 6, DataType = "number" },
+        new() { Key = "lotNo", Header = "LotNo", Order = 7, DataType = "text" },
+        new() { Key = "dataFilename", Header = "DataFilename", Order = 8, DataType = "text" },
+        new() { Key = "dataFilepath", Header = "DataFilepath", Order = 9, DataType = "text" },
+        new() { Key = "pcName", Header = "PCName", Order = 10, DataType = "text" },
+        new() { Key = "container", Header = "Container", Order = 11, DataType = "text" },
+        new() { Key = "description", Header = "Description", Order = 12, DataType = "text" },
+        new() { Key = "emVolts", Header = "EMVolts", Order = 13, DataType = "number" },
+        new() { Key = "relativeEm", Header = "RelativeEM", Order = 14, DataType = "number" },
+        new() { Key = "sampleName", Header = "SampleName", Order = 15, DataType = "text" },
+        new() { Key = "sampleType", Header = "SampleType", Order = 16, DataType = "text" }
+    ];
+
+    public Query2PreviewState CreatePreview(
+        DateTime startDate,
+        DateTime endDate,
+        string rfId,
+        IReadOnlyList<string> stdRawIds,
+        IReadOnlyList<string> portRawIds,
+        IReadOnlyList<Query2ExportRow> rows,
+        IReadOnlyList<Query2DynamicAreaField> dynamicAreaFields,
+        IReadOnlyList<Query2DynamicAreaPortValue> dynamicAreaPortValues,
+        QcResultSettingsDto? qcSettings = null)
+    {
+        var activeDynamicAreaFields = NormalizeDynamicAreaFields(dynamicAreaFields);
+        var dynamicAreaValues = BuildDynamicAreaPortValueMap(dynamicAreaPortValues);
+        var previewRows = rows
+            .Select((row, index) =>
+            {
+                var exportRow = new Query2ExportRow(row.RowType, row.Row.DeepClone());
+                ApplyDynamicAreaDefaults(exportRow, activeDynamicAreaFields, dynamicAreaValues);
+                var values = BuildValueMap(exportRow, activeDynamicAreaFields);
+                return new Query2PreviewRow
+                {
+                    RowKey = $"r{index + 1:0000}",
+                    RowType = row.RowType,
+                    DisplayId = values.GetValueOrDefault("id"),
+                    OriginalValues = new Dictionary<string, string?>(values, StringComparer.OrdinalIgnoreCase),
+                    CurrentValues = new Dictionary<string, string?>(values, StringComparer.OrdinalIgnoreCase),
+                    ManualOverrides = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+                };
+            })
+            .ToList();
+
+        AssignFormulas(previewRows);
+
+        var state = new Query2PreviewState
+        {
+            StartDate = startDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture),
+            EndDate = endDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture),
+            ExportDateText = startDate.Date == endDate.Date
+                ? startDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture)
+                : $"{startDate:yyyyMMdd}-{endDate:yyyyMMdd}",
+            RfId = rfId,
+            StdRawIds = stdRawIds.ToArray(),
+            PortRawIds = portRawIds.ToArray(),
+            Columns = BuildColumns(activeDynamicAreaFields),
+            DynamicAreaFields = activeDynamicAreaFields,
+            Rows = previewRows
+        };
+
+        var recalculated = Recalculate(state, qcSettings);
+        foreach (var row in recalculated.Rows)
+        {
+            foreach (var key in QcFieldKeys)
+            {
+                row.OriginalValues[key] = row.CurrentValues.GetValueOrDefault(key);
+            }
+        }
+
+        return recalculated;
+    }
+
+    public Query2PreviewState Recalculate(
+        Query2PreviewState preview,
+        QcResultSettingsDto? qcSettings = null)
+    {
+        var state = CloneState(preview);
+        state.DynamicAreaFields = NormalizeDynamicAreaFields(state.DynamicAreaFields);
+        state.Columns = BuildColumns(state.DynamicAreaFields);
+        ValidateManualOverrides(state);
+
+        var workingRows = state.Rows
+            .Select(row => new WorkingRow(row, ToDataRow(row.RowType, row.CurrentValues, state.DynamicAreaFields)))
+            .ToList();
+
+        foreach (var workingRow in workingRows)
+        {
+            ApplyManualOverrides(workingRow, state.DynamicAreaFields);
+        }
+
+        ApplyFormulas(workingRows, state.DynamicAreaFields);
+
+        var exportRows = workingRows
+            .Select(workingRow => new Query2ExportRow(workingRow.Preview.RowType, workingRow.Row))
+            .ToArray();
+        var evaluation = _qcResultEvaluator.EvaluateExportRowsDetailed(
+            exportRows,
+            state.RfId,
+            qcSettings ?? new QcResultSettingsDto());
+        var snapshotIndex = 0;
+
+        foreach (var workingRow in workingRows)
+        {
+            var snapshot = workingRow.Preview.RowType == Query2ExportRowType.Ppb
+                ? evaluation.Snapshots[snapshotIndex++]
+                : null;
+            workingRow.Preview.CurrentValues = BuildValueMap(
+                new Query2ExportRow(workingRow.Preview.RowType, workingRow.Row),
+                state.DynamicAreaFields,
+                snapshot);
+            workingRow.Preview.DisplayId = workingRow.Preview.CurrentValues.GetValueOrDefault("id");
+        }
+
+        return state;
+    }
+
+    public Query2PreviewState RecalculateFromCanonical(
+        Query2PreviewState canonicalPreview,
+        Query2PreviewState submittedPreview,
+        QcResultSettingsDto? qcSettings = null)
+    {
+        var state = CloneState(canonicalPreview);
+        var canonicalRows = BuildUniqueRowMap(state.Rows, "Server preview");
+        var submittedRows = BuildUniqueRowMap(submittedPreview.Rows, "Submitted preview");
+
+        if (canonicalRows.Count != submittedRows.Count ||
+            canonicalRows.Keys.Any(rowKey => !submittedRows.ContainsKey(rowKey)))
+        {
+            throw new InvalidOperationException("Preview rows no longer match the server data. Reload the preview and try again.");
+        }
+
+        foreach (var (rowKey, canonicalRow) in canonicalRows)
+        {
+            var submittedRow = submittedRows[rowKey];
+            if (canonicalRow.RowType != submittedRow.RowType)
+            {
+                throw new InvalidOperationException($"Preview row '{rowKey}' has an invalid row type. Reload the preview and try again.");
+            }
+
+            if (!FormulasEqual(canonicalRow.Formula, submittedRow.Formula))
+            {
+                throw new InvalidOperationException($"Preview row '{rowKey}' has an invalid formula. Reload the preview and try again.");
+            }
+
+            if (submittedRow.ManualOverrides is null)
+            {
+                throw new InvalidOperationException($"Preview row '{rowKey}' has invalid manual overrides.");
+            }
+
+            canonicalRow.ManualOverrides = CopyUniqueManualOverrides(
+                submittedRow.ManualOverrides,
+                rowKey);
+        }
+
+        return Recalculate(state, qcSettings);
+    }
+
+    public IReadOnlyList<Query2ExportRow> ToExportRows(
+        Query2PreviewState preview,
+        QcResultSettingsDto? qcSettings = null)
+    {
+        var state = Recalculate(preview, qcSettings);
+        return state.Rows
+            .Select(row => new Query2ExportRow(row.RowType, ToDataRow(row.RowType, row.CurrentValues, state.DynamicAreaFields)))
+            .ToArray();
+    }
+
+    private static IReadOnlyDictionary<string, Query2PreviewRow> BuildUniqueRowMap(
+        IReadOnlyList<Query2PreviewRow> rows,
+        string sourceName)
+    {
+        if (rows is null)
+        {
+            throw new InvalidOperationException($"{sourceName} rows are required.");
+        }
+
+        var result = new Dictionary<string, Query2PreviewRow>(StringComparer.OrdinalIgnoreCase);
+        foreach (var row in rows)
+        {
+            if (row is null)
+            {
+                throw new InvalidOperationException($"{sourceName} contains an invalid row.");
+            }
+
+            if (string.IsNullOrWhiteSpace(row.RowKey))
+            {
+                throw new InvalidOperationException($"{sourceName} contains a row without rowKey.");
+            }
+
+            if (!result.TryAdd(row.RowKey, row))
+            {
+                throw new InvalidOperationException($"{sourceName} contains duplicate rowKey '{row.RowKey}'.");
+            }
+        }
+
+        return result;
+    }
+
+    private static Dictionary<string, string?> CopyUniqueManualOverrides(
+        IReadOnlyDictionary<string, string?> manualOverrides,
+        string rowKey)
+    {
+        var result = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (fieldKey, value) in manualOverrides)
+        {
+            if (!result.TryAdd(fieldKey, value))
+            {
+                throw new InvalidOperationException($"Preview row '{rowKey}' contains duplicate manual field '{fieldKey}'.");
+            }
+        }
+
+        return result;
+    }
+
+    private static bool FormulasEqual(Query2PreviewFormula? first, Query2PreviewFormula? second)
+    {
+        if (first is null || second is null)
+        {
+            return first is null && second is null;
+        }
+
+        return string.Equals(first.Kind, second.Kind, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(first.StdAverageRowKey, second.StdAverageRowKey, StringComparison.OrdinalIgnoreCase) &&
+            first.SourceRowKeys is not null &&
+            second.SourceRowKeys is not null &&
+            first.SourceRowKeys.SequenceEqual(second.SourceRowKeys, StringComparer.OrdinalIgnoreCase);
+    }
+
+    public IReadOnlyList<Query2PreviewEditLogRow> BuildEditLogs(
+        Query2PreviewState preview,
+        string excelExportKey,
+        Guid exportSessionId,
+        DateTime exportedAt,
+        string exportUser)
+    {
+        if (!TryParseBatchDate(preview.StartDate, out var startDate) ||
+            !TryParseBatchDate(preview.EndDate, out var endDate))
+        {
+            throw new InvalidOperationException("Preview startDate/endDate must use yyyyMMdd format.");
+        }
+
+        var logs = new List<Query2PreviewEditLogRow>();
+        var stdRawIds = FormatSelectedIds(preview.StdRawIds);
+        var portRawIds = FormatSelectedIds(preview.PortRawIds);
+        var rfId = preview.RfId?.Trim() ?? string.Empty;
+
+        foreach (var row in preview.Rows)
+        {
+            foreach (var (fieldKey, _) in row.ManualOverrides)
+            {
+                if (!TryParseEditableFieldKey(fieldKey, preview.DynamicAreaFields, out var valueKind, out var analyte))
+                {
+                    continue;
+                }
+
+                row.OriginalValues.TryGetValue(fieldKey, out var originalValue);
+                row.CurrentValues.TryGetValue(fieldKey, out var newValue);
+                if (ValuesEqual(originalValue, newValue))
+                {
+                    continue;
+                }
+
+                logs.Add(new Query2PreviewEditLogRow(
+                    exportSessionId,
+                    excelExportKey,
+                    startDate,
+                    endDate,
+                    rfId,
+                    stdRawIds,
+                    portRawIds,
+                    row.RowKey,
+                    row.RowType,
+                    row.DisplayId,
+                    fieldKey,
+                    valueKind,
+                    analyte,
+                    NormalizeBlank(originalValue),
+                    NormalizeBlank(newValue),
+                    exportedAt,
+                    exportUser,
+                    DateTime.Now));
+            }
+        }
+
+        return logs;
+    }
+
+    private void ApplyFormulas(
+        IReadOnlyList<WorkingRow> rows,
+        IReadOnlyList<Query2DynamicAreaField> dynamicAreaFields)
+    {
+        var byKey = rows.ToDictionary(row => row.Preview.RowKey, StringComparer.OrdinalIgnoreCase);
+        var rf = rows.FirstOrDefault(row => row.Preview.RowType == Query2ExportRowType.Rf)?.Row;
+
+        foreach (var workingRow in rows)
+        {
+            var formula = workingRow.Preview.Formula;
+            if (formula is null || string.IsNullOrWhiteSpace(formula.Kind))
+            {
+                continue;
+            }
+
+            switch (formula.Kind)
+            {
+                case AverageFormula:
+                    if (TryGetTwoSources(formula, byKey, out var avgFirst, out var avgSecond))
+                    {
+                        var calculated = calculationService.CreateAverageRow(workingRow.Row.Id ?? string.Empty, avgFirst.Row, avgSecond.Row);
+                        CopyAreas(workingRow, calculated);
+                        ApplyAverageDynamicAreas(workingRow, avgFirst, avgSecond, dynamicAreaFields);
+                        ClearNonManual(workingRow, PpbKind);
+                        ClearNonManual(workingRow, RtKind);
+                    }
+
+                    break;
+
+                case RpdFormula:
+                    if (TryGetTwoSources(formula, byKey, out var rpdFirst, out var rpdSecond))
+                    {
+                        var calculated = calculationService.CreateRpdRow(workingRow.Row.Id ?? string.Empty, rpdFirst.Row, rpdSecond.Row);
+                        CopyAreas(workingRow, calculated);
+                        ApplyRpdDynamicAreas(workingRow, rpdFirst, rpdSecond, dynamicAreaFields);
+                        ClearNonManual(workingRow, PpbKind);
+                        ClearNonManual(workingRow, RtKind);
+                    }
+
+                    break;
+
+                case QcFormula:
+                    if (TryGetTwoSources(formula, byKey, out var previousStdAverage, out var currentStdAverage))
+                    {
+                        var calculated = calculationService.CreateStdQcRow(workingRow.Row.Id ?? string.Empty, previousStdAverage.Row, currentStdAverage.Row);
+                        CopyAreas(workingRow, calculated);
+                        ApplyQcDynamicAreas(workingRow, previousStdAverage, currentStdAverage, dynamicAreaFields);
+                        ClearNonManual(workingRow, PpbKind);
+                        ClearNonManual(workingRow, RtKind);
+                    }
+
+                    break;
+
+                case PortRawPpbFormula:
+                    if (rf is not null &&
+                        TryGetStdAverage(formula, byKey, out var activeStdAverage))
+                    {
+                        var calculated = workingRow.Row.DeepClone();
+                        calculationService.ApplyPortRawPpb(calculated, rf, activeStdAverage.Row);
+                        CopyPpbs(workingRow, calculated);
+                    }
+
+                    break;
+
+                case PortPpbFormula:
+                    if (rf is not null &&
+                        TryGetFirstSource(formula, byKey, out var portAverage) &&
+                        TryGetStdAverage(formula, byKey, out var stdAverage))
+                    {
+                        var calculated = calculationService.CreatePortPpbRow(workingRow.Row.Id ?? string.Empty, portAverage.Row, rf, stdAverage.Row);
+                        CopyPortPpbResult(workingRow, calculated);
+                        ApplyPortPpbDynamicAreas(workingRow, rf, portAverage, stdAverage, dynamicAreaFields);
+                        ClearNonManual(workingRow, RtKind);
+                    }
+
+                    break;
+            }
+        }
+    }
+
+    private static void CopyAreas(WorkingRow target, QcDataRow calculated)
+    {
+        foreach (var analyte in CompoundMap.Analytes)
+        {
+            if (!IsManual(target, AreaKind, analyte.Suffix))
+            {
+                target.Row.Areas[analyte.Suffix] = calculated.Areas.GetValueOrDefault(analyte.Suffix);
+            }
+        }
+    }
+
+    private static void CopyPpbs(WorkingRow target, QcDataRow calculated)
+    {
+        foreach (var analyte in CompoundMap.Analytes)
+        {
+            if (!IsManual(target, PpbKind, analyte.Suffix))
+            {
+                target.Row.Ppbs[analyte.Suffix] = calculated.Ppbs.GetValueOrDefault(analyte.Suffix);
+            }
+        }
+    }
+
+    private static void CopyPortPpbResult(WorkingRow target, QcDataRow calculated)
+    {
+        foreach (var analyte in CompoundMap.Analytes)
+        {
+            var areaManual = IsManual(target, AreaKind, analyte.Suffix);
+            var ppbManual = IsManual(target, PpbKind, analyte.Suffix);
+            if (areaManual || ppbManual)
+            {
+                var manualValue = target.Row.Ppbs.GetValueOrDefault(analyte.Suffix) ??
+                    target.Row.Areas.GetValueOrDefault(analyte.Suffix);
+                target.Row.Areas[analyte.Suffix] = manualValue;
+                target.Row.Ppbs[analyte.Suffix] = manualValue;
+                continue;
+            }
+
+            var value = calculated.Areas.GetValueOrDefault(analyte.Suffix);
+            target.Row.Areas[analyte.Suffix] = value;
+            target.Row.Ppbs[analyte.Suffix] = value;
+        }
+    }
+
+    private static void ApplyAverageDynamicAreas(
+        WorkingRow target,
+        WorkingRow first,
+        WorkingRow second,
+        IReadOnlyList<Query2DynamicAreaField> dynamicAreaFields)
+    {
+        foreach (var field in dynamicAreaFields)
+        {
+            if (IsManual(target, AreaKind, field.FieldKey))
+            {
+                continue;
+            }
+
+            target.Row.Areas[field.FieldKey] = Average(
+                first.Row.Areas.GetValueOrDefault(field.FieldKey),
+                second.Row.Areas.GetValueOrDefault(field.FieldKey));
+        }
+    }
+
+    private static void ApplyRpdDynamicAreas(
+        WorkingRow target,
+        WorkingRow first,
+        WorkingRow second,
+        IReadOnlyList<Query2DynamicAreaField> dynamicAreaFields)
+    {
+        foreach (var field in dynamicAreaFields)
+        {
+            if (IsManual(target, AreaKind, field.FieldKey))
+            {
+                continue;
+            }
+
+            target.Row.Areas[field.FieldKey] = Rpd(
+                first.Row.Areas.GetValueOrDefault(field.FieldKey),
+                second.Row.Areas.GetValueOrDefault(field.FieldKey));
+        }
+    }
+
+    private static void ApplyQcDynamicAreas(
+        WorkingRow target,
+        WorkingRow previousStdAverage,
+        WorkingRow currentStdAverage,
+        IReadOnlyList<Query2DynamicAreaField> dynamicAreaFields)
+    {
+        foreach (var field in dynamicAreaFields)
+        {
+            if (IsManual(target, AreaKind, field.FieldKey))
+            {
+                continue;
+            }
+
+            target.Row.Areas[field.FieldKey] = DifferenceOverAverage(
+                currentStdAverage.Row.Areas.GetValueOrDefault(field.FieldKey),
+                previousStdAverage.Row.Areas.GetValueOrDefault(field.FieldKey));
+        }
+    }
+
+    private static void ApplyPortPpbDynamicAreas(
+        WorkingRow target,
+        QcDataRow rf,
+        WorkingRow portAverage,
+        WorkingRow stdAverage,
+        IReadOnlyList<Query2DynamicAreaField> dynamicAreaFields)
+    {
+        foreach (var field in dynamicAreaFields)
+        {
+            if (IsManual(target, AreaKind, field.FieldKey))
+            {
+                continue;
+            }
+
+            target.Row.Areas[field.FieldKey] = CalculatePpb(
+                rf.Areas.GetValueOrDefault(field.FieldKey),
+                portAverage.Row.Areas.GetValueOrDefault(field.FieldKey),
+                stdAverage.Row.Areas.GetValueOrDefault(field.FieldKey));
+        }
+    }
+
+    private static void ClearNonManual(WorkingRow target, string valueKind)
+    {
+        foreach (var analyte in CompoundMap.Analytes)
+        {
+            if (IsManual(target, valueKind, analyte.Suffix))
+            {
+                continue;
+            }
+
+            if (string.Equals(valueKind, PpbKind, StringComparison.OrdinalIgnoreCase))
+            {
+                target.Row.Ppbs[analyte.Suffix] = null;
+            }
+            else if (string.Equals(valueKind, RtKind, StringComparison.OrdinalIgnoreCase))
+            {
+                target.Row.RetentionTimes[analyte.Suffix] = null;
+            }
+        }
+    }
+
+    private static bool TryGetTwoSources(
+        Query2PreviewFormula formula,
+        IReadOnlyDictionary<string, WorkingRow> byKey,
+        out WorkingRow first,
+        out WorkingRow second)
+    {
+        first = default!;
+        second = default!;
+        if (formula.SourceRowKeys.Count < 2)
+        {
+            return false;
+        }
+
+        return byKey.TryGetValue(formula.SourceRowKeys[0], out first!) &&
+               byKey.TryGetValue(formula.SourceRowKeys[1], out second!);
+    }
+
+    private static bool TryGetFirstSource(
+        Query2PreviewFormula formula,
+        IReadOnlyDictionary<string, WorkingRow> byKey,
+        out WorkingRow row)
+    {
+        row = default!;
+        return formula.SourceRowKeys.Count > 0 &&
+               byKey.TryGetValue(formula.SourceRowKeys[0], out row!);
+    }
+
+    private static bool TryGetStdAverage(
+        Query2PreviewFormula formula,
+        IReadOnlyDictionary<string, WorkingRow> byKey,
+        out WorkingRow row)
+    {
+        row = default!;
+        return !string.IsNullOrWhiteSpace(formula.StdAverageRowKey) &&
+               byKey.TryGetValue(formula.StdAverageRowKey, out row!);
+    }
+
+    private static void ApplyManualOverrides(
+        WorkingRow workingRow,
+        IReadOnlyList<Query2DynamicAreaField> dynamicAreaFields)
+    {
+        ValidatePpbManualConflict(workingRow.Preview);
+
+        foreach (var (fieldKey, value) in workingRow.Preview.ManualOverrides)
+        {
+            if (!TryParseEditableFieldKey(fieldKey, dynamicAreaFields, out var valueKind, out var analyte))
+            {
+                throw new InvalidOperationException($"Field '{fieldKey}' is not editable.");
+            }
+
+            var parsed = ParseNullableDecimal(value, fieldKey);
+            SetAnalyteValue(workingRow.Row, valueKind, analyte, parsed);
+        }
+    }
+
+    private static void ValidatePpbManualConflict(Query2PreviewRow row)
+    {
+        if (row.RowType != Query2ExportRowType.Ppb)
+        {
+            return;
+        }
+
+        foreach (var analyte in CompoundMap.Analytes)
+        {
+            var areaKey = FieldKey(AreaKind, analyte.Suffix);
+            var ppbKey = FieldKey(PpbKind, analyte.Suffix);
+            if (!row.ManualOverrides.TryGetValue(areaKey, out var areaValue) ||
+                !row.ManualOverrides.TryGetValue(ppbKey, out var ppbValue) ||
+                ValuesEqual(areaValue, ppbValue))
+            {
+                continue;
+            }
+
+            throw new InvalidOperationException($"PPB row cannot have different manual values for '{areaKey}' and '{ppbKey}'.");
+        }
+    }
+
+    private static void ValidateManualOverrides(Query2PreviewState state)
+    {
+        foreach (var row in state.Rows)
+        {
+            foreach (var (fieldKey, value) in row.ManualOverrides)
+            {
+                if (!TryParseEditableFieldKey(fieldKey, state.DynamicAreaFields, out _, out _))
+                {
+                    throw new InvalidOperationException($"Field '{fieldKey}' is not editable.");
+                }
+
+                _ = ParseNullableDecimal(value, fieldKey);
+            }
+        }
+    }
+
+    private static void AssignFormulas(IReadOnlyList<Query2PreviewRow> rows)
+    {
+        var byId = rows
+            .Where(row => !string.IsNullOrWhiteSpace(row.CurrentValues.GetValueOrDefault("id")))
+            .GroupBy(row => row.CurrentValues.GetValueOrDefault("id")!, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+
+        var stdAverageRows = rows
+            .Where(row => row.RowType == Query2ExportRowType.Avg && IsStd(row))
+            .OrderBy(row => ParseDateOrNull(row.CurrentValues.GetValueOrDefault("anlzTime")) ?? DateTime.MaxValue)
+            .ThenBy(row => row.RowKey, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        foreach (var row in rows)
+        {
+            row.Formula = row.RowType switch
+            {
+                Query2ExportRowType.Avg => BuildTwoSourceFormula(row, byId, AverageFormula),
+                Query2ExportRowType.Rpd => BuildTwoSourceFormula(row, byId, RpdFormula),
+                Query2ExportRowType.Qc => BuildTwoSourceFormula(row, byId, QcFormula),
+                Query2ExportRowType.Raw when !IsStd(row) => BuildPortRawPpbFormula(row, stdAverageRows),
+                Query2ExportRowType.Ppb => BuildPortPpbFormula(row, rows, stdAverageRows),
+                _ => null
+            };
+        }
+    }
+
+    private static Query2PreviewFormula? BuildTwoSourceFormula(
+        Query2PreviewRow row,
+        IReadOnlyDictionary<string, Query2PreviewRow> byId,
+        string formulaKind)
+    {
+        var id1 = row.CurrentValues.GetValueOrDefault(HiddenId1Key);
+        var id2 = row.CurrentValues.GetValueOrDefault(HiddenId2Key);
+        if (string.IsNullOrWhiteSpace(id1) ||
+            string.IsNullOrWhiteSpace(id2) ||
+            !byId.TryGetValue(id1, out var first) ||
+            !byId.TryGetValue(id2, out var second))
+        {
+            return null;
+        }
+
+        return new Query2PreviewFormula
+        {
+            Kind = formulaKind,
+            SourceRowKeys = [first.RowKey, second.RowKey]
+        };
+    }
+
+    private static Query2PreviewFormula? BuildPortRawPpbFormula(
+        Query2PreviewRow row,
+        IReadOnlyList<Query2PreviewRow> stdAverageRows)
+    {
+        var stdAverage = ResolveStdAverageFor(row, stdAverageRows);
+        return stdAverage is null
+            ? null
+            : new Query2PreviewFormula
+            {
+                Kind = PortRawPpbFormula,
+                StdAverageRowKey = stdAverage.RowKey
+            };
+    }
+
+    private static Query2PreviewFormula? BuildPortPpbFormula(
+        Query2PreviewRow row,
+        IReadOnlyList<Query2PreviewRow> rows,
+        IReadOnlyList<Query2PreviewRow> stdAverageRows)
+    {
+        var id1 = row.CurrentValues.GetValueOrDefault(HiddenId1Key);
+        var id2 = row.CurrentValues.GetValueOrDefault(HiddenId2Key);
+        var portAverage = rows.FirstOrDefault(candidate =>
+            candidate.RowType == Query2ExportRowType.Avg &&
+            !IsStd(candidate) &&
+            string.Equals(candidate.CurrentValues.GetValueOrDefault(HiddenId1Key), id1, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(candidate.CurrentValues.GetValueOrDefault(HiddenId2Key), id2, StringComparison.OrdinalIgnoreCase));
+        if (portAverage is null)
+        {
+            return null;
+        }
+
+        var stdAverage = ResolveStdAverageFor(portAverage, stdAverageRows);
+        return stdAverage is null
+            ? null
+            : new Query2PreviewFormula
+            {
+                Kind = PortPpbFormula,
+                SourceRowKeys = [portAverage.RowKey],
+                StdAverageRowKey = stdAverage.RowKey
+            };
+    }
+
+    private static Query2PreviewRow? ResolveStdAverageFor(
+        Query2PreviewRow row,
+        IReadOnlyList<Query2PreviewRow> stdAverageRows)
+    {
+        if (stdAverageRows.Count == 0)
+        {
+            return null;
+        }
+
+        var rowTime = ParseDateOrNull(row.CurrentValues.GetValueOrDefault("anlzTime"));
+        if (!rowTime.HasValue)
+        {
+            return stdAverageRows[^1];
+        }
+
+        return stdAverageRows
+            .Where(candidate => (ParseDateOrNull(candidate.CurrentValues.GetValueOrDefault("anlzTime")) ?? DateTime.MinValue) <= rowTime.Value)
+            .LastOrDefault() ?? stdAverageRows[0];
+    }
+
+    private static bool IsStd(Query2PreviewRow row)
+    {
+        var sourceKind = row.CurrentValues.GetValueOrDefault(HiddenSourceKindKey);
+        var port = row.CurrentValues.GetValueOrDefault("port");
+        return string.Equals(sourceKind, "STD", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(port, "STD", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static IReadOnlyList<Query2PreviewColumn> BuildColumns(
+        IReadOnlyList<Query2DynamicAreaField> dynamicAreaFields)
+    {
+        var columns = new List<Query2PreviewColumn>(BaseColumns.Select(CloneColumn));
+        var order = BaseColumns.Length;
+
+        foreach (var analyte in CompoundMap.Analytes)
+        {
+            columns.Add(new Query2PreviewColumn
+            {
+                Key = FieldKey(AreaKind, analyte.Suffix),
+                Header = analyte.Suffix,
+                Order = ++order,
+                Editable = true,
+                ValueKind = AreaKind,
+                Analyte = analyte.Suffix,
+                DataType = "decimal"
+            });
+        }
+
+        foreach (var field in dynamicAreaFields)
+        {
+            columns.Add(new Query2PreviewColumn
+            {
+                Key = FieldKey(AreaKind, field.FieldKey),
+                Header = field.DisplayName,
+                Order = ++order,
+                Editable = true,
+                ValueKind = AreaKind,
+                Analyte = field.FieldKey,
+                IsDynamic = true,
+                DataType = "decimal"
+            });
+        }
+
+        foreach (var analyte in CompoundMap.Analytes)
+        {
+            columns.Add(new Query2PreviewColumn
+            {
+                Key = FieldKey(PpbKind, analyte.Suffix),
+                Header = analyte.Suffix,
+                Order = ++order,
+                Editable = true,
+                ValueKind = PpbKind,
+                Analyte = analyte.Suffix,
+                DataType = "decimal"
+            });
+        }
+
+        foreach (var analyte in CompoundMap.Analytes)
+        {
+            columns.Add(new Query2PreviewColumn
+            {
+                Key = FieldKey(RtKind, analyte.Suffix),
+                Header = analyte.Suffix,
+                Order = ++order,
+                Editable = true,
+                ValueKind = RtKind,
+                Analyte = analyte.Suffix,
+                DataType = "decimal"
+            });
+        }
+
+        foreach (var definition in QcColumnDefinitions)
+        {
+            columns.Add(new Query2PreviewColumn
+            {
+                Key = definition.Key,
+                Header = definition.Header,
+                Order = ++order,
+                Editable = false,
+                ValueKind = QcKind,
+                DataType = definition.DataType
+            });
+        }
+
+        return columns;
+    }
+
+    private static Query2PreviewColumn CloneColumn(Query2PreviewColumn column) =>
+        new()
+        {
+            Key = column.Key,
+            Header = column.Header,
+            Order = column.Order,
+            Editable = column.Editable,
+            ValueKind = column.ValueKind,
+            Analyte = column.Analyte,
+            IsDynamic = column.IsDynamic,
+            DataType = column.DataType
+        };
+
+    private static Dictionary<string, string?> BuildValueMap(
+        Query2ExportRow exportRow,
+        IReadOnlyList<Query2DynamicAreaField> dynamicAreaFields,
+        QcJudgmentSnapshot? qcSnapshot = null)
+    {
+        var row = exportRow.Row;
+        var layoutValues = Query2ColumnLayout.BuildValues(exportRow);
+        var values = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["id"] = FormatValue(layoutValues[0]),
+            ["anlzTime"] = FormatValue(row.AnlzTime),
+            ["inst"] = row.Inst,
+            ["port"] = row.Port,
+            ["si0Id"] = FormatValue(layoutValues[4]),
+            ["sampleNo"] = FormatValue(row.SampleNo),
+            ["lotNo"] = row.LotNo,
+            ["dataFilename"] = row.DataFilename,
+            ["dataFilepath"] = row.DataFilepath,
+            ["pcName"] = row.PcName,
+            ["container"] = row.Container,
+            ["description"] = row.Description,
+            ["emVolts"] = row.EmVolts,
+            ["relativeEm"] = row.RelativeEm,
+            ["sampleName"] = row.SampleName,
+            ["sampleType"] = row.SampleType,
+            [HiddenSourceKindKey] = row.SourceKind,
+            [HiddenSourceFolderNameKey] = row.SourceFolderName,
+            [HiddenId1Key] = row.Id1,
+            [HiddenId2Key] = row.Id2
+        };
+
+        foreach (var analyte in CompoundMap.Analytes)
+        {
+            var area = row.Areas.GetValueOrDefault(analyte.Suffix);
+            var ppb = row.Ppbs.GetValueOrDefault(analyte.Suffix);
+            if (exportRow.RowType == Query2ExportRowType.Ppb)
+            {
+                ppb ??= area;
+            }
+
+            values[FieldKey(AreaKind, analyte.Suffix)] = FormatValue(area);
+            values[FieldKey(PpbKind, analyte.Suffix)] = FormatValue(ppb);
+            values[FieldKey(RtKind, analyte.Suffix)] = FormatValue(row.RetentionTimes.GetValueOrDefault(analyte.Suffix));
+        }
+
+        foreach (var field in dynamicAreaFields)
+        {
+            values[FieldKey(AreaKind, field.FieldKey)] = FormatValue(row.Areas.GetValueOrDefault(field.FieldKey));
+        }
+
+        var qc = exportRow.RowType == Query2ExportRowType.Ppb ? qcSnapshot : null;
+        values[QcIniPrsKey] = FormatValue(qc?.IniPrs);
+        values[QcIniPrsMinKey] = FormatValue(qc?.IniPrsMin);
+        values[QcFnlPrsKey] = FormatValue(qc?.FnlPrs);
+        values[QcFnlPrsMinKey] = FormatValue(qc?.FnlPrsMin);
+        values[QcPressureResultKey] = qc?.PressureResult;
+        values[QcResultKey] = qc?.Result;
+        values[QcFailDescKey] = qc?.FailDesc;
+
+        return values;
+    }
+
+    private static QcDataRow ToDataRow(
+        Query2ExportRowType rowType,
+        IReadOnlyDictionary<string, string?> values,
+        IReadOnlyList<Query2DynamicAreaField> dynamicAreaFields)
+    {
+        var row = new QcDataRow
+        {
+            Id = values.GetValueOrDefault("id"),
+            AnlzTime = ParseDateOrNull(values.GetValueOrDefault("anlzTime")),
+            Inst = values.GetValueOrDefault("inst"),
+            Port = values.GetValueOrDefault("port"),
+            SourceKind = values.GetValueOrDefault(HiddenSourceKindKey),
+            SourceFolderName = values.GetValueOrDefault(HiddenSourceFolderNameKey),
+            Si0Id = ParseIntOrNull(values.GetValueOrDefault("si0Id")),
+            SampleNo = ParseIntOrNull(values.GetValueOrDefault("sampleNo")),
+            LotNo = values.GetValueOrDefault("lotNo"),
+            DataFilename = values.GetValueOrDefault("dataFilename"),
+            DataFilepath = values.GetValueOrDefault("dataFilepath"),
+            PcName = values.GetValueOrDefault("pcName"),
+            Container = values.GetValueOrDefault("container"),
+            Description = values.GetValueOrDefault("description"),
+            EmVolts = values.GetValueOrDefault("emVolts"),
+            RelativeEm = values.GetValueOrDefault("relativeEm"),
+            SampleName = values.GetValueOrDefault("sampleName"),
+            SampleType = values.GetValueOrDefault("sampleType"),
+            Id1 = values.GetValueOrDefault(HiddenId1Key),
+            Id2 = values.GetValueOrDefault(HiddenId2Key)
+        };
+
+        foreach (var analyte in CompoundMap.Analytes)
+        {
+            var area = ParseNullableDecimal(values.GetValueOrDefault(FieldKey(AreaKind, analyte.Suffix)), FieldKey(AreaKind, analyte.Suffix));
+            var ppb = ParseNullableDecimal(values.GetValueOrDefault(FieldKey(PpbKind, analyte.Suffix)), FieldKey(PpbKind, analyte.Suffix));
+            if (rowType == Query2ExportRowType.Ppb)
+            {
+                area = ppb ?? area;
+                ppb = area;
+            }
+
+            row.Areas[analyte.Suffix] = area;
+            row.Ppbs[analyte.Suffix] = ppb;
+            row.RetentionTimes[analyte.Suffix] = ParseNullableDecimal(values.GetValueOrDefault(FieldKey(RtKind, analyte.Suffix)), FieldKey(RtKind, analyte.Suffix));
+        }
+
+        foreach (var field in dynamicAreaFields)
+        {
+            var fieldKey = FieldKey(AreaKind, field.FieldKey);
+            row.Areas[field.FieldKey] = ParseNullableDecimal(values.GetValueOrDefault(fieldKey), fieldKey);
+        }
+
+        return row;
+    }
+
+    private static void SetAnalyteValue(QcDataRow row, string valueKind, string analyte, decimal? value)
+    {
+        if (string.Equals(valueKind, AreaKind, StringComparison.OrdinalIgnoreCase))
+        {
+            row.Areas[analyte] = value;
+            return;
+        }
+
+        if (string.Equals(valueKind, PpbKind, StringComparison.OrdinalIgnoreCase))
+        {
+            row.Ppbs[analyte] = value;
+            return;
+        }
+
+        row.RetentionTimes[analyte] = value;
+    }
+
+    private static Query2PreviewState CloneState(Query2PreviewState state) =>
+        new()
+        {
+            StartDate = state.StartDate,
+            EndDate = state.EndDate,
+            ExportDateText = state.ExportDateText,
+            RfId = state.RfId,
+            StdRawIds = state.StdRawIds.ToArray(),
+            PortRawIds = state.PortRawIds.ToArray(),
+            Columns = state.Columns.Select(CloneColumn).ToArray(),
+            DynamicAreaFields = state.DynamicAreaFields.ToArray(),
+            QcParameterWarnings = state.QcParameterWarnings.ToArray(),
+            Rows = state.Rows.Select(CloneRow).ToArray()
+        };
+
+    private static Query2PreviewRow CloneRow(Query2PreviewRow row) =>
+        new()
+        {
+            RowKey = row.RowKey,
+            RowType = row.RowType,
+            DisplayId = row.DisplayId,
+            OriginalValues = new Dictionary<string, string?>(row.OriginalValues, StringComparer.OrdinalIgnoreCase),
+            CurrentValues = new Dictionary<string, string?>(row.CurrentValues, StringComparer.OrdinalIgnoreCase),
+            ManualOverrides = new Dictionary<string, string?>(row.ManualOverrides, StringComparer.OrdinalIgnoreCase),
+            Formula = row.Formula is null
+                ? null
+                : new Query2PreviewFormula
+                {
+                    Kind = row.Formula.Kind,
+                    SourceRowKeys = row.Formula.SourceRowKeys.ToArray(),
+                    StdAverageRowKey = row.Formula.StdAverageRowKey
+                }
+        };
+
+    private static bool IsManual(WorkingRow row, string valueKind, string analyte) =>
+        row.Preview.ManualOverrides.ContainsKey(FieldKey(valueKind, analyte));
+
+    private static bool TryParseEditableFieldKey(
+        string fieldKey,
+        IReadOnlyList<Query2DynamicAreaField> dynamicAreaFields,
+        out string valueKind,
+        out string analyte)
+    {
+        valueKind = string.Empty;
+        analyte = string.Empty;
+        var separator = fieldKey.IndexOf(':', StringComparison.Ordinal);
+        if (separator <= 0 || separator == fieldKey.Length - 1)
+        {
+            return false;
+        }
+
+        valueKind = fieldKey[..separator];
+        analyte = fieldKey[(separator + 1)..];
+        var analyteValue = analyte;
+        if (!string.Equals(valueKind, AreaKind, StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(valueKind, PpbKind, StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(valueKind, RtKind, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (CompoundMap.Analytes.Any(item => string.Equals(item.Suffix, analyteValue, StringComparison.OrdinalIgnoreCase)))
+        {
+            return true;
+        }
+
+        return string.Equals(valueKind, AreaKind, StringComparison.OrdinalIgnoreCase) &&
+               dynamicAreaFields.Any(field => string.Equals(field.FieldKey, analyteValue, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string FieldKey(string valueKind, string analyte) => $"{valueKind}:{analyte}";
+
+    private static IReadOnlyList<Query2DynamicAreaField> NormalizeDynamicAreaFields(
+        IReadOnlyList<Query2DynamicAreaField> dynamicAreaFields) =>
+        dynamicAreaFields
+            .Where(field => field.IsActive)
+            .GroupBy(field => field.FieldKey, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .OrderBy(field => field.SortOrder)
+            .ThenBy(field => field.FieldKey, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+    private static IReadOnlyDictionary<string, IReadOnlyDictionary<string, decimal?>> BuildDynamicAreaPortValueMap(
+        IReadOnlyList<Query2DynamicAreaPortValue> values)
+    {
+        var result = new Dictionary<string, IReadOnlyDictionary<string, decimal?>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var group in values.GroupBy(value => value.FieldKey, StringComparer.OrdinalIgnoreCase))
+        {
+            result[group.Key] = group
+                .GroupBy(value => Query2DynamicAreaRules.NormalizePortKey(value.PortKey), StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(
+                    item => item.Key,
+                    item => item.Last().AreaValue,
+                    StringComparer.OrdinalIgnoreCase);
+        }
+
+        return result;
+    }
+
+    private static void ApplyDynamicAreaDefaults(
+        Query2ExportRow exportRow,
+        IReadOnlyList<Query2DynamicAreaField> dynamicAreaFields,
+        IReadOnlyDictionary<string, IReadOnlyDictionary<string, decimal?>> dynamicAreaValues)
+    {
+        if (dynamicAreaFields.Count == 0 ||
+            exportRow.RowType is not (Query2ExportRowType.Rf or Query2ExportRowType.Raw))
+        {
+            return;
+        }
+
+        var portKey = ResolveDynamicAreaPortKey(exportRow);
+        if (string.IsNullOrWhiteSpace(portKey))
+        {
+            return;
+        }
+
+        foreach (var field in dynamicAreaFields)
+        {
+            if (dynamicAreaValues.TryGetValue(field.FieldKey, out var byPort) &&
+                byPort.TryGetValue(portKey, out var value))
+            {
+                exportRow.Row.Areas[field.FieldKey] = value;
+            }
+        }
+    }
+
+    private static string? ResolveDynamicAreaPortKey(Query2ExportRow exportRow)
+    {
+        if (exportRow.RowType == Query2ExportRowType.Rf)
+        {
+            return "RF";
+        }
+
+        var sourceKind = exportRow.Row.SourceKind?.Trim();
+        var port = exportRow.Row.Port?.Trim();
+        if (string.Equals(sourceKind, "STD", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(port, "STD", StringComparison.OrdinalIgnoreCase))
+        {
+            return "STD";
+        }
+
+        return string.IsNullOrWhiteSpace(port)
+            ? null
+            : Query2DynamicAreaRules.NormalizePortKey(port);
+    }
+
+    private static decimal? CalculatePpb(decimal? rfValue, decimal? sampleArea, decimal? stdAverageArea)
+    {
+        if (!rfValue.HasValue ||
+            !sampleArea.HasValue ||
+            !stdAverageArea.HasValue ||
+            rfValue.Value < 0 ||
+            sampleArea.Value < 0 ||
+            stdAverageArea.Value <= 0)
+        {
+            return null;
+        }
+
+        return rfValue.Value * sampleArea.Value / stdAverageArea.Value;
+    }
+
+    private static decimal? Average(decimal? first, decimal? second)
+    {
+        if (!first.HasValue || !second.HasValue || first.Value < 0 || second.Value < 0)
+        {
+            return null;
+        }
+
+        return (first.Value + second.Value) / 2m;
+    }
+
+    private static decimal? Rpd(decimal? first, decimal? second)
+    {
+        if (!first.HasValue || !second.HasValue || first.Value < 0 || second.Value < 0)
+        {
+            return null;
+        }
+
+        var max = Math.Max(first.Value, second.Value);
+        var min = Math.Min(first.Value, second.Value);
+        var denominator = (max + min) / 2m;
+        return denominator <= 0 ? null : (max - min) / denominator;
+    }
+
+    private static decimal? DifferenceOverAverage(decimal? current, decimal? previous)
+    {
+        if (!current.HasValue || !previous.HasValue || current.Value < 0 || previous.Value < 0)
+        {
+            return null;
+        }
+
+        var denominator = (current.Value + previous.Value) / 2m;
+        return denominator <= 0 ? null : (current.Value - previous.Value) / denominator;
+    }
+
+    private static string? FormatValue(object? value) =>
+        value switch
+        {
+            null => null,
+            DateTime dateTime => dateTime.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture),
+            decimal decimalValue => decimalValue.ToString("0.#############################", CultureInfo.InvariantCulture),
+            double doubleValue => doubleValue.ToString("G17", CultureInfo.InvariantCulture),
+            float floatValue => floatValue.ToString("G9", CultureInfo.InvariantCulture),
+            IFormattable formattable => formattable.ToString(null, CultureInfo.InvariantCulture),
+            _ => value.ToString()
+        };
+
+    private static decimal? ParseNullableDecimal(string? value, string fieldKey)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        if (decimal.TryParse(value, DecimalNumberStyles, CultureInfo.InvariantCulture, out var parsed) ||
+            decimal.TryParse(value, DecimalNumberStyles, CultureInfo.CurrentCulture, out parsed))
+        {
+            return parsed;
+        }
+
+        throw new InvalidOperationException($"Field '{fieldKey}' must be empty or a decimal number.");
+    }
+
+    private static int? ParseIntOrNull(string? value) =>
+        int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) ? parsed : null;
+
+    private static DateTime? ParseDateOrNull(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        var formats = new[]
+        {
+            "yyyy-MM-dd HH:mm:ss",
+            "yyyy-MM-ddTHH:mm:ss",
+            "yyyy-MM-ddTHH:mm:ss.fff",
+            "yyyy/MM/dd HH:mm:ss",
+            "yyyyMMdd"
+        };
+        if (DateTime.TryParseExact(value, formats, CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed) ||
+            DateTime.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.None, out parsed) ||
+            DateTime.TryParse(value, CultureInfo.CurrentCulture, DateTimeStyles.None, out parsed))
+        {
+            return parsed;
+        }
+
+        return null;
+    }
+
+    private static bool TryParseBatchDate(string? value, out DateTime batchDate) =>
+        DateTime.TryParseExact(
+            value,
+            "yyyyMMdd",
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.None,
+            out batchDate);
+
+    private static bool ValuesEqual(string? first, string? second)
+    {
+        first = NormalizeBlank(first);
+        second = NormalizeBlank(second);
+        if (first is null || second is null)
+        {
+            return first is null && second is null;
+        }
+
+        var firstDecimal = ParseNullableDecimalNoThrow(first);
+        var secondDecimal = ParseNullableDecimalNoThrow(second);
+        return firstDecimal.HasValue && secondDecimal.HasValue
+            ? firstDecimal.Value == secondDecimal.Value
+            : string.Equals(first, second, StringComparison.Ordinal);
+    }
+
+    private static decimal? ParseNullableDecimalNoThrow(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        return decimal.TryParse(value, DecimalNumberStyles, CultureInfo.InvariantCulture, out var parsed) ||
+               decimal.TryParse(value, DecimalNumberStyles, CultureInfo.CurrentCulture, out parsed)
+            ? parsed
+            : null;
+    }
+
+    private static string? NormalizeBlank(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value;
+
+    private static string FormatSelectedIds(IEnumerable<string> ids) =>
+        string.Join(
+            "\n",
+            ids.Where(id => !string.IsNullOrWhiteSpace(id))
+                .Select(id => id.Trim().ToUpperInvariant())
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(id => id, StringComparer.Ordinal));
+
+    private sealed record WorkingRow(Query2PreviewRow Preview, QcDataRow Row);
+}

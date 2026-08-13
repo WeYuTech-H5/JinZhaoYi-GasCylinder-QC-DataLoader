@@ -1,0 +1,1065 @@
+using System.Globalization;
+using System.IO.Compression;
+using System.Text;
+using System.Xml.Linq;
+using ClosedXML.Excel;
+using DocumentFormat.OpenXml;
+using DocumentFormat.OpenXml.Packaging;
+using DocumentFormat.OpenXml.Spreadsheet;
+using JinZhaoYi.GasQcDataLoader.Configuration;
+using JinZhaoYi.GasQcDataLoader.DataModels;
+using JinZhaoYi.GasQcDataLoader.Services.Interface;
+using Microsoft.Extensions.Options;
+using Xdr = DocumentFormat.OpenXml.Drawing.Spreadsheet;
+
+namespace JinZhaoYi.GasQcDataLoader.Services.Service;
+
+public sealed class CoaWorkbookExporter(IOptions<SchedulerOptions> options) : ICoaWorkbookExporter
+{
+    private const string Large500MlSheetName = "COA(500 mL)";
+    private const string Large1LSheetName = "COA(1 L)";
+    private const string LargeYadongSheetName = "COA(亞東)";
+    private const string SmallBlankSheetName = "Report(空白)";
+
+    private static readonly LargeContainerFields LargeHalfLiterFields = new(
+        ProductName: "NF-SEMI STD",
+        CylinderSize: "5 cm*35cm",
+        CylinderPressure: "950 psi",
+        CylinderVolume: "500 mL",
+        GasVolume: "41 L",
+        Specification: "±10%");
+
+    private static readonly LargeContainerFields LargeOneLiterFields = new(
+        ProductName: "STD Gas PC for Semiconductor",
+        CylinderSize: "8.87 cm*27.7 cm",
+        CylinderPressure: "1000 psi",
+        CylinderVolume: "1000 mL",
+        GasVolume: "70 L",
+        Specification: "±15%");
+
+    private static readonly IReadOnlyDictionary<string, string> LargeCasIdSuffixes =
+        To14cCsvAnalyteMap.Items
+            .Where(item => !string.IsNullOrWhiteSpace(item.ReptId) && !string.IsNullOrWhiteSpace(item.CompoundSuffix))
+            .ToDictionary(item => item.ReptId!, item => item.CompoundSuffix!, StringComparer.OrdinalIgnoreCase);
+
+    private static readonly IReadOnlyList<string> SmallCardSuffixes =
+    [
+        "Acetone",
+        "IPA",
+        "CNF",
+        "Cyclopentane",
+        "2-Butanone",
+        "Ethyl Acetate",
+        "Benzene",
+        "Toluene",
+        "1,2,4-TMB"
+    ];
+
+    private static readonly IReadOnlyList<SmallCardLayout> SmallCardLayouts =
+    [
+        new("F6", "F8", "B19", "F19", "B20", "B2:I20"),
+        new("O6", "O8", "K19", "O19", "K20", "K2:R20"),
+        new("X6", "X8", "T19", "X19", "T20", "T2:AA20"),
+        new("F28", "F30", "B41", "F41", "B42", "B24:I42"),
+        new("O28", "O30", "K41", "O41", "K42", "K24:R42"),
+        new("X28", "X30", "T41", "X41", "T42", "T24:AA42"),
+        new("F50", "F52", "B63", "F63", "B64", "B46:I64"),
+        new("O50", "O52", "K63", "O63", "K64", "K46:R64"),
+        new("X50", "X52", "T63", "X63", "T64", "T46:AA64")
+    ];
+
+    private readonly SchedulerOptions _options = options.Value;
+
+    public CoaWorkbookDownload ExportLargeForDownload(
+        IReadOnlyCollection<QcDataRow> rows,
+        string batchDateText,
+        CoaLargeTemplateType templateType)
+    {
+        var orderedRows = OrderRows(rows);
+        var templatePath = ResolveTemplatePath(_options.CoaExport.LargeTemplatePath, "COA(大卡).xlsx");
+
+        var content = ExportLargeWorkbookToBytes(templatePath, orderedRows, templateType);
+        return new CoaWorkbookDownload(
+            content,
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            $"COA(大卡)_{batchDateText}.xlsx");
+    }
+
+    public CoaWorkbookDownload ExportSmallForDownload(
+        IReadOnlyCollection<QcDataRow> rows,
+        string batchDateText,
+        int cardsPerPage)
+    {
+        if (cardsPerPage < 1)
+        {
+            throw new ArgumentOutOfRangeException(nameof(cardsPerPage), "cardsPerPage must be greater than or equal to 1.");
+        }
+
+        var orderedRows = OrderRows(rows);
+        var templatePath = ResolveTemplatePath(_options.CoaExport.SmallTemplatePath, "COA(小卡).xlsx");
+
+        // 小卡舊版模板固定是一頁 9 格；cardsPerPage 參數保留給既有 API 相容。
+        var content = ExportSmallWorkbookToBytes(templatePath, orderedRows, SmallCardLayouts.Count);
+        return new CoaWorkbookDownload(
+            content,
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            $"COA(小卡)_{batchDateText}.xlsx");
+    }
+
+    private byte[] ExportLargeWorkbookToBytes(
+        string templatePath,
+        IReadOnlyList<QcDataRow> orderedRows,
+        CoaLargeTemplateType templateType)
+    {
+        using var stream = new MemoryStream();
+        using (var templateStream = File.OpenRead(templatePath))
+        {
+            templateStream.CopyTo(stream);
+        }
+
+        stream.Position = 0;
+        var document = SpreadsheetDocument.Open(stream, true);
+        var workbookPart = document.WorkbookPart ?? throw new InvalidOperationException("COA large template has no workbook part.");
+        var sheets = workbookPart.Workbook.Sheets ?? throw new InvalidOperationException("COA large template has no sheets.");
+
+        // 大卡模板含頁首 logo 與公司資訊圖片；直接複製 OpenXML worksheet 與 drawing 關聯，避免 ClosedXML 存檔時遺失圖片內容。
+        for (var index = 0; index < orderedRows.Count; index++)
+        {
+            var row = orderedRows[index];
+            var sourceSheetName = ResolveLargeSourceSheetName(row, templateType);
+            var sourceSheet = sheets.Elements<Sheet>()
+                .FirstOrDefault(sheet => string.Equals(sheet.Name?.Value, sourceSheetName, StringComparison.OrdinalIgnoreCase))
+                ?? throw new InvalidOperationException($"COA large template does not contain worksheet '{sourceSheetName}'.");
+            var sourcePart = (WorksheetPart)workbookPart.GetPartById(sourceSheet.Id!);
+            var targetSheetName = BuildUniqueOpenXmlSheetName(workbookPart, $"COA_{row.SampleName}", index + 1);
+            var targetPart = CloneWorksheetPartWithRelationships(workbookPart, sourcePart, targetSheetName);
+            WriteLargeRow(targetPart, row, templateType);
+        }
+
+        DeleteOpenXmlSheets(workbookPart, Large500MlSheetName, Large1LSheetName, LargeYadongSheetName, "欄位註解");
+        DeleteCalculationChain(workbookPart);
+        ResetWorkbookView(workbookPart);
+        workbookPart.Workbook.Save();
+        try
+        {
+            document.Dispose();
+        }
+        catch (ObjectDisposedException)
+        {
+            // Some image-containing packages close the underlying package during part serialization after all parts are saved.
+        }
+
+        return stream.ToArray();
+    }
+
+    private byte[] ExportSmallWorkbookToBytes(string templatePath, IReadOnlyList<QcDataRow> orderedRows, int cardsPerPage)
+    {
+        using var stream = new MemoryStream();
+        using (var templateStream = File.OpenRead(templatePath))
+        {
+            templateStream.CopyTo(stream);
+        }
+
+        stream.Position = 0;
+        var document = SpreadsheetDocument.Open(stream, true);
+        var workbookPart = document.WorkbookPart ?? throw new InvalidOperationException("COA small template has no workbook part.");
+        var sheets = workbookPart.Workbook.Sheets ?? throw new InvalidOperationException("COA small template has no sheets.");
+        var templateSheet = sheets.Elements<Sheet>()
+            .FirstOrDefault(sheet => string.Equals(sheet.Name?.Value, SmallBlankSheetName, StringComparison.OrdinalIgnoreCase))
+            ?? throw new InvalidOperationException($"COA small template does not contain worksheet '{SmallBlankSheetName}'.");
+        var templatePart = (WorksheetPart)workbookPart.GetPartById(templateSheet.Id!);
+
+        // Each selected cylinder produces one small card. A worksheet contains up to 9 cards.
+        var pages = BuildSmallCardPages(orderedRows, cardsPerPage);
+        for (var pageIndex = 0; pageIndex < pages.Count; pageIndex++)
+        {
+            var page = pages[pageIndex];
+            var targetSheetName = BuildUniqueOpenXmlSheetName(
+                workbookPart,
+                $"COA\u5c0f\u5361{pageIndex + 1}",
+                pageIndex + 1);
+            var worksheetPart = pageIndex == 0
+                ? templatePart
+                : CloneWorksheetPartWithRelationships(workbookPart, templatePart, targetSheetName);
+
+            if (pageIndex == 0)
+            {
+                templateSheet.Name = targetSheetName;
+            }
+
+            ClearSmallDynamicCells(worksheetPart);
+            ClearUnusedSmallCardSlots(worksheetPart, page.Rows.Count);
+
+            for (var cardIndex = 0; cardIndex < page.Rows.Count; cardIndex++)
+            {
+                WriteSmallCard(worksheetPart, SmallCardLayouts[cardIndex], page.Rows[cardIndex]);
+            }
+
+            // 下載用 Excel 必須保留「修改前第一版」模板本身的列印比例與邊界；
+            // PDF 的 150% 放大與窄邊界只在 SpreadsheetPdfConverter 的暫存檔處理。
+        }
+
+        DeleteOpenXmlSheets(workbookPart, "Report(範本)", "欄位註解");
+        DeleteCalculationChain(workbookPart);
+        ResetWorkbookView(workbookPart);
+        workbookPart.Workbook.Save();
+        try
+        {
+            document.Dispose();
+        }
+        catch (ObjectDisposedException)
+        {
+            // Some stripped small-card templates close the underlying package during disposal after all parts are saved.
+        }
+
+        return stream.ToArray();
+    }
+
+    private string ResolveLargeSourceSheetName(QcDataRow row, CoaLargeTemplateType templateType)
+    {
+        if (templateType == CoaLargeTemplateType.Yadong)
+        {
+            return LargeYadongSheetName;
+        }
+
+        return IsHalfLiterContainer(row)
+            ? Large500MlSheetName
+            : Large1LSheetName;
+    }
+
+    private void WriteLargeRow(IXLWorksheet worksheet, QcDataRow row, CoaLargeTemplateType templateType)
+    {
+        if (templateType == CoaLargeTemplateType.Standard)
+        {
+            ApplyLargeContainerFields(worksheet, row);
+        }
+
+        worksheet.Cell("B12").Value = FormatDate(row.AnlzTime);
+        worksheet.Cell("B13").Value = FormatDate(ResolveExpirationDate(row));
+        worksheet.Cell("B15").Value = row.SampleName ?? string.Empty;
+
+        for (var rowNumber = 19; rowNumber <= 57; rowNumber++)
+        {
+            var casNumber = worksheet.Cell(rowNumber, 3).GetString().Trim();
+            if (!TryResolveLargeSuffixFromCas(casNumber, out var suffix))
+            {
+                continue;
+            }
+
+            WriteDecimal(worksheet.Cell(rowNumber, 5), row.Areas.GetValueOrDefault(suffix));
+        }
+    }
+
+    private void WriteLargeRow(WorksheetPart worksheetPart, QcDataRow row, CoaLargeTemplateType templateType)
+    {
+        if (templateType == CoaLargeTemplateType.Standard)
+        {
+            ApplyLargeContainerFields(worksheetPart, row);
+        }
+
+        SetStringCell(worksheetPart, "B12", FormatDate(row.AnlzTime));
+        // 目前來源資料沒有獨立的鋼瓶到期日欄位，先依既有規則用分析時間 AnlzTime + 364 天計算。
+        SetStringCell(worksheetPart, "B13", FormatDate(ResolveExpirationDate(row)));
+        SetStringCell(worksheetPart, "B15", row.SampleName ?? string.Empty);
+
+        for (uint rowNumber = 19; rowNumber <= 57; rowNumber++)
+        {
+            var casNumber = GetCellText(worksheetPart, $"C{rowNumber}").Trim();
+            if (!TryResolveLargeSuffixFromCas(casNumber, out var suffix))
+            {
+                continue;
+            }
+
+            SetDecimalCell(worksheetPart, $"E{rowNumber}", row.Areas.GetValueOrDefault(suffix));
+        }
+    }
+
+    private static void ApplyLargeContainerFields(IXLWorksheet worksheet, QcDataRow row)
+    {
+        var fields = ResolveLargeContainerFields(row);
+        worksheet.Cell("B10").Value = fields.ProductName;
+        worksheet.Cell("B11").Value = ResolveLargeProductNumber(row.SampleName);
+        worksheet.Cell("B14").Value = fields.CylinderSize;
+        worksheet.Cell("B16").Value = fields.CylinderPressure;
+        worksheet.Cell("E10").Value = "1/4\"VCR Female";
+        worksheet.Cell("E11").Value = fields.CylinderVolume;
+        worksheet.Cell("E12").Value = "Stainless";
+        worksheet.Cell("E13").Value = fields.GasVolume;
+        worksheet.Cell("E14").Value = "Nitrogen";
+        worksheet.Cell("E15").Value = "±10%";
+        worksheet.Cell("E16").Value = fields.Specification;
+    }
+
+    private static void ApplyLargeContainerFields(WorksheetPart worksheetPart, QcDataRow row)
+    {
+        var fields = ResolveLargeContainerFields(row);
+        // 下載版 COA(大卡) 的「欄位註解」定義這些欄位要依 Container 計算，
+        // 因此匯出時明確覆寫，避免模板工作表中的舊靜態文字造成 0.5L/1L 對應相反。
+        SetStringCell(worksheetPart, "B10", fields.ProductName);
+        SetStringCell(worksheetPart, "B11", ResolveLargeProductNumber(row.SampleName));
+        SetStringCell(worksheetPart, "B14", fields.CylinderSize);
+        SetStringCell(worksheetPart, "B16", fields.CylinderPressure);
+        SetStringCell(worksheetPart, "E10", "1/4\"VCR Female");
+        SetStringCell(worksheetPart, "E11", fields.CylinderVolume);
+        SetStringCell(worksheetPart, "E12", "Stainless");
+        SetStringCell(worksheetPart, "E13", fields.GasVolume);
+        SetStringCell(worksheetPart, "E14", "Nitrogen");
+        SetStringCell(worksheetPart, "E15", "±10%");
+        SetStringCell(worksheetPart, "E16", fields.Specification);
+    }
+
+    private static LargeContainerFields ResolveLargeContainerFields(QcDataRow row) =>
+        IsHalfLiterContainer(row) ? LargeHalfLiterFields : LargeOneLiterFields;
+
+    private static string ResolveLargeProductNumber(string? sampleName)
+    {
+        var value = sampleName?.Trim() ?? string.Empty;
+        // Product Number follows the COA mapping confirmed by the requirements:
+        // STD-N/STD-T/AZ => PG000-0006, TSMC => PG000-0016, VSMC/STD-L => PG000-0010.
+        if (StartsWithAny(value, "STD-N", "STD-T", "AZ"))
+        {
+            return "PG000-0006";
+        }
+
+        if (StartsWithAny(value, "TSMC"))
+        {
+            return "PG000-0016";
+        }
+
+        if (StartsWithAny(value, "VSMC", "STD-L"))
+        {
+            return "PG000-0010";
+        }
+
+        return string.Empty;
+    }
+
+    private static bool StartsWithAny(string value, params string[] prefixes) =>
+        prefixes.Any(prefix => value.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
+
+    private static bool IsHalfLiterContainer(QcDataRow row) =>
+        row.Container?.Contains("0.5", StringComparison.OrdinalIgnoreCase) == true;
+
+    private static bool TryResolveLargeSuffixFromCas(string? casNumber, out string suffix)
+    {
+        // 大卡 Result Conc. 依會議規則改用 CAS Number 對附件三 TO14C reptID；例如 76-14-2 -> 76142 -> Freon114。
+        foreach (var casId in EnumerateCasIds(casNumber))
+        {
+            if (LargeCasIdSuffixes.TryGetValue(casId, out suffix!))
+            {
+                return true;
+            }
+        }
+
+        suffix = string.Empty;
+        return false;
+    }
+
+    private static IEnumerable<string> EnumerateCasIds(string? casNumber)
+    {
+        if (string.IsNullOrWhiteSpace(casNumber))
+        {
+            yield break;
+        }
+
+        foreach (var token in casNumber.Split(['/', ',', ';', '\r', '\n', '\t', ' '], StringSplitOptions.RemoveEmptyEntries))
+        {
+            var casId = new string(token.Where(char.IsDigit).ToArray());
+            if (!string.IsNullOrWhiteSpace(casId))
+            {
+                yield return casId;
+            }
+        }
+    }
+
+    private void WriteSmallCard(IXLWorksheet worksheet, SmallCardLayout layout, QcDataRow row)
+    {
+        worksheet.Cell(layout.SampleCell).Value = row.SampleName ?? string.Empty;
+        worksheet.Cell(layout.MotherLotCell).Value = $"母瓶 NO.  {ResolveMotherLotId(row)}";
+        worksheet.Cell(layout.QcDateCell).Value = $"QC: {FormatDate(row.AnlzTime)}";
+        worksheet.Cell(layout.ExpirationCell).Value = $"{row.SampleName}有效期限：{FormatDate(ResolveExpirationDate(row))}";
+
+        var resultCell = worksheet.Cell(layout.FirstResultCell);
+        for (var index = 0; index < SmallCardSuffixes.Count; index++)
+        {
+            WriteDecimal(resultCell.CellBelow(index), row.Areas.GetValueOrDefault(SmallCardSuffixes[index]));
+        }
+    }
+
+    private void WriteSmallCard(WorksheetPart worksheetPart, SmallCardLayout layout, QcDataRow row)
+    {
+        SetStringCell(worksheetPart, layout.SampleCell, row.SampleName ?? string.Empty);
+        SetStringCell(worksheetPart, layout.MotherLotCell, $"母瓶 NO.  {ResolveMotherLotId(row)}");
+        SetStringCell(worksheetPart, layout.QcDateCell, $"QC: {FormatDate(row.AnlzTime)}");
+        SetStringCell(worksheetPart, layout.ExpirationCell, $"{row.SampleName}有效期限：{FormatDate(ResolveExpirationDate(row))}");
+
+        var firstResult = SplitCellReference(layout.FirstResultCell);
+        for (var index = 0; index < SmallCardSuffixes.Count; index++)
+        {
+            SetDecimalCell(
+                worksheetPart,
+                $"{firstResult.Column}{firstResult.Row + index}",
+                row.Areas.GetValueOrDefault(SmallCardSuffixes[index]));
+        }
+    }
+
+    private static void ClearSmallDynamicCells(IXLWorksheet worksheet)
+    {
+        foreach (var layout in SmallCardLayouts)
+        {
+            worksheet.Cell(layout.SampleCell).Clear(XLClearOptions.Contents);
+            worksheet.Cell(layout.MotherLotCell).Clear(XLClearOptions.Contents);
+            worksheet.Cell(layout.QcDateCell).Clear(XLClearOptions.Contents);
+            worksheet.Cell(layout.ExpirationCell).Clear(XLClearOptions.Contents);
+
+            var resultCell = worksheet.Cell(layout.FirstResultCell);
+            for (var index = 0; index < SmallCardSuffixes.Count; index++)
+            {
+                resultCell.CellBelow(index).Clear(XLClearOptions.Contents);
+            }
+        }
+    }
+
+    private static void ClearSmallDynamicCells(WorksheetPart worksheetPart)
+    {
+        foreach (var layout in SmallCardLayouts)
+        {
+            SetStringCell(worksheetPart, layout.SampleCell, string.Empty);
+            SetStringCell(worksheetPart, layout.MotherLotCell, string.Empty);
+            SetStringCell(worksheetPart, layout.QcDateCell, string.Empty);
+            SetStringCell(worksheetPart, layout.ExpirationCell, string.Empty);
+
+            var firstResult = SplitCellReference(layout.FirstResultCell);
+            for (var index = 0; index < SmallCardSuffixes.Count; index++)
+            {
+                SetStringCell(worksheetPart, $"{firstResult.Column}{firstResult.Row + index}", string.Empty);
+            }
+        }
+    }
+
+    private static void ClearUnusedSmallCardSlots(WorksheetPart worksheetPart, int cardsOnPage)
+    {
+        for (var index = cardsOnPage; index < SmallCardLayouts.Count; index++)
+        {
+            ClearSmallCardSlot(worksheetPart, SmallCardLayouts[index]);
+        }
+    }
+
+    private static void ClearSmallCardSlot(WorksheetPart worksheetPart, SmallCardLayout layout)
+    {
+        var range = ParseCellRange(layout.RangeReference);
+        RemoveMergedCellsInRange(worksheetPart, range);
+        RemoveDrawingsInRange(worksheetPart, range);
+        var sheetData = worksheetPart.Worksheet.GetFirstChild<SheetData>();
+        if (sheetData is null)
+        {
+            return;
+        }
+
+        foreach (var row in sheetData.Elements<Row>())
+        {
+            var rowIndex = row.RowIndex?.Value ?? 0U;
+            if (rowIndex < range.StartRow || rowIndex > range.EndRow)
+            {
+                continue;
+            }
+
+            foreach (var cell in row.Elements<Cell>())
+            {
+                var reference = SplitCellReference(cell.CellReference?.Value ?? "A1");
+                var columnIndex = ColumnIndex(reference.Column);
+                if (columnIndex < range.StartColumn || columnIndex > range.EndColumn)
+                {
+                    continue;
+                }
+
+                cell.CellFormula?.Remove();
+                cell.CellValue = null;
+                cell.DataType = null;
+                cell.StyleIndex = null;
+            }
+        }
+    }
+
+    private static void RemoveDrawingsInRange(WorksheetPart worksheetPart, CellRange range)
+    {
+        var drawingPart = worksheetPart.DrawingsPart;
+        var worksheetDrawing = drawingPart?.WorksheetDrawing;
+        if (worksheetDrawing is null)
+        {
+            return;
+        }
+
+        foreach (var anchor in worksheetDrawing.ChildElements.ToArray())
+        {
+            if (TryGetDrawingAnchorRange(anchor, out var anchorRange) && RangesIntersect(anchorRange, range))
+            {
+                anchor.Remove();
+            }
+        }
+
+        worksheetDrawing.Save();
+    }
+
+    private static bool TryGetDrawingAnchorRange(OpenXmlElement anchor, out CellRange range)
+    {
+        var fromMarker = anchor.GetFirstChild<Xdr.FromMarker>();
+        if (fromMarker is null || !TryGetMarkerCell(fromMarker, out var fromColumn, out var fromRow))
+        {
+            range = default;
+            return false;
+        }
+
+        var toMarker = anchor.GetFirstChild<Xdr.ToMarker>();
+        if (toMarker is null || !TryGetMarkerCell(toMarker, out var toColumn, out var toRow))
+        {
+            toColumn = fromColumn;
+            toRow = fromRow;
+        }
+
+        range = new CellRange(
+            Math.Min(fromColumn, toColumn),
+            Math.Max(fromColumn, toColumn),
+            Math.Min(fromRow, toRow),
+            Math.Max(fromRow, toRow));
+        return true;
+    }
+
+    private static bool TryGetMarkerCell(OpenXmlCompositeElement marker, out int column, out uint row)
+    {
+        column = 0;
+        row = 0;
+
+        if (!int.TryParse(marker.GetFirstChild<Xdr.ColumnId>()?.Text, CultureInfo.InvariantCulture, out var zeroBasedColumn) ||
+            !uint.TryParse(marker.GetFirstChild<Xdr.RowId>()?.Text, CultureInfo.InvariantCulture, out var zeroBasedRow))
+        {
+            return false;
+        }
+
+        column = zeroBasedColumn + 1;
+        row = zeroBasedRow + 1;
+        return true;
+    }
+
+    private static void RemoveMergedCellsInRange(WorksheetPart worksheetPart, CellRange range)
+    {
+        foreach (var mergeCells in worksheetPart.Worksheet.Elements<MergeCells>().ToArray())
+        {
+            foreach (var mergeCell in mergeCells.Elements<MergeCell>().ToArray())
+            {
+                var reference = mergeCell.Reference?.Value;
+                if (!string.IsNullOrWhiteSpace(reference) && RangesIntersect(ParseCellRange(reference), range))
+                {
+                    mergeCell.Remove();
+                }
+            }
+
+            if (!mergeCells.Elements<MergeCell>().Any())
+            {
+                mergeCells.Remove();
+            }
+        }
+    }
+
+    private static IReadOnlyList<SmallCardPage> BuildSmallCardPages(IReadOnlyList<QcDataRow> rows, int cardsPerPage)
+    {
+        if (rows.Count == 0)
+        {
+            return [new SmallCardPage([])];
+        }
+
+        var maxCardsPerPage = Math.Min(cardsPerPage, SmallCardLayouts.Count);
+        var pages = new List<SmallCardPage>();
+        for (var index = 0; index < rows.Count; index += maxCardsPerPage)
+        {
+            pages.Add(new SmallCardPage(rows.Skip(index).Take(maxCardsPerPage).ToArray()));
+        }
+
+        return pages;
+    }
+
+    private static IReadOnlyList<QcDataRow> OrderRows(IReadOnlyCollection<QcDataRow> rows) =>
+        rows
+            .OrderBy(row => row.AnlzTime)
+            .ThenBy(row => row.SampleNo)
+            .ThenBy(row => row.SourceFolderName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(row => row.SampleName, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+    private string ResolveMotherLotId(QcDataRow row)
+    {
+        // 母瓶號以 MFG LOT 的 Prod_Bomb1_LotNo 為準；設定值只在舊資料尚未補齊時當 fallback。
+        return string.IsNullOrWhiteSpace(row.ProdBomb1LotNo)
+            ? _options.CsvExport.RawLotId
+            : row.ProdBomb1LotNo.Trim();
+    }
+
+    private string ResolveTemplatePath(string? configuredPath, string defaultTemplateFileName)
+    {
+        var path = string.IsNullOrWhiteSpace(configuredPath)
+            ? Path.Combine(AppContext.BaseDirectory, "templates", defaultTemplateFileName)
+            : configuredPath;
+
+        path = ResolvePath(path);
+
+        if (!File.Exists(path))
+        {
+            throw new FileNotFoundException($"COA template not found: {path}", path);
+        }
+
+        return path;
+    }
+
+    private static string ResolvePath(string path) =>
+        Path.IsPathRooted(path)
+            ? Path.GetFullPath(path)
+            : Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, path));
+
+    private static DateTime? ResolveExpirationDate(QcDataRow row)
+    {
+        // 0.5L_Cylinder 的效期依母瓶效期表 GAS_LOT_Bomb；
+        // 舊資料或未建母瓶資料時才回到原本的 AnlzTime + 364 天規則。
+        if (IsHalfLiterContainer(row) && row.ParentExpirationDate.HasValue)
+        {
+            return row.ParentExpirationDate.Value.Date;
+        }
+
+        return row.AnlzTime?.Date.AddDays(364);
+    }
+
+    private static string FormatDate(DateTime? value) =>
+        value?.ToString("yyyy/MM/dd", CultureInfo.InvariantCulture) ?? string.Empty;
+
+    private static void WriteDecimal(IXLCell cell, decimal? value)
+    {
+        if (value.HasValue)
+        {
+            cell.Value = value.Value;
+            return;
+        }
+
+        cell.Clear(XLClearOptions.Contents);
+    }
+
+    private static void RenamePictures(IXLWorksheet worksheet, int sheetIndex)
+    {
+        var pictureIndex = 1;
+        foreach (var picture in worksheet.Pictures)
+        {
+            picture.Name = $"{worksheet.Name}_Image_{sheetIndex}_{pictureIndex++}";
+        }
+    }
+
+    private static WorksheetPart CloneWorksheetPartWithoutDrawings(WorkbookPart workbookPart, WorksheetPart templatePart, string sheetName)
+    {
+        var newPart = workbookPart.AddNewPart<WorksheetPart>();
+        using (var sourceStream = templatePart.GetStream(FileMode.Open, FileAccess.Read))
+        using (var targetStream = newPart.GetStream(FileMode.Create, FileAccess.Write))
+        {
+            RemoveDrawingElements(sourceStream, targetStream);
+        }
+
+        var sheets = workbookPart.Workbook.Sheets ?? workbookPart.Workbook.AppendChild(new Sheets());
+        var nextSheetId = sheets.Elements<Sheet>().Select(sheet => sheet.SheetId?.Value ?? 0U).DefaultIfEmpty().Max() + 1;
+        sheets.Append(new Sheet
+        {
+            Id = workbookPart.GetIdOfPart(newPart),
+            SheetId = nextSheetId,
+            Name = sheetName
+        });
+
+        return newPart;
+    }
+
+    private static WorksheetPart CloneWorksheetPartWithRelationships(WorkbookPart workbookPart, WorksheetPart templatePart, string sheetName)
+    {
+        var newPart = workbookPart.AddNewPart<WorksheetPart>();
+        using (var sourceStream = templatePart.GetStream(FileMode.Open, FileAccess.Read))
+        using (var targetStream = newPart.GetStream(FileMode.Create, FileAccess.Write))
+        {
+            sourceStream.CopyTo(targetStream);
+        }
+
+        CopyPartRelationships(templatePart, newPart);
+
+        var sheets = workbookPart.Workbook.Sheets ?? workbookPart.Workbook.AppendChild(new Sheets());
+        var nextSheetId = sheets.Elements<Sheet>().Select(sheet => sheet.SheetId?.Value ?? 0U).DefaultIfEmpty().Max() + 1;
+        sheets.Append(new Sheet
+        {
+            Id = workbookPart.GetIdOfPart(newPart),
+            SheetId = nextSheetId,
+            Name = sheetName
+        });
+
+        return newPart;
+    }
+
+    private static void CopyPartRelationships(OpenXmlPart sourcePart, OpenXmlPart targetPart)
+    {
+        foreach (var relationship in sourcePart.Parts)
+        {
+            if (relationship.OpenXmlPart is DrawingsPart sourceDrawingsPart)
+            {
+                var targetDrawingsPart = targetPart.AddNewPart<DrawingsPart>(relationship.RelationshipId);
+                using (var sourceStream = sourceDrawingsPart.GetStream(FileMode.Open, FileAccess.Read))
+                using (var targetStream = targetDrawingsPart.GetStream(FileMode.Create, FileAccess.Write))
+                {
+                    sourceStream.CopyTo(targetStream);
+                }
+
+                CopyPartRelationships(sourceDrawingsPart, targetDrawingsPart);
+                continue;
+            }
+
+            targetPart.AddPart(relationship.OpenXmlPart, relationship.RelationshipId);
+        }
+
+        foreach (var relationship in sourcePart.ExternalRelationships)
+        {
+            targetPart.AddExternalRelationship(relationship.RelationshipType, relationship.Uri, relationship.Id);
+        }
+
+        foreach (var relationship in sourcePart.HyperlinkRelationships)
+        {
+            targetPart.AddHyperlinkRelationship(relationship.Uri, relationship.IsExternal, relationship.Id);
+        }
+    }
+
+    private static void DeleteOpenXmlSheets(WorkbookPart workbookPart, params string[] sheetNames)
+    {
+        var sheets = workbookPart.Workbook.Sheets;
+        if (sheets is null)
+        {
+            return;
+        }
+
+        foreach (var sheetName in sheetNames)
+        {
+            var sheet = sheets.Elements<Sheet>()
+                .FirstOrDefault(item => string.Equals(item.Name?.Value, sheetName, StringComparison.OrdinalIgnoreCase));
+            if (sheet?.Id is null)
+            {
+                continue;
+            }
+
+            var part = workbookPart.GetPartById(sheet.Id!);
+            sheet.Remove();
+            workbookPart.DeletePart(part);
+        }
+    }
+
+    private static void ResetWorkbookView(WorkbookPart workbookPart)
+    {
+        foreach (var view in workbookPart.Workbook.BookViews?.Elements<WorkbookView>() ?? [])
+        {
+            view.ActiveTab = 0U;
+            view.FirstSheet = 0U;
+        }
+    }
+
+    private static void DeleteCalculationChain(WorkbookPart workbookPart)
+    {
+        if (workbookPart.CalculationChainPart is not null)
+        {
+            workbookPart.DeletePart(workbookPart.CalculationChainPart);
+        }
+
+        workbookPart.Workbook.CalculationProperties ??= new CalculationProperties();
+        workbookPart.Workbook.CalculationProperties.ForceFullCalculation = true;
+        workbookPart.Workbook.CalculationProperties.FullCalculationOnLoad = true;
+    }
+
+    private static void SetStringCell(WorksheetPart worksheetPart, string cellReference, string value)
+    {
+        var cell = GetOrCreateCell(worksheetPart, cellReference);
+        cell.CellFormula?.Remove();
+        cell.DataType = CellValues.String;
+        cell.CellValue = new CellValue(value);
+    }
+
+    private static void SetDecimalCell(WorksheetPart worksheetPart, string cellReference, decimal? value)
+    {
+        var cell = GetOrCreateCell(worksheetPart, cellReference);
+        cell.CellFormula?.Remove();
+        if (!value.HasValue)
+        {
+            cell.DataType = CellValues.String;
+            cell.CellValue = new CellValue(string.Empty);
+            return;
+        }
+
+        cell.DataType = null;
+        cell.CellValue = new CellValue(value.Value.ToString(CultureInfo.InvariantCulture));
+    }
+
+    private static Cell GetOrCreateCell(WorksheetPart worksheetPart, string cellReference)
+    {
+        var worksheet = worksheetPart.Worksheet;
+        var sheetData = worksheet.GetFirstChild<SheetData>() ?? worksheet.AppendChild(new SheetData());
+        var reference = SplitCellReference(cellReference);
+        var row = sheetData.Elements<Row>().FirstOrDefault(item => item.RowIndex?.Value == reference.Row);
+        if (row is null)
+        {
+            row = new Row { RowIndex = reference.Row };
+            var nextRow = sheetData.Elements<Row>().FirstOrDefault(item => (item.RowIndex?.Value ?? 0U) > reference.Row);
+            sheetData.InsertBefore(row, nextRow);
+        }
+
+        var cell = row.Elements<Cell>()
+            .FirstOrDefault(item => string.Equals(item.CellReference?.Value, cellReference, StringComparison.OrdinalIgnoreCase));
+        if (cell is not null)
+        {
+            return cell;
+        }
+
+        cell = new Cell { CellReference = cellReference };
+        var nextCell = row.Elements<Cell>()
+            .FirstOrDefault(item => ColumnIndex(SplitCellReference(item.CellReference?.Value ?? "A1").Column) > ColumnIndex(reference.Column));
+        row.InsertBefore(cell, nextCell);
+        return cell;
+    }
+
+    private static string GetCellText(WorksheetPart worksheetPart, string cellReference)
+    {
+        var cell = worksheetPart.Worksheet.Descendants<Cell>()
+            .FirstOrDefault(item => string.Equals(item.CellReference?.Value, cellReference, StringComparison.OrdinalIgnoreCase));
+        if (cell?.CellValue?.Text is null)
+        {
+            return string.Empty;
+        }
+
+        if (cell.DataType?.Value == CellValues.SharedString)
+        {
+            var sharedStringPart = worksheetPart.GetParentParts()
+                .OfType<WorkbookPart>()
+                .FirstOrDefault()
+                ?.SharedStringTablePart;
+            return sharedStringPart?.SharedStringTable
+                ?.Elements<SharedStringItem>()
+                .ElementAtOrDefault(int.Parse(cell.CellValue.Text, CultureInfo.InvariantCulture))
+                ?.InnerText ?? string.Empty;
+        }
+
+        return cell.CellValue.Text;
+    }
+
+    private static IXLWorksheet CopySheetFromTemplate(
+        string templatePath,
+        string sourceSheetName,
+        XLWorkbook targetWorkbook,
+        string targetSheetName,
+        int sheetIndex,
+        bool stripDrawings = false)
+    {
+        using var templateWorkbook = stripDrawings
+            ? OpenSmallTemplateWorkbook(templatePath)
+            : new XLWorkbook(templatePath);
+        var sourceSheet = templateWorkbook.Worksheet(sourceSheetName);
+        RenamePictures(sourceSheet, sheetIndex);
+        var worksheet = sourceSheet.CopyTo(targetWorkbook, targetSheetName);
+        RenamePictures(worksheet, sheetIndex);
+        return worksheet;
+    }
+
+    private static XLWorkbook OpenSmallTemplateWorkbook(string templatePath)
+    {
+        // 小卡原檔含舊式 WMF drawing；ClosedXML 重存後 Excel 可能無法開啟，因此匯出前移除 drawing parts，保留儲存格樣式與列印版型。
+        return new XLWorkbook(RemoveDrawingParts(templatePath));
+    }
+
+    private static MemoryStream RemoveDrawingParts(string templatePath)
+    {
+        var stream = new MemoryStream();
+        using (var source = ZipFile.OpenRead(templatePath))
+        using (var target = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true))
+        {
+            foreach (var entry in source.Entries)
+            {
+                if (entry.FullName.StartsWith("xl/drawings/", StringComparison.OrdinalIgnoreCase) ||
+                    entry.FullName.StartsWith("xl/media/", StringComparison.OrdinalIgnoreCase) ||
+                    entry.FullName.StartsWith("xl/worksheets/_rels/", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var targetEntry = target.CreateEntry(entry.FullName, CompressionLevel.Optimal);
+                using var sourceStream = entry.Open();
+                using var targetStream = targetEntry.Open();
+
+                if (entry.FullName.StartsWith("xl/worksheets/sheet", StringComparison.OrdinalIgnoreCase) &&
+                    entry.FullName.EndsWith(".xml", StringComparison.OrdinalIgnoreCase))
+                {
+                    RemoveDrawingElements(sourceStream, targetStream);
+                    continue;
+                }
+
+                sourceStream.CopyTo(targetStream);
+            }
+        }
+
+        stream.Position = 0;
+        return stream;
+    }
+
+    private static void RemoveDrawingElements(Stream sourceStream, Stream targetStream)
+    {
+        XNamespace spreadsheetNamespace = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+        var document = XDocument.Load(sourceStream);
+        document.Descendants(spreadsheetNamespace + "drawing").Remove();
+        document.Descendants(spreadsheetNamespace + "legacyDrawing").Remove();
+        document.Save(targetStream);
+    }
+
+    private static (string Column, uint Row) SplitCellReference(string cellReference)
+    {
+        var column = new StringBuilder();
+        var row = new StringBuilder();
+        foreach (var character in cellReference)
+        {
+            if (char.IsLetter(character))
+            {
+                column.Append(character);
+            }
+            else if (char.IsDigit(character))
+            {
+                row.Append(character);
+            }
+        }
+
+        return (column.ToString().ToUpperInvariant(), uint.Parse(row.ToString(), CultureInfo.InvariantCulture));
+    }
+
+    private static CellRange ParseCellRange(string rangeReference)
+    {
+        var parts = rangeReference.Split(':', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var start = SplitCellReference(parts[0]);
+        var end = parts.Length == 1 ? start : SplitCellReference(parts[1]);
+        var startColumn = ColumnIndex(start.Column);
+        var endColumn = ColumnIndex(end.Column);
+        return new CellRange(
+            Math.Min(startColumn, endColumn),
+            Math.Max(startColumn, endColumn),
+            Math.Min(start.Row, end.Row),
+            Math.Max(start.Row, end.Row));
+    }
+
+    private static bool RangesIntersect(CellRange left, CellRange right) =>
+        left.StartColumn <= right.EndColumn &&
+        left.EndColumn >= right.StartColumn &&
+        left.StartRow <= right.EndRow &&
+        left.EndRow >= right.StartRow;
+
+    private static int ColumnIndex(string column)
+    {
+        var index = 0;
+        foreach (var character in column)
+        {
+            index = index * 26 + (char.ToUpperInvariant(character) - 'A' + 1);
+        }
+
+        return index;
+    }
+
+    private static void DeleteUnusedSheets(XLWorkbook workbook, params string[] templateSheetNames)
+    {
+        foreach (var sheetName in templateSheetNames)
+        {
+            var worksheet = workbook.Worksheets.FirstOrDefault(sheet => string.Equals(sheet.Name, sheetName, StringComparison.OrdinalIgnoreCase));
+            worksheet?.Delete();
+        }
+    }
+
+    private static CoaWorkbookDownload BuildDownload(XLWorkbook workbook, string fileName)
+    {
+        using var stream = new MemoryStream();
+        workbook.SaveAs(stream);
+        return new CoaWorkbookDownload(
+            stream.ToArray(),
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            fileName);
+    }
+
+    private static string BuildUniqueSheetName(XLWorkbook workbook, string? preferredName, int index)
+    {
+        var baseName = SanitizeSheetName(string.IsNullOrWhiteSpace(preferredName) ? $"COA{index}" : preferredName);
+        if (baseName.Length > 25)
+        {
+            baseName = baseName[..25];
+        }
+
+        for (var attempt = 0; ; attempt++)
+        {
+            var suffix = attempt == 0 ? string.Empty : $"_{attempt + 1}";
+            var candidate = $"{baseName}{suffix}";
+            if (candidate.Length > 31)
+            {
+                candidate = candidate[..31];
+            }
+
+            if (!workbook.Worksheets.Any(sheet => string.Equals(sheet.Name, candidate, StringComparison.OrdinalIgnoreCase)))
+            {
+                return candidate;
+            }
+        }
+    }
+
+    private static string BuildUniqueOpenXmlSheetName(WorkbookPart workbookPart, string preferredName, int index)
+    {
+        var usedNames = workbookPart.Workbook.Sheets?.Elements<Sheet>()
+            .Select(sheet => sheet.Name?.Value ?? string.Empty)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase) ?? [];
+
+        var baseName = SanitizeSheetName(string.IsNullOrWhiteSpace(preferredName) ? $"COA{index}" : preferredName);
+        if (baseName.Length > 25)
+        {
+            baseName = baseName[..25];
+        }
+
+        for (var attempt = 0; ; attempt++)
+        {
+            var suffix = attempt == 0 ? string.Empty : $"_{attempt + 1}";
+            var candidate = $"{baseName}{suffix}";
+            if (candidate.Length > 31)
+            {
+                candidate = candidate[..31];
+            }
+
+            if (!usedNames.Contains(candidate))
+            {
+                return candidate;
+            }
+        }
+    }
+
+    private static string SanitizeSheetName(string value)
+    {
+        var builder = new StringBuilder(value.Length);
+        foreach (var character in value)
+        {
+            builder.Append(character is ':' or '\\' or '/' or '?' or '*' or '[' or ']' ? '_' : character);
+        }
+
+        var sheetName = builder.ToString().Trim('\'', ' ');
+        return string.IsNullOrWhiteSpace(sheetName) ? "COA" : sheetName;
+    }
+
+    private sealed record SmallCardLayout(
+        string SampleCell,
+        string FirstResultCell,
+        string MotherLotCell,
+        string QcDateCell,
+        string ExpirationCell,
+        string RangeReference);
+
+    private sealed record SmallCardPage(IReadOnlyList<QcDataRow> Rows);
+
+    private readonly record struct CellRange(int StartColumn, int EndColumn, uint StartRow, uint EndRow);
+
+    private sealed record LargeContainerFields(
+        string ProductName,
+        string CylinderSize,
+        string CylinderPressure,
+        string CylinderVolume,
+        string GasVolume,
+        string Specification);
+}

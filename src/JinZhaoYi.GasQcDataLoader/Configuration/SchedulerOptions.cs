@@ -43,14 +43,44 @@ public sealed class SchedulerOptions
     // 補跑日期，格式 yyyyMMdd；BackfillEnabled=true 時必填。
     public string? BackfillTargetDate { get; init; }
 
-    // 成功處理後，將 .D 資料夾搬到日期資料夾底下的 Done 目錄。
+    // 匯入目標模式。TargetDate 沿用日期目標；AllNewStableFiles 會處理所有穩定且尚未成功處理的 Quant.txt。
+    public SchedulerTargetMode TargetMode { get; init; } = SchedulerTargetMode.TargetDate;
+
+    // AllNewStableFiles 模式的處理紀錄檔路徑，用來避免不搬檔時重複匯入同一份 Quant.txt。
+    public string? ProcessedStatePath { get; init; }
+
+    // Excel/CSV 獨立輸出根目錄。空值時沿用批次資料夾底下的 QC。
+    public string? ExportRoot { get; init; }
+
+    // 成功處理後，將 .D 資料夾搬到各 source folder 底下的 archive 目錄。
     public bool MoveProcessedFilesToDone { get; init; } = true;
 
     // true 時 STD_AVG / PORT_AVG 維持 snapshot table 行為；false 時保留 AVG 歷史紀錄。
     public bool UseAverageSnapshotTables { get; init; } = true;
 
-    // 已處理檔案的目的地資料夾名稱，例如 yyyyMMdd\Done。
-    public string DoneFolderName { get; init; } = "Done";
+    // 已處理檔案的目的地資料夾名稱，例如 PORT 5\archive。
+    public string DoneFolderName { get; init; } = "archive";
+
+    // Query2 Excel 匯出設定。
+    public SchedulerExcelExportOptions ExcelExport { get; init; } = new();
+
+    // TO14C PPB CSV 匯出設定。
+    public SchedulerCsvExportOptions CsvExport { get; init; } = new();
+
+    // QC 結果回寫時機設定。
+    public SchedulerQcResultWritebackOptions QcResultWriteback { get; init; } = new();
+
+    // COA 大卡 / 小卡匯出設定；資料來源固定為 Excel PPB history。
+    public SchedulerCoaExportOptions CoaExport { get; init; } = new();
+
+    // 正式區暫時透過舊 DB 匯出的 MFG JSON 同步製造 LOT 主檔。
+    public SchedulerMfgJsonImportOptions MfgJsonImport { get; init; } = new();
+
+    // QC 檔案下載 API 設定。
+    public SchedulerDownloadApiOptions DownloadApi { get; init; } = new();
+
+    // RF extractor API 與輸出檔設定。
+    public SchedulerRfExtractorOptions RfExtractor { get; init; } = new();
 
     // Windows Service 顯示名稱。
     public string ServiceName { get; init; } = "JinZhaoYi Gas QC DataLoader";
@@ -65,15 +95,142 @@ public sealed class SchedulerOptions
     public SchedulerTableOptions Tables { get; init; } = new();
 }
 
+public sealed class SchedulerExcelExportOptions
+{
+    // true 時輸出 Query2 Excel。
+    public bool Enabled { get; init; }
+
+    // Query2 Excel 模板路徑。
+    public string? TemplatePath { get; init; }
+}
+
+public sealed class SchedulerCsvExportOptions
+{
+    public bool Enabled { get; init; }
+
+    public string SchemaName { get; init; } = "L002010_TO14C";
+
+    public string MaterialNo { get; init; } = "L002010";
+
+    public string? CoACompletionDate { get; init; }
+
+    public string SupplierID { get; init; } = "84170915";
+
+    public string SupplierName { get; init; } = "金兆益科技股份有限公司";
+
+    public string? TSMCFab { get; init; }
+
+    public string? FabPhase { get; init; }
+
+    public string ShipQty { get; init; } = "1";
+
+    public string Maker { get; init; } = "New-Fast Technology Co., LTD";
+
+    public string? DeliverDate { get; init; }
+
+    public string? PONo { get; init; }
+
+    public string CylinderMaterial { get; init; } = "SUS316";
+
+    public string ValveMaterial { get; init; } = "SUS316";
+
+    public string ValveType { get; init; } = "1/4\" VCR Female";
+
+    public string Content { get; init; } = "950 psi";
+
+    public string CylinderSize { get; init; } = "52 x 6 (cm)";
+
+    public string SpecNo { get; init; } = "M-FMM-L0-03-030";
+
+    public string SpecVersion { get; init; } = "1";
+
+    public int ShelfLifeTime { get; init; } = 12;
+
+    public string RawLotId { get; init; } = "CC-706988";
+
+    public string MaterialName { get; init; } = "TO14C";
+
+    public string WaterValue { get; init; } = "0.02";
+
+    public string OxygenValue { get; init; } = "0.01";
+
+    public string NitrogenValue { get; init; } = "99.9995";
+}
+
+public sealed class SchedulerQcResultWritebackOptions
+{
+    // true 時 Quant 自動匯入會回寫 MFG LOT QC；false 時只接受使用者成功匯出 Query2 Excel 的結果。
+    public bool OnQuantImport { get; init; }
+}
+
+public sealed class SchedulerCoaExportOptions
+{
+    public string? LargeTemplatePath { get; init; }
+
+    public string? SmallTemplatePath { get; init; }
+
+    public string? LargeHeaderImagePath { get; init; }
+
+    public int DefaultSmallCardsPerPage { get; init; } = 9;
+
+    public string? LibreOfficePath { get; init; }
+
+    public int PdfConversionTimeoutSeconds { get; init; } = 60;
+
+    public bool UseBasicPdfFallback { get; init; } = true;
+}
+
+public sealed class SchedulerMfgJsonImportOptions
+{
+    public bool Enabled { get; init; }
+
+    public string WatchDirectory { get; init; } = @"C:\temp\data\MFGJSON";
+
+    public string FilePattern { get; init; } = "MFGExport_*.json";
+
+    public int PollIntervalSeconds { get; init; } = 30;
+
+    public int StableFileSeconds { get; init; } = 10;
+
+    public string StateFilePath { get; init; } = @"C:\temp\data\MFGJSON\MfgJsonImportState.json";
+
+    public string CreateUserPrefix { get; init; } = "MFGJSON";
+}
+
+public sealed class SchedulerDownloadApiOptions
+{
+    public bool Enabled { get; init; }
+}
+
+public sealed class SchedulerRfExtractorOptions
+{
+    public string BaseUrl { get; init; } = "http://localhost:5015";
+
+    public string ExportPath { get; init; } = "/api/Export";
+
+    public string OutputDirectory { get; init; } = @"D:\RFExtratorFile";
+}
+
+public enum SchedulerTargetMode
+{
+    TargetDate,
+    AllNewStableFiles
+}
+
 public sealed class SchedulerTableOptions
 {
     public string MfgLot { get; init; } = "ZZ_NF_GAS_MFG_LOT";
+
+    // 母瓶效期資料表，LotNo 對應 MFG LOT 的 Prod_Bomb1_LotNo，供 0.5L COA 到期日使用。
+    public string MfgLotParent { get; init; } = "GAS_LOT_Bomb";
 
     public string Rf { get; init; } = "ZZ_NF_GAS_QC_RF";
 
     public string StdRaw { get; init; } = "ZZ_NF_GAS_QC_LOT_STD";
 
     public string StdAvg { get; init; } = "ZZ_NF_GAS_QC_LOT_STD_AVG";
+
+    public string StdQc { get; init; } = "ZZ_NF_GAS_QC_LOT_STD_QC";
 
     public string StdRpd { get; init; } = "ZZ_NF_GAS_QC_LOT_STD_RPD";
 
@@ -84,4 +241,19 @@ public sealed class SchedulerTableOptions
     public string PortPpb { get; init; } = "ZZ_NF_GAS_QC_LOT_PORT_PPB";
 
     public string PortRpd { get; init; } = "ZZ_NF_GAS_QC_LOT_PORT_RPD";
+
+    // 使用者成功產生 Query2 Excel 後的 PPB 快照，供手動 CSV 匯出清單勾選使用。
+    public string ExcelPpbHistory { get; init; } = "ZZ_NF_GAS_QC_EXCEL_PPB_HISTORY";
+
+    public string Query2PreviewEditLog { get; init; } = "ZZ_NF_GAS_QC_QUERY2_PREVIEW_EDIT_LOG";
+
+    public string Query2DynamicAreaField { get; init; } = "ZZ_NF_GAS_QC_QUERY2_DYNAMIC_AREA_FIELD";
+
+    public string Query2DynamicAreaPortValue { get; init; } = "ZZ_NF_GAS_QC_QUERY2_DYNAMIC_AREA_PORT_VALUE";
+
+    public string QcPressureRule { get; init; } = "ZZ_NF_GAS_QC_PRESSURE_RULE";
+
+    public string QcConcentrationRule { get; init; } = "ZZ_NF_GAS_QC_CONCENTRATION_RULE";
+
+    public string ImportErrorLog { get; init; } = "ZZ_NF_GAS_QC_ERROR_LOG";
 }

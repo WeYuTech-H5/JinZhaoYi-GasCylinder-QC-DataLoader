@@ -8,6 +8,8 @@ public sealed class ParsedQuantFile
 
     public required string DataFile { get; init; }
 
+    public required string DataPath { get; init; }
+
     public required string Sample { get; init; }
 
     public required string Misc { get; init; }
@@ -15,6 +17,10 @@ public sealed class ParsedQuantFile
     public required string LotNo { get; init; }
 
     public required int SampleNo { get; init; }
+
+    public string? EMVolts { get; init; }
+
+    public string? RelativeEM { get; init; }
 
     public IReadOnlyDictionary<string, QuantCompound> Compounds { get; init; } =
         new Dictionary<string, QuantCompound>(StringComparer.OrdinalIgnoreCase);

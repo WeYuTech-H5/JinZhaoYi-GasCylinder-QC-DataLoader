@@ -129,7 +129,7 @@ public sealed class CalculationServiceTests
             Id = id,
             Port = port,
             LotNo = lotNo,
-            Si0Id = port == "STD" ? "5841" : "5900"
+            Si0Id = port == "STD" ? 5841 : 5900
         };
 
         foreach (var (suffix, value) in areas)

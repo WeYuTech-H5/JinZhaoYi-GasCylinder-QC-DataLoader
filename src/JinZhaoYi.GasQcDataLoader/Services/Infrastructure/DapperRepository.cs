@@ -1,4 +1,7 @@
 using System.Data;
+using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
 using Dapper;
 using JinZhaoYi.GasQcDataLoader.Configuration;
 using JinZhaoYi.GasQcDataLoader.DataModels;
@@ -11,6 +14,7 @@ namespace JinZhaoYi.GasQcDataLoader.Services.Infrastructure;
 public sealed class DapperRepository(
     ISqlConnectionFactory sqlConnectionFactory,
     ICalculationService calculationService,
+    IQcResultEvaluator qcResultEvaluator,
     IOptions<SchedulerOptions> options) : IDapperRepository
 {
     private const string LotLookupSqlFormat = """
@@ -26,6 +30,80 @@ public sealed class DapperRepository(
             RelativeEM
         FROM dbo.{0}
         WHERE LotNo IN @LotNos
+        """;
+
+    private const string MfgJsonExistingLotSqlFormat = """
+        SELECT ID
+        FROM dbo.{0}
+        WHERE ID = @Id
+           OR LotNo = @LotNo
+           OR TRY_CONVERT(decimal(18, 0), si0_id) = @Id
+        """;
+
+    private const string MfgJsonInsertSqlFormat = """
+        INSERT INTO dbo.{0}
+        (
+            [ID], [LotNo], [SamplName], [ProdDate], [ProdType], [Prod_Operator], [Prod_IniPrs], [Prod_LeakTest1], [Prod_vacumPrs],
+            [Prod_Can1_FillingPrs], [Prod_Can2_FillingPrs], [Prod_Bomb2_FillingPrs], [Prod_Bomb1_FillingPrs], [Prod_Bomb3_FillingPrs], [Prod_LeakTest2],
+            [Prod_Can1_LotNo], [Prod_Can1_Flow], [Prod_Can1_Sec], [Prod_Can1_Prs], [Prod_Can2_LotNo], [Prod_Can2_Flow], [Prod_Can2_Sec], [Prod_Can2_Prs],
+            [Prod_Bomb2_LotNo], [Prod_Bomb2_Flow], [Prod_Bomb2_Sec], [Prod_Bomb2_Prs], [Prod_Bomb1_LotNo], [Prod_Bomb1_SetFillingPrs], [Prod_Bomb1_Prs],
+            [Prod_Bomb3_LotNo], [Prod_Bomb3_SetFillingPrs], [Prod_Bomb3_Prs], [SampleNo], [SampleType], [Container],
+            [CREATE_USER], [CREATE_TIME], [si0_id]
+        )
+        VALUES
+        (
+            @Id, @LotNo, @SampleName, @ProdDate, @ProdType, @ProdOperator, @ProdIniPrs, @ProdLeakTest1, @ProdVacuumPrs,
+            @ProdCan1FillingPrs, @ProdCan2FillingPrs, @ProdBomb2FillingPrs, @ProdBomb1FillingPrs, @ProdBomb3FillingPrs, @ProdLeakTest2,
+            @ProdCan1LotNo, @ProdCan1Flow, @ProdCan1Sec, @ProdCan1Prs, @ProdCan2LotNo, @ProdCan2Flow, @ProdCan2Sec, @ProdCan2Prs,
+            @ProdBomb2LotNo, @ProdBomb2Flow, @ProdBomb2Sec, @ProdBomb2Prs, @ProdBomb1LotNo, @ProdBomb1SetFillingPrs, @ProdBomb1Prs,
+            @ProdBomb3LotNo, @ProdBomb3SetFillingPrs, @ProdBomb3Prs, @SampleNo, @SampleType, @Container,
+            @AuditUser, @Now, @Si0Id
+        )
+        """;
+
+    private const string MfgJsonUpdateSqlFormat = """
+        UPDATE dbo.{0}
+        SET
+            [ID] = @Id,
+            [LotNo] = @LotNo,
+            [SamplName] = COALESCE(@SampleName, [SamplName]),
+            [ProdDate] = COALESCE(@ProdDate, [ProdDate]),
+            [ProdType] = COALESCE(@ProdType, [ProdType]),
+            [Prod_Operator] = COALESCE(@ProdOperator, [Prod_Operator]),
+            [Prod_IniPrs] = COALESCE(@ProdIniPrs, [Prod_IniPrs]),
+            [Prod_LeakTest1] = COALESCE(@ProdLeakTest1, [Prod_LeakTest1]),
+            [Prod_vacumPrs] = COALESCE(@ProdVacuumPrs, [Prod_vacumPrs]),
+            [Prod_Can1_FillingPrs] = COALESCE(@ProdCan1FillingPrs, [Prod_Can1_FillingPrs]),
+            [Prod_Can2_FillingPrs] = COALESCE(@ProdCan2FillingPrs, [Prod_Can2_FillingPrs]),
+            [Prod_Bomb2_FillingPrs] = COALESCE(@ProdBomb2FillingPrs, [Prod_Bomb2_FillingPrs]),
+            [Prod_Bomb1_FillingPrs] = COALESCE(@ProdBomb1FillingPrs, [Prod_Bomb1_FillingPrs]),
+            [Prod_Bomb3_FillingPrs] = COALESCE(@ProdBomb3FillingPrs, [Prod_Bomb3_FillingPrs]),
+            [Prod_LeakTest2] = COALESCE(@ProdLeakTest2, [Prod_LeakTest2]),
+            [Prod_Can1_LotNo] = COALESCE(@ProdCan1LotNo, [Prod_Can1_LotNo]),
+            [Prod_Can1_Flow] = COALESCE(@ProdCan1Flow, [Prod_Can1_Flow]),
+            [Prod_Can1_Sec] = COALESCE(@ProdCan1Sec, [Prod_Can1_Sec]),
+            [Prod_Can1_Prs] = COALESCE(@ProdCan1Prs, [Prod_Can1_Prs]),
+            [Prod_Can2_LotNo] = COALESCE(@ProdCan2LotNo, [Prod_Can2_LotNo]),
+            [Prod_Can2_Flow] = COALESCE(@ProdCan2Flow, [Prod_Can2_Flow]),
+            [Prod_Can2_Sec] = COALESCE(@ProdCan2Sec, [Prod_Can2_Sec]),
+            [Prod_Can2_Prs] = COALESCE(@ProdCan2Prs, [Prod_Can2_Prs]),
+            [Prod_Bomb2_LotNo] = COALESCE(@ProdBomb2LotNo, [Prod_Bomb2_LotNo]),
+            [Prod_Bomb2_Flow] = COALESCE(@ProdBomb2Flow, [Prod_Bomb2_Flow]),
+            [Prod_Bomb2_Sec] = COALESCE(@ProdBomb2Sec, [Prod_Bomb2_Sec]),
+            [Prod_Bomb2_Prs] = COALESCE(@ProdBomb2Prs, [Prod_Bomb2_Prs]),
+            [Prod_Bomb1_LotNo] = COALESCE(@ProdBomb1LotNo, [Prod_Bomb1_LotNo]),
+            [Prod_Bomb1_SetFillingPrs] = COALESCE(@ProdBomb1SetFillingPrs, [Prod_Bomb1_SetFillingPrs]),
+            [Prod_Bomb1_Prs] = COALESCE(@ProdBomb1Prs, [Prod_Bomb1_Prs]),
+            [Prod_Bomb3_LotNo] = COALESCE(@ProdBomb3LotNo, [Prod_Bomb3_LotNo]),
+            [Prod_Bomb3_SetFillingPrs] = COALESCE(@ProdBomb3SetFillingPrs, [Prod_Bomb3_SetFillingPrs]),
+            [Prod_Bomb3_Prs] = COALESCE(@ProdBomb3Prs, [Prod_Bomb3_Prs]),
+            [SampleNo] = COALESCE(@SampleNo, [SampleNo]),
+            [SampleType] = COALESCE(@SampleType, [SampleType]),
+            [Container] = COALESCE(@Container, [Container]),
+            [EDIT_USER] = @AuditUser,
+            [EDIT_TIME] = @Now,
+            [si0_id] = @Si0Id
+        WHERE [ID] = @ExistingId
         """;
 
     private const string LatestRfSqlFormat = """
@@ -73,8 +151,643 @@ public sealed class DapperRepository(
             SID DESC
         """;
 
+    private const string PortPpbRowsSqlFormat = """
+        SELECT *
+        FROM dbo.{0}
+        WHERE ID IN @Ids
+          AND LotNo IN @LotNos
+          AND Port IN @Ports
+        """;
+
+    private const string PortPpbRowsForExportSqlFormat = """
+        SELECT
+            rows.*,
+            mfg.Result AS [Result],
+            mfg.FailDesc AS [FailDesc],
+            mfg.Prod_Bomb1_LotNo AS ProdBomb1LotNo
+        FROM dbo.{0} rows
+        OUTER APPLY
+        (
+            SELECT TOP (1)
+                lot.Result,
+                lot.FailDesc,
+                lot.Prod_Bomb1_LotNo
+            FROM dbo.{1} lot
+            WHERE (rows.LotNo IS NOT NULL AND lot.LotNo = rows.LotNo)
+               OR (rows.si0_id IS NOT NULL AND TRY_CONVERT(int, lot.si0_id) = rows.si0_id)
+            ORDER BY
+                CASE WHEN rows.LotNo IS NOT NULL AND lot.LotNo = rows.LotNo THEN 0 ELSE 1 END,
+                lot.EDIT_TIME DESC,
+                lot.CREATE_TIME DESC,
+                lot.ID DESC
+        ) mfg
+        WHERE CAST(rows.AnlzTime AS date) = @BatchDate
+        ORDER BY rows.AnlzTime, rows.SampleNo, rows.SourceFolderName, rows.SampleName
+        """;
+
+    private const string MfgLotQcUpdateSqlFormat = """
+        UPDATE dbo.{0}
+        SET
+            ProdOrder = @ProdOrder,
+            CalType = @CalType,
+            Cal_id = @CalId,
+            IniPrs = @IniPrs,
+            QCComplete = @QcComplete,
+            QCInst = @QcInst,
+            QCPort = @QcPort,
+            QCTime = @QcTime,
+            Result = @Result,
+            RF_ID = @RfId,
+            FnlPrs = @FnlPrs,
+            FailDesc = @FailDesc,
+            EDIT_USER = @AuditUser,
+            EDIT_TIME = @Now
+        WHERE LotNo = @LotNo
+           OR (@Si0Id IS NOT NULL AND TRY_CONVERT(int, si0_id) = @Si0Id)
+        """;
+
+    private const string MfgLotEmMetadataUpdateSqlFormat = """
+        UPDATE dbo.{0}
+        SET
+            EMVolts =
+                CASE
+                    WHEN NULLIF(LTRIM(RTRIM(EMVolts)), N'') IS NULL THEN @EmVolts
+                    ELSE EMVolts
+                END,
+            RelativeEM =
+                CASE
+                    WHEN NULLIF(LTRIM(RTRIM(RelativeEM)), N'') IS NULL THEN @RelativeEm
+                    ELSE RelativeEM
+                END,
+            EDIT_USER = @AuditUser,
+            EDIT_TIME = @Now
+        WHERE (LotNo = @LotNo OR (@Si0Id IS NOT NULL AND TRY_CONVERT(int, si0_id) = @Si0Id))
+          AND (
+                (NULLIF(LTRIM(RTRIM(EMVolts)), N'') IS NULL AND @EmVolts IS NOT NULL)
+             OR (NULLIF(LTRIM(RTRIM(RelativeEM)), N'') IS NULL AND @RelativeEm IS NOT NULL)
+          )
+        """;
+
+    private const string RowsByDateSqlFormat = """
+        SELECT *
+        FROM dbo.{0}
+        WHERE CAST(AnlzTime AS date) = @BatchDate
+        """;
+
+    private const string RowsByDateRangeSqlFormat = """
+        SELECT *
+        FROM dbo.{0}
+        WHERE CAST(AnlzTime AS date) >= @StartDate
+          AND CAST(AnlzTime AS date) <= @EndDate
+        """;
+
+    private const string RawRowsByDateWithMfgContainerSqlFormat = """
+        SELECT
+            rows.*,
+            mfg.Container AS MfgContainer
+        FROM dbo.{0} rows
+        OUTER APPLY
+        (
+            SELECT TOP (1)
+                lot.Container
+            FROM dbo.{1} lot
+            WHERE (rows.LotNo IS NOT NULL AND lot.LotNo = rows.LotNo)
+               OR (rows.si0_id IS NOT NULL AND TRY_CONVERT(int, lot.si0_id) = rows.si0_id)
+            ORDER BY
+                CASE WHEN rows.LotNo IS NOT NULL AND lot.LotNo = rows.LotNo THEN 0 ELSE 1 END,
+                lot.EDIT_TIME DESC,
+                lot.CREATE_TIME DESC,
+                lot.ID DESC
+        ) mfg
+        WHERE CAST(rows.AnlzTime AS date) = @BatchDate
+        """;
+
+    private const string RawRowsByDateRangeWithMfgContainerSqlFormat = """
+        SELECT
+            rows.*,
+            mfg.Container AS MfgContainer
+        FROM dbo.{0} rows
+        OUTER APPLY
+        (
+            SELECT TOP (1)
+                lot.Container
+            FROM dbo.{1} lot
+            WHERE (rows.LotNo IS NOT NULL AND lot.LotNo = rows.LotNo)
+               OR (rows.si0_id IS NOT NULL AND TRY_CONVERT(int, lot.si0_id) = rows.si0_id)
+            ORDER BY
+                CASE WHEN rows.LotNo IS NOT NULL AND lot.LotNo = rows.LotNo THEN 0 ELSE 1 END,
+                lot.EDIT_TIME DESC,
+                lot.CREATE_TIME DESC,
+                lot.ID DESC
+        ) mfg
+        WHERE CAST(rows.AnlzTime AS date) >= @StartDate
+          AND CAST(rows.AnlzTime AS date) <= @EndDate
+        """;
+
+    private const string PortPpbGroupCountSqlFormat = """
+        SELECT COUNT(1)
+        FROM (
+            SELECT Port, LotNo, SampleName
+            FROM dbo.{0}
+            WHERE CAST(AnlzTime AS date) = @BatchDate
+              AND AnlzTime IS NOT NULL
+              AND SampleNo IS NOT NULL
+            GROUP BY Port, LotNo, SampleName
+        ) grouped
+        """;
+
+    private const string PortPpbPagedGroupsSqlFormat = """
+        WITH PageGroups AS (
+            SELECT Port, LotNo, SampleName
+            FROM dbo.{0}
+            WHERE CAST(AnlzTime AS date) = @BatchDate
+              AND AnlzTime IS NOT NULL
+              AND SampleNo IS NOT NULL
+            GROUP BY Port, LotNo, SampleName
+            ORDER BY Port, LotNo, SampleName
+            OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY
+        )
+        SELECT rows.*
+        FROM dbo.{0} rows
+        INNER JOIN PageGroups pageGroups
+            ON ISNULL(rows.Port, '') = ISNULL(pageGroups.Port, '')
+           AND ISNULL(rows.LotNo, '') = ISNULL(pageGroups.LotNo, '')
+           AND ISNULL(rows.SampleName, '') = ISNULL(pageGroups.SampleName, '')
+        WHERE CAST(rows.AnlzTime AS date) = @BatchDate
+          AND rows.AnlzTime IS NOT NULL
+          AND rows.SampleNo IS NOT NULL
+        ORDER BY
+            rows.Port,
+            rows.LotNo,
+            rows.SampleName,
+            rows.AnlzTime,
+            rows.SampleNo,
+            rows.SourceFolderName
+        """;
+
+    private const string ExcelPpbGroupCountSqlFormat = """
+        SELECT COUNT(1)
+        FROM (
+            SELECT ExcelExportSessionId, ExcelExportKey, Port, LotNo, SampleName
+            FROM dbo.{0}
+            WHERE (
+                    @ExportSessionId IS NOT NULL
+                 OR (
+                        CAST(AnlzTime AS date) >= @StartDate
+                    AND CAST(AnlzTime AS date) <= @EndDate
+                    )
+              )
+              AND AnlzTime IS NOT NULL
+              AND ExcelPpbExportId IS NOT NULL
+              AND (@ExportSessionId IS NULL OR ExcelExportSessionId = @ExportSessionId)
+              AND (@Search IS NULL OR SampleName LIKE @SearchPattern)
+            GROUP BY ExcelExportSessionId, ExcelExportKey, Port, LotNo, SampleName
+        ) grouped
+        """;
+
+    private const string ExcelPpbPagedGroupsSqlFormat = """
+        WITH PageGroups AS (
+            SELECT ExcelExportSessionId, ExcelExportKey, Port, LotNo, SampleName
+            FROM dbo.{0}
+            WHERE (
+                    @ExportSessionId IS NOT NULL
+                 OR (
+                        CAST(AnlzTime AS date) >= @StartDate
+                    AND CAST(AnlzTime AS date) <= @EndDate
+                    )
+              )
+              AND AnlzTime IS NOT NULL
+              AND ExcelPpbExportId IS NOT NULL
+              AND (@ExportSessionId IS NULL OR ExcelExportSessionId = @ExportSessionId)
+              AND (@Search IS NULL OR SampleName LIKE @SearchPattern)
+            GROUP BY ExcelExportSessionId, ExcelExportKey, Port, LotNo, SampleName
+            ORDER BY Port, LotNo, SampleName, ExcelExportKey, ExcelExportSessionId
+            OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY
+        )
+        SELECT rows.*
+        FROM dbo.{0} rows
+        INNER JOIN PageGroups pageGroups
+            ON rows.ExcelExportKey = pageGroups.ExcelExportKey
+           AND (rows.ExcelExportSessionId = pageGroups.ExcelExportSessionId OR rows.ExcelExportSessionId IS NULL AND pageGroups.ExcelExportSessionId IS NULL)
+           AND ISNULL(rows.Port, '') = ISNULL(pageGroups.Port, '')
+           AND ISNULL(rows.LotNo, '') = ISNULL(pageGroups.LotNo, '')
+           AND ISNULL(rows.SampleName, '') = ISNULL(pageGroups.SampleName, '')
+        WHERE (
+                @ExportSessionId IS NOT NULL
+             OR (
+                    CAST(rows.AnlzTime AS date) >= @StartDate
+                AND CAST(rows.AnlzTime AS date) <= @EndDate
+                )
+          )
+          AND rows.AnlzTime IS NOT NULL
+          AND rows.ExcelPpbExportId IS NOT NULL
+          AND (@ExportSessionId IS NULL OR rows.ExcelExportSessionId = @ExportSessionId)
+        ORDER BY
+            rows.Port,
+            rows.LotNo,
+            rows.SampleName,
+            rows.ExcelExportedAt DESC,
+            rows.AnlzTime,
+            rows.SampleNo,
+            rows.SourceFolderName
+        """;
+
+    private const string ExcelPpbRowsForCsvSqlFormat = """
+        SELECT
+            rows.*,
+            mfg.Prod_Bomb1_LotNo AS ProdBomb1LotNo,
+            mfg.Result AS [Result],
+            mfg.FailDesc AS [FailDesc],
+            mfg.Container AS MfgContainer,
+            parent.ExpirationDate AS ParentExpirationDate
+        FROM dbo.{0} rows
+        OUTER APPLY
+        (
+            SELECT TOP (1)
+                lot.Prod_Bomb1_LotNo,
+                lot.Result,
+                lot.FailDesc,
+                lot.Container
+            FROM dbo.{1} lot
+            WHERE lot.LotNo = rows.LotNo
+               OR TRY_CONVERT(int, lot.si0_id) = rows.si0_id
+            ORDER BY
+                CASE WHEN lot.LotNo = rows.LotNo THEN 0 ELSE 1 END,
+                lot.CREATE_TIME DESC,
+                lot.ID DESC
+        ) mfg
+        OUTER APPLY
+        (
+            SELECT TOP (1)
+                parentLot.ExpirationDate
+            FROM dbo.{2} parentLot
+            WHERE parentLot.LotNo = mfg.Prod_Bomb1_LotNo
+            ORDER BY
+                parentLot.EDIT_TIME DESC,
+                parentLot.CREATE_TIME DESC,
+                parentLot.ID DESC
+        ) parent
+        WHERE (
+                @HasExportSessionScopedIds = 1
+             OR (
+                    CAST(rows.AnlzTime AS date) >= @StartDate
+                AND CAST(rows.AnlzTime AS date) <= @EndDate
+                )
+          )
+          AND (
+                rows.ExcelPpbExportId IN @SelectedIds
+             OR CONCAT(CONVERT(NVARCHAR(36), rows.ExcelExportSessionId), N':', rows.ExcelPpbExportId) IN @SelectedIds
+          )
+        ORDER BY rows.AnlzTime, rows.SampleNo, rows.SourceFolderName, rows.SampleName
+        """;
+
+    private const string StdCylinderSummaryRowsSqlFormat = """
+        SELECT
+            COALESCE(TRY_CONVERT(decimal(18, 0), mfg.ID), TRY_CONVERT(decimal(18, 0), rows.si0_id)) AS [id],
+            COALESCE(mfg.SamplName, rows.SampleName) AS [SampleName],
+            mfg.ProdDate AS [ProdDate],
+            COALESCE(mfg.LotNo, rows.LotNo) AS [LotNo],
+            mfg.ProdType AS [ProdType],
+            mfg.Prod_Operator AS [Prod_Operator],
+            mfg.Prod_IniPrs AS [Prod_IniPrs],
+            mfg.Prod_LeakTest1 AS [Prod_LeakTest1],
+            mfg.Prod_vacumPrs AS [Prod_VacuumPrs],
+            mfg.Prod_Can1_FillingPrs AS [Prod_Can1_FillingPrs],
+            mfg.Prod_Can2_FillingPrs AS [Prod_Can2_FillingPrs],
+            mfg.Prod_Bomb2_FillingPrs AS [Prod_Bomb2_FillingPrs],
+            mfg.Prod_Bomb1_FillingPrs AS [Prod_Bomb1_FillingPrs],
+            mfg.Prod_Bomb3_FillingPrs AS [Prod_Bomb3_FillingPrs],
+            mfg.Prod_LeakTest2 AS [Prod_LeakTest2],
+            mfg.Prod_Can1_LotNo AS [Prod_Can1_LotNo],
+            mfg.Prod_Can1_Flow AS [Prod_Can1_Flow],
+            mfg.Prod_Can1_Sec AS [Prod_Can1_Sec],
+            mfg.Prod_Can1_Prs AS [Prod_Can1_Prs],
+            mfg.Prod_Can2_LotNo AS [Prod_Can2_LotNo],
+            mfg.Prod_Can2_Flow AS [Prod_Can2_Flow],
+            mfg.Prod_Can2_Sec AS [Prod_Can2_Sec],
+            mfg.Prod_Can2_Prs AS [Prod_Can2_Prs],
+            mfg.Prod_Bomb2_LotNo AS [Prod_Bomb2_LotNo],
+            mfg.Prod_Bomb2_Flow AS [Prod_Bomb2_Flow],
+            mfg.Prod_Bomb2_Sec AS [Prod_Bomb2_Sec],
+            mfg.Prod_Bomb2_Prs AS [Prod_Bomb2_Prs],
+            mfg.Prod_Bomb1_LotNo AS [Prod_Bomb1_LotNo],
+            mfg.Prod_Bomb1_SetFillingPrs AS [Prod_Bomb1_SetFillingPrs],
+            mfg.Prod_Bomb1_Prs AS [Prod_Bomb1_Prs],
+            mfg.Prod_Bomb3_LotNo AS [Prod_Bomb3_LotNo],
+            mfg.Prod_Bomb3_SetFillingPrs AS [Prod_Bomb3_SetFillingPrs],
+            mfg.Prod_Bomb3_Prs AS [Prod_Bomb3_Prs],
+            COALESCE(TRY_CONVERT(decimal(18, 0), mfg.SampleNo), TRY_CONVERT(decimal(18, 0), rows.SampleNo)) AS [SampleNo],
+            COALESCE(mfg.SampleType, rows.SampleType) AS [SampleType],
+            COALESCE(mfg.Container, rows.Container) AS [Container],
+            mfg.ProdOrder AS [ProdOrder],
+            mfg.FnlPrs AS [FnlPrs],
+            mfg.IniPrs AS [IniPrs],
+            COALESCE(mfg.QCTime, rows.AnlzTime) AS [QCTime],
+            COALESCE(mfg.QCInst, rows.Inst) AS [QCInst],
+            COALESCE(mfg.QCPort, rows.Port) AS [QCPort],
+            COALESCE(mfg.Cal_id, rows.ID) AS [Cal_id],
+            COALESCE(mfg.RF_ID, rows.ExcelRfId) AS [RF_ID],
+            mfg.QCComplete AS [QCComplete],
+            mfg.CalType AS [CalType],
+            mfg.Result AS [Result],
+            mfg.FailDesc AS [FailDesc],
+            {2},
+            CAST(NULL AS nvarchar(4000)) AS [Note],
+            rows.ExcelExportSessionId AS [ExcelExportSessionId]
+        FROM dbo.{0} rows
+        OUTER APPLY
+        (
+            SELECT TOP (1)
+                lot.*
+            FROM dbo.{1} lot
+            WHERE (rows.LotNo IS NOT NULL AND lot.LotNo = rows.LotNo)
+               OR (rows.si0_id IS NOT NULL AND TRY_CONVERT(int, lot.si0_id) = rows.si0_id)
+               OR (rows.SampleName IS NOT NULL AND lot.SamplName = rows.SampleName)
+            ORDER BY
+                CASE
+                    WHEN rows.LotNo IS NOT NULL AND lot.LotNo = rows.LotNo THEN 0
+                    WHEN rows.si0_id IS NOT NULL AND TRY_CONVERT(int, lot.si0_id) = rows.si0_id THEN 1
+                    ELSE 2
+                END,
+                lot.CREATE_TIME DESC,
+                lot.ID DESC
+        ) mfg
+        ORDER BY
+            COALESCE(mfg.ProdDate, rows.AnlzTime),
+            COALESCE(TRY_CONVERT(decimal(18, 0), mfg.SampleNo), TRY_CONVERT(decimal(18, 0), rows.SampleNo)),
+            COALESCE(mfg.SamplName, rows.SampleName),
+            rows.ExcelExportedAt,
+            rows.ExcelPpbExportId
+        """;
+
+    private const string AllRfRowsSqlFormat = """
+        SELECT *
+        FROM dbo.{0}
+        ORDER BY AnlzTime DESC, CREATE_TIME DESC, SID DESC
+        """;
+
+    private const string RfByIdSqlFormat = """
+        SELECT TOP (1) *
+        FROM dbo.{0}
+        WHERE ID = @RfId
+        ORDER BY AnlzTime DESC, CREATE_TIME DESC, SID DESC
+        """;
+
+    private const string StdRawForRfSqlFormat = """
+        WITH Candidates AS (
+            SELECT rows.*, mfgMatch.SampleNo AS MfgSampleNo
+            FROM dbo.{0} AS rows
+            OUTER APPLY (
+                SELECT TOP (1)
+                    TRY_CONVERT(int, NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(32), mfg.SampleNo))), '')) AS SampleNo
+                FROM dbo.{1} AS mfg
+                WHERE mfg.LotNo = rows.LotNo
+                    AND TRY_CONVERT(int, NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(32), mfg.SampleNo))), '')) IS NOT NULL
+                ORDER BY
+                    CASE
+                        WHEN ISNULL(NULLIF(LTRIM(RTRIM(mfg.SamplName)), ''), '') =
+                             ISNULL(NULLIF(LTRIM(RTRIM(rows.SampleName)), ''), '') THEN 0
+                        ELSE 1
+                    END,
+                    mfg.EDIT_TIME DESC,
+                    mfg.CREATE_TIME DESC,
+                    mfg.si0_id DESC
+            ) AS mfgMatch
+            WHERE
+                @Search IS NULL
+                OR rows.LotNo LIKE @SearchPattern
+                OR rows.SampleName LIKE @SearchPattern
+                OR CAST(rows.SampleNo AS NVARCHAR(32)) LIKE @SearchPattern
+                OR rows.DataFilename LIKE @SearchPattern
+                OR rows.SourceFolderName LIKE @SearchPattern
+        ),
+        Ranked AS (
+            SELECT *,
+                ROW_NUMBER() OVER (
+                    PARTITION BY
+                        ISNULL(LotNo, ''),
+                        ISNULL(SampleName, '')
+                    ORDER BY
+                        CASE
+                            WHEN MfgSampleNo IS NOT NULL AND TRY_CONVERT(int, SampleNo) = MfgSampleNo THEN 0
+                            ELSE 1
+                        END,
+                        AnlzTime DESC,
+                        CREATE_TIME DESC,
+                        SID DESC
+                ) AS rn
+            FROM Candidates
+        )
+        SELECT TOP (@Limit) *
+        FROM Ranked
+        WHERE rn = 1
+        ORDER BY AnlzTime DESC, CREATE_TIME DESC, SID DESC
+        """;
+
+    private const string StdRawForRfPagedSqlFormat = """
+        WITH Candidates AS (
+            SELECT rows.*, mfgMatch.SampleNo AS MfgSampleNo
+            FROM dbo.{0} AS rows
+            OUTER APPLY (
+                SELECT TOP (1)
+                    TRY_CONVERT(int, NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(32), mfg.SampleNo))), '')) AS SampleNo
+                FROM dbo.{1} AS mfg
+                WHERE mfg.LotNo = rows.LotNo
+                    AND TRY_CONVERT(int, NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(32), mfg.SampleNo))), '')) IS NOT NULL
+                ORDER BY
+                    CASE
+                        WHEN ISNULL(NULLIF(LTRIM(RTRIM(mfg.SamplName)), ''), '') =
+                             ISNULL(NULLIF(LTRIM(RTRIM(rows.SampleName)), ''), '') THEN 0
+                        ELSE 1
+                    END,
+                    mfg.EDIT_TIME DESC,
+                    mfg.CREATE_TIME DESC,
+                    mfg.si0_id DESC
+            ) AS mfgMatch
+            WHERE
+                @Search IS NULL
+                OR rows.LotNo LIKE @SearchPattern
+                OR rows.SampleName LIKE @SearchPattern
+                OR CAST(rows.SampleNo AS NVARCHAR(32)) LIKE @SearchPattern
+                OR rows.DataFilename LIKE @SearchPattern
+                OR rows.SourceFolderName LIKE @SearchPattern
+        ),
+        Ranked AS (
+            SELECT *,
+                ROW_NUMBER() OVER (
+                    PARTITION BY
+                        ISNULL(LotNo, ''),
+                        ISNULL(SampleName, '')
+                    ORDER BY
+                        CASE
+                            WHEN MfgSampleNo IS NOT NULL AND TRY_CONVERT(int, SampleNo) = MfgSampleNo THEN 0
+                            ELSE 1
+                        END,
+                        AnlzTime DESC,
+                        CREATE_TIME DESC,
+                        SID DESC
+                ) AS rn
+            FROM Candidates
+        )
+        SELECT *
+        FROM Ranked
+        WHERE rn = 1
+        ORDER BY AnlzTime DESC, CREATE_TIME DESC, SID DESC
+        OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY
+        """;
+
+    private const string StdRawForRfCountSqlFormat = """
+        WITH Candidates AS (
+            SELECT rows.*, mfgMatch.SampleNo AS MfgSampleNo
+            FROM dbo.{0} AS rows
+            OUTER APPLY (
+                SELECT TOP (1)
+                    TRY_CONVERT(int, NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(32), mfg.SampleNo))), '')) AS SampleNo
+                FROM dbo.{1} AS mfg
+                WHERE mfg.LotNo = rows.LotNo
+                    AND TRY_CONVERT(int, NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(32), mfg.SampleNo))), '')) IS NOT NULL
+                ORDER BY
+                    CASE
+                        WHEN ISNULL(NULLIF(LTRIM(RTRIM(mfg.SamplName)), ''), '') =
+                             ISNULL(NULLIF(LTRIM(RTRIM(rows.SampleName)), ''), '') THEN 0
+                        ELSE 1
+                    END,
+                    mfg.EDIT_TIME DESC,
+                    mfg.CREATE_TIME DESC,
+                    mfg.si0_id DESC
+            ) AS mfgMatch
+            WHERE
+                @Search IS NULL
+                OR rows.LotNo LIKE @SearchPattern
+                OR rows.SampleName LIKE @SearchPattern
+                OR CAST(rows.SampleNo AS NVARCHAR(32)) LIKE @SearchPattern
+                OR rows.DataFilename LIKE @SearchPattern
+                OR rows.SourceFolderName LIKE @SearchPattern
+        ),
+        Ranked AS (
+            SELECT
+                ROW_NUMBER() OVER (
+                    PARTITION BY
+                        ISNULL(LotNo, ''),
+                        ISNULL(SampleName, '')
+                    ORDER BY
+                        CASE
+                            WHEN MfgSampleNo IS NOT NULL AND TRY_CONVERT(int, SampleNo) = MfgSampleNo THEN 0
+                            ELSE 1
+                        END,
+                        AnlzTime DESC,
+                        CREATE_TIME DESC,
+                        SID DESC
+                ) AS rn
+            FROM Candidates
+        )
+        SELECT COUNT(1)
+        FROM Ranked
+        WHERE rn = 1
+        """;
+
+    private const string AllStdRawRowsSqlFormat = """
+        SELECT *
+        FROM dbo.{0}
+        ORDER BY AnlzTime DESC, CREATE_TIME DESC, SID DESC
+        """;
+
+    private const string RawRowsByIdentitiesSqlFormat = """
+        SELECT *
+        FROM dbo.{0}
+        WHERE LotNo IN @LotNos
+          AND Port IN @Ports
+          AND SampleNo IN @SampleNos
+        """;
+
     private readonly SchedulerOptions _options = options.Value;
     private readonly SchedulerTableOptions _tables = options.Value.Tables;
+
+    public async Task<MfgJsonImportResult> UpsertMfgJsonLotsAsync(
+        IReadOnlyCollection<MfgJsonLotRecord> records,
+        string sourceFileName,
+        CancellationToken cancellationToken)
+    {
+        if (records.Count == 0)
+        {
+            return new MfgJsonImportResult();
+        }
+
+        await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
+        await connection.OpenAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
+
+        var inserted = 0;
+        var updated = 0;
+        var importedLots = new List<MfgJsonImportedLot>();
+        var tableName = Quote(_tables.MfgLot);
+        var existingSql = string.Format(MfgJsonExistingLotSqlFormat, tableName);
+        var insertSql = string.Format(MfgJsonInsertSqlFormat, tableName);
+        var updateSql = string.Format(MfgJsonUpdateSqlFormat, tableName);
+        var now = DateTime.Now;
+        var auditUser = BuildMfgJsonAuditUser(sourceFileName);
+
+        try
+        {
+            foreach (var record in records)
+            {
+                var parameters = CreateMfgJsonParameters(record, auditUser, now);
+                var existingIds = (await connection.QueryAsync<decimal>(
+                        new CommandDefinition(
+                            existingSql,
+                            parameters,
+                            transaction,
+                            cancellationToken: cancellationToken)))
+                    .Distinct()
+                    .ToArray();
+
+                // 同一筆 JSON 如果用 si0_id / ID / LotNo 對到多筆 DB row，代表正式資料已不唯一，不能猜要覆蓋哪一筆。
+                if (existingIds.Length > 1)
+                {
+                    throw new InvalidOperationException(
+                        $"MFG JSON record maps to multiple { _tables.MfgLot } rows. LotNo={record.LotNo}, si0_id={record.Si0Id}.");
+                }
+
+                if (existingIds.Length == 0)
+                {
+                    await connection.ExecuteAsync(
+                        new CommandDefinition(
+                            insertSql,
+                            parameters,
+                            transaction,
+                            cancellationToken: cancellationToken));
+
+                    inserted++;
+                    importedLots.Add(new MfgJsonImportedLot { LotNo = record.LotNo, Si0Id = record.Si0Id, Action = "Inserted" });
+                    continue;
+                }
+
+                parameters.Add("ExistingId", existingIds[0]);
+                await connection.ExecuteAsync(
+                    new CommandDefinition(
+                        updateSql,
+                        parameters,
+                        transaction,
+                        cancellationToken: cancellationToken));
+
+                updated++;
+                importedLots.Add(new MfgJsonImportedLot { LotNo = record.LotNo, Si0Id = record.Si0Id, Action = "Updated" });
+            }
+
+            await transaction.CommitAsync(cancellationToken);
+            return new MfgJsonImportResult
+            {
+                InsertedCount = inserted,
+                UpdatedCount = updated,
+                Lots = importedLots
+            };
+        }
+        catch
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            throw;
+        }
+    }
 
     public async Task<IReadOnlyDictionary<string, MfgLot>> GetLotsByLotNoAsync(IEnumerable<string> lotNos, CancellationToken cancellationToken)
     {
@@ -86,13 +799,14 @@ public sealed class DapperRepository(
 
         await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
         var sql = string.Format(LotLookupSqlFormat, Quote(_tables.MfgLot));
-        var rows = await connection.QueryAsync<MfgLot>(
+        var rows = await connection.QueryAsync(
             new CommandDefinition(
                 sql,
                 new { LotNos = distinctLotNos },
                 cancellationToken: cancellationToken));
 
         return rows
+            .Select(DynamicToMfgLot)
             .Where(row => !string.IsNullOrWhiteSpace(row.LotNo))
             .GroupBy(row => row.LotNo, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
@@ -111,28 +825,523 @@ public sealed class DapperRepository(
         return row is null ? null : DynamicToQcDataRow(row);
     }
 
-    public async Task ExecuteImportAsync(ImportWriteSet writeSet, QcDataRow rf, DateTime importDate, CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<QcDataRow>> GetPortPpbRowsAsync(
+        IReadOnlyCollection<PpbRowSelector> selectors,
+        CancellationToken cancellationToken)
+    {
+        var normalizedSelectors = selectors
+            .Where(selector =>
+                !string.IsNullOrWhiteSpace(selector.Id) &&
+                !string.IsNullOrWhiteSpace(selector.LotNo) &&
+                !string.IsNullOrWhiteSpace(selector.Port))
+            .Distinct()
+            .ToArray();
+
+        if (normalizedSelectors.Length == 0)
+        {
+            return [];
+        }
+
+        var ids = normalizedSelectors.Select(selector => selector.Id).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var lotNos = normalizedSelectors.Select(selector => selector.LotNo).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var ports = normalizedSelectors.Select(selector => selector.Port).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+
+        await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
+        var sql = string.Format(PortPpbRowsSqlFormat, Quote(_tables.PortPpb));
+        var rows = await connection.QueryAsync(
+            new CommandDefinition(
+                sql,
+                new { Ids = ids, LotNos = lotNos, Ports = ports },
+                cancellationToken: cancellationToken));
+
+        var selectorSet = normalizedSelectors.ToHashSet();
+        return rows
+            .Select(DynamicToQcDataRow)
+            .Where(row => selectorSet.Contains(PpbRowSelector.FromRow(row)))
+            .OrderBy(row => row.AnlzTime)
+            .ThenBy(row => row.SampleName, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    public async Task<IReadOnlySet<string>> GetExistingRawIdentityIdsAsync(
+        IReadOnlyCollection<RawDataIdentity> identities,
+        CancellationToken cancellationToken)
+    {
+        var normalizedIdentities = identities
+            .Where(identity =>
+                !string.IsNullOrWhiteSpace(identity.LotNo) &&
+                !string.IsNullOrWhiteSpace(identity.Port) &&
+                identity.SampleNo > 0 &&
+                identity.AnlzTime > DateTime.MinValue)
+            .Distinct()
+            .ToArray();
+
+        if (normalizedIdentities.Length == 0)
+        {
+            return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        var lotNos = normalizedIdentities.Select(identity => identity.LotNo).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var ports = normalizedIdentities.Select(identity => identity.Port).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var sampleNos = normalizedIdentities.Select(identity => identity.SampleNo).Distinct().ToArray();
+        var expectedIds = normalizedIdentities.Select(identity => identity.ToStableId()).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
+        var rows = new List<QcDataRow>();
+        foreach (var tableName in new[] { _tables.StdRaw, _tables.PortRaw })
+        {
+            var sql = string.Format(RawRowsByIdentitiesSqlFormat, Quote(tableName));
+            var tableRows = await connection.QueryAsync(
+                new CommandDefinition(
+                    sql,
+                    new { LotNos = lotNos, Ports = ports, SampleNos = sampleNos },
+                    cancellationToken: cancellationToken));
+
+            rows.AddRange(tableRows.Select(DynamicToQcDataRow));
+        }
+
+        return rows
+            .Select(RawDataIdentity.FromRow)
+            .Select(identity => identity.ToStableId())
+            .Where(expectedIds.Contains)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
+    public async Task<IReadOnlyList<ExportOption>> GetExportOptionsAsync(
+        DateTime batchDate,
+        CancellationToken cancellationToken)
+    {
+        return await GetExportOptionsAsync(batchDate.Date, batchDate.Date, cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<ExportOption>> GetExportOptionsAsync(
+        DateTime startDate,
+        DateTime endDate,
+        CancellationToken cancellationToken)
+    {
+        var rawRows = await GetRawRowsByDateRangeAsync(startDate.Date, endDate.Date, cancellationToken);
+
+        return rawRows
+            .Where(row => row.AnlzTime.HasValue && row.SampleNo.HasValue)
+            .GroupBy(row => RawDataIdentity.FromRow(row).ToStableId(), StringComparer.OrdinalIgnoreCase)
+            .Select(group => ToExportOption(group.First()))
+            .OrderBy(option => option.AnlzTime)
+            .ThenBy(option => option.SourceKind, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(option => option.Port, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(option => option.SourceFolderName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(option => option.DisplayName, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    public async Task<IReadOnlyList<ExportOption>> GetPortPpbExportOptionsAsync(
+        DateTime batchDate,
+        CancellationToken cancellationToken)
+    {
+        var rows = await GetRowsByDateAsync(_tables.PortPpb, batchDate.Date, cancellationToken);
+        return rows
+            .Where(row => row.AnlzTime.HasValue && row.SampleNo.HasValue)
+            .GroupBy(row => RawDataIdentity.FromRow(row).ToStableId(), StringComparer.OrdinalIgnoreCase)
+            .Select(group => ToExportOption(group.First()))
+            .OrderBy(option => option.AnlzTime)
+            .ThenBy(option => option.Port, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(option => option.SourceFolderName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(option => option.DisplayName, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    public async Task<PagedResponse<ExportOption>> GetPortPpbExportOptionsAsync(
+        DateTime batchDate,
+        int page,
+        int pageSize,
+        CancellationToken cancellationToken)
+    {
+        var normalizedPage = Math.Max(1, page);
+        var normalizedPageSize = Math.Clamp(pageSize, 1, 500);
+        var parameters = new
+        {
+            BatchDate = batchDate.Date,
+            Offset = (normalizedPage - 1) * normalizedPageSize,
+            PageSize = normalizedPageSize
+        };
+
+        await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
+        var countSql = string.Format(PortPpbGroupCountSqlFormat, Quote(_tables.PortPpb));
+        var totalCount = await connection.ExecuteScalarAsync<int>(
+            new CommandDefinition(countSql, parameters, cancellationToken: cancellationToken));
+
+        var pageSql = string.Format(PortPpbPagedGroupsSqlFormat, Quote(_tables.PortPpb));
+        var rows = await connection.QueryAsync(
+            new CommandDefinition(pageSql, parameters, cancellationToken: cancellationToken));
+
+        var items = rows
+            .Select(DynamicToQcDataRow)
+            .GroupBy(row => RawDataIdentity.FromRow(row).ToStableId(), StringComparer.OrdinalIgnoreCase)
+            .Select(group => ToExportOption(group.First()))
+            .OrderBy(option => option.AnlzTime)
+            .ThenBy(option => option.Port, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(option => option.SourceFolderName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(option => option.DisplayName, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        return new PagedResponse<ExportOption>(normalizedPage, normalizedPageSize, totalCount, items);
+    }
+
+    public async Task<IReadOnlyList<RfOption>> GetRfOptionsAsync(CancellationToken cancellationToken)
     {
         await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
-        await connection.OpenAsync(cancellationToken);
+        var sql = string.Format(AllRfRowsSqlFormat, Quote(_tables.Rf));
+        var rows = await connection.QueryAsync(new CommandDefinition(sql, cancellationToken: cancellationToken));
+        return rows
+            .Select(DynamicToQcDataRow)
+            .Select(row => new RfOption(row.Id, row.AnlzTime, row.Si0Id, row.SampleName, row.SampleNo, row.Description))
+            .ToArray();
+    }
 
-        // raw 與 AVG/RPD/PPB 必須在同一個交易內完成，任一錯誤就整批日期資料夾 rollback。
-        await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
+    public async Task<QcDataRow?> GetRfByIdAsync(string rfId, CancellationToken cancellationToken)
+    {
+        await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
+        var sql = string.Format(RfByIdSqlFormat, Quote(_tables.Rf));
+        var row = await connection.QueryFirstOrDefaultAsync(
+            new CommandDefinition(sql, new { RfId = rfId }, cancellationToken: cancellationToken));
+        return row is null ? null : DynamicToQcDataRow(row);
+    }
+
+    public async Task<IReadOnlyList<ExportOption>> GetStdRawOptionsForRfAsync(
+        string? search,
+        int limit,
+        CancellationToken cancellationToken)
+    {
+        var normalizedLimit = Math.Clamp(limit, 1, 500);
+        var normalizedSearch = string.IsNullOrWhiteSpace(search) ? null : search.Trim();
+        await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
+        var sql = string.Format(StdRawForRfSqlFormat, Quote(_tables.StdRaw), Quote(_tables.MfgLot));
+        var rows = await connection.QueryAsync(
+            new CommandDefinition(
+                sql,
+                new
+                {
+                    Limit = normalizedLimit,
+                    Search = normalizedSearch,
+                    SearchPattern = normalizedSearch is null ? null : $"%{normalizedSearch}%"
+                },
+                cancellationToken: cancellationToken));
+
+        return rows
+            .Select(DynamicToQcDataRow)
+            .Select(ToExportOption)
+            .ToArray();
+    }
+
+    public async Task<PagedResponse<ExportOption>> GetStdRawOptionsForRfAsync(
+        string? search,
+        int page,
+        int pageSize,
+        CancellationToken cancellationToken)
+    {
+        var normalizedPage = Math.Max(1, page);
+        var normalizedPageSize = Math.Clamp(pageSize, 1, 500);
+        var normalizedSearch = string.IsNullOrWhiteSpace(search) ? null : search.Trim();
+        var parameters = new
+        {
+            Offset = (normalizedPage - 1) * normalizedPageSize,
+            PageSize = normalizedPageSize,
+            Search = normalizedSearch,
+            SearchPattern = normalizedSearch is null ? null : $"%{normalizedSearch}%"
+        };
+
+        await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
+        var countSql = string.Format(StdRawForRfCountSqlFormat, Quote(_tables.StdRaw), Quote(_tables.MfgLot));
+        var totalCount = await connection.ExecuteScalarAsync<int>(
+            new CommandDefinition(countSql, parameters, cancellationToken: cancellationToken));
+
+        var pageSql = string.Format(StdRawForRfPagedSqlFormat, Quote(_tables.StdRaw), Quote(_tables.MfgLot));
+        var rows = await connection.QueryAsync(
+            new CommandDefinition(pageSql, parameters, cancellationToken: cancellationToken));
+
+        var items = rows
+            .Select(DynamicToQcDataRow)
+            .Select(ToExportOption)
+            .ToArray();
+
+        return new PagedResponse<ExportOption>(normalizedPage, normalizedPageSize, totalCount, items);
+    }
+
+    public async Task<QcDataRow?> GetStdRawByStableIdAsync(string stableId, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(stableId))
+        {
+            return null;
+        }
+
+        await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
+        var sql = string.Format(AllStdRawRowsSqlFormat, Quote(_tables.StdRaw));
+        var rows = await connection.QueryAsync(new CommandDefinition(sql, cancellationToken: cancellationToken));
+        return rows
+            .Select(DynamicToQcDataRow)
+            .FirstOrDefault(row => string.Equals(
+                RawDataIdentity.FromRow(row).ToStableId(),
+                stableId,
+                StringComparison.OrdinalIgnoreCase));
+    }
+
+    public async Task<RfOption> UpsertRfAsync(
+        QcDataRow row,
+        DateTime importDate,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(row.LotNo))
+        {
+            throw new InvalidOperationException("RF LotNo is required.");
+        }
+
+        await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
+        await connection.OpenAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
 
         try
         {
-            var sidCounters = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
+            var values = BuildRfValues(row);
+            values["EDIT_USER"] = row.EditUser;
+            values["EDIT_TIME"] = row.EditTime;
+            values.Remove("SID");
+            values.Remove("CREATE_USER");
+            values.Remove("CREATE_TIME");
 
-            // 依 Quant 時間還原 STD / PORT 連續區段；每組寫完 raw 後，再從 DB 查最新兩筆 raw 計算。
-            foreach (var group in BuildRawGroups(writeSet))
+            var updateSet = string.Join(
+                ", ",
+                values.Keys
+                    .Where(key => !string.Equals(key, "LotNo", StringComparison.OrdinalIgnoreCase))
+                    .Select(key => $"{Quote(key)} = @{ParameterName(key)}"));
+            var updateParameters = new DynamicParameters();
+            foreach (var (key, value) in values)
             {
-                if (group.SourceKind == QuantSourceKind.Std)
+                updateParameters.Add(ParameterName(key), value);
+            }
+
+            var updateSql = $"""
+                UPDATE dbo.{Quote(_tables.Rf)}
+                SET {updateSet}
+                WHERE LotNo = @LotNo
+                """;
+
+            var affectedRows = await connection.ExecuteAsync(
+                new CommandDefinition(
+                    updateSql,
+                    updateParameters,
+                    transaction,
+                    cancellationToken: cancellationToken));
+
+            if (affectedRows == 0)
+            {
+                row.Sid = await GetMaxSidAsync(connection, transaction, _tables.Rf, importDate, cancellationToken) + 1;
+                var insertValues = BuildRfValues(row);
+                var columns = string.Join(", ", insertValues.Keys.Select(Quote));
+                var parameters = string.Join(", ", insertValues.Keys.Select(key => "@" + ParameterName(key)));
+                var insertSql = $"INSERT INTO dbo.{Quote(_tables.Rf)} ({columns}) VALUES ({parameters})";
+                var insertParameters = new DynamicParameters();
+                foreach (var (key, value) in insertValues)
                 {
-                    await ProcessStdGroupAsync(connection, transaction, group.Rows, importDate, sidCounters, cancellationToken);
-                    continue;
+                    insertParameters.Add(ParameterName(key), value);
                 }
 
-                await ProcessPortGroupAsync(connection, transaction, group.Rows, rf, importDate, sidCounters, cancellationToken);
+                await connection.ExecuteAsync(
+                    new CommandDefinition(
+                        insertSql,
+                        insertParameters,
+                        transaction,
+                        cancellationToken: cancellationToken));
+            }
+
+            await transaction.CommitAsync(cancellationToken);
+        }
+        catch
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            throw;
+        }
+
+        return new RfOption(row.Id, row.AnlzTime, row.Si0Id, row.SampleName, row.SampleNo, row.Description);
+    }
+
+    public async Task<IReadOnlyList<QcDataRow>> GetRawRowsForExportAsync(
+        DateTime startDate,
+        DateTime endDate,
+        IReadOnlyCollection<string> selectedIds,
+        CancellationToken cancellationToken)
+    {
+        var selectedSet = selectedIds
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (selectedSet.Count == 0)
+        {
+            return [];
+        }
+
+        var rawRows = await GetRawRowsByDateRangeAsync(startDate.Date, endDate.Date, cancellationToken);
+        return FilterRowsByStableIds(rawRows, selectedSet)
+            .OrderBy(row => row.AnlzTime)
+            .ThenBy(row => row.SampleNo)
+            .ThenBy(row => row.SourceFolderName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(row => row.DataFilename, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    public async Task<IReadOnlyList<Query2ExportRow>> GetQuery2ExportRowsAsync(
+        DateTime batchDate,
+        IReadOnlyCollection<string> selectedIds,
+        CancellationToken cancellationToken)
+    {
+        var selectedSet = selectedIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (selectedSet.Count == 0)
+        {
+            return [];
+        }
+
+        var rows = new List<Query2ExportRow>();
+        var rawRows = await GetRawRowsByDateAsync(batchDate.Date, cancellationToken);
+        var selectedRawRows = FilterRowsByStableIds(rawRows, selectedSet).ToArray();
+        if (selectedRawRows.Length == 0)
+        {
+            return [];
+        }
+
+        var rf = await GetLatestRfAsync(selectedRawRows.Min(row => row.AnlzTime) ?? batchDate.Date, cancellationToken);
+        if (rf is not null)
+        {
+            rows.Add(new Query2ExportRow(Query2ExportRowType.Rf, rf));
+        }
+
+        foreach (var rawRow in selectedRawRows)
+        {
+            rows.Add(new Query2ExportRow(Query2ExportRowType.Raw, rawRow));
+        }
+
+        foreach (var rowType in new[]
+                 {
+                     (Table: _tables.StdAvg, RowType: Query2ExportRowType.Avg),
+                     (Table: _tables.PortAvg, RowType: Query2ExportRowType.Avg),
+                     (Table: _tables.PortPpb, RowType: Query2ExportRowType.Ppb),
+                     (Table: _tables.StdRpd, RowType: Query2ExportRowType.Rpd),
+                     (Table: _tables.PortRpd, RowType: Query2ExportRowType.Rpd),
+                     (Table: _tables.StdQc, RowType: Query2ExportRowType.Qc)
+                 })
+        {
+            var computedRows = await GetRowsByDateAsync(rowType.Table, batchDate.Date, cancellationToken);
+            rows.AddRange(FilterRowsByStableIds(computedRows, selectedSet)
+                .Select(row => new Query2ExportRow(rowType.RowType, row)));
+        }
+
+        return rows
+            .OrderBy(row => row.RowType == Query2ExportRowType.Rf ? 0 : 1)
+            .ThenBy(row => row.Row.AnlzTime)
+            .ThenBy(row => row.Row.SampleNo)
+            .ThenBy(row => row.Row.SourceFolderName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(row => row.Row.Port, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(row => RowTypeOrder(row.RowType))
+            .ThenBy(row => row.Row.Id, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    public async Task<IReadOnlyList<QcDataRow>> GetPortPpbRowsForExportAsync(
+        DateTime batchDate,
+        IReadOnlyCollection<string> selectedIds,
+        CancellationToken cancellationToken)
+    {
+        var selectedSet = selectedIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (selectedSet.Count == 0)
+        {
+            return [];
+        }
+
+        await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
+        var sql = string.Format(PortPpbRowsForExportSqlFormat, Quote(_tables.PortPpb), Quote(_tables.MfgLot));
+        var queryRows = await connection.QueryAsync(
+            new CommandDefinition(
+                sql,
+                new { BatchDate = batchDate.Date },
+                cancellationToken: cancellationToken));
+
+        var rows = queryRows.Select(DynamicToQcDataRow);
+        return FilterRowsByStableIds(rows, selectedSet)
+            .OrderBy(row => row.AnlzTime)
+            .ThenBy(row => row.SampleNo)
+            .ThenBy(row => row.SourceFolderName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(row => row.SampleName, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    public async Task UpsertExcelPpbHistoryAsync(
+        ExcelPpbHistorySaveRequest request,
+        CancellationToken cancellationToken)
+    {
+        var excelExportKey = ComputeExcelExportKey(request);
+        var normalizedRfId = NormalizeKeyPart(request.RfId);
+        var normalizedStdRawIds = FormatSelectedIds(request.StdRawIds);
+        var normalizedPortRawIds = FormatSelectedIds(request.PortRawIds);
+        await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
+        await connection.OpenAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
+
+        try
+        {
+            // ExcelExportKey now identifies calculation inputs. Source columns also match legacy date-based keys.
+            var deleteSql = $"""
+                DELETE FROM dbo.{Quote(_tables.ExcelPpbHistory)}
+                WHERE (
+                        @ExportSessionId IS NOT NULL
+                    AND ExcelExportSessionId = @ExportSessionId
+                   )
+                   OR (
+                        @ExportSessionId IS NULL
+                    AND (
+                            ExcelExportKey = @ExcelExportKey
+                         OR (
+                                UPPER(LTRIM(RTRIM(ISNULL(ExcelRfId, N'')))) = @NormalizedRfId
+                            AND ISNULL(ExcelStdRawIds, N'') = @NormalizedStdRawIds
+                            AND ISNULL(ExcelPortRawIds, N'') = @NormalizedPortRawIds
+                            )
+                        )
+                   )
+                """;
+            await connection.ExecuteAsync(
+                new CommandDefinition(
+                    deleteSql,
+                    new
+                    {
+                        ExportSessionId = request.ExportSessionId,
+                        ExcelExportKey = excelExportKey,
+                        NormalizedRfId = normalizedRfId,
+                        NormalizedStdRawIds = normalizedStdRawIds,
+                        NormalizedPortRawIds = normalizedPortRawIds
+                    },
+                    transaction,
+                    cancellationToken: cancellationToken));
+
+            if (request.PpbRows.Count > 0)
+            {
+                var sid = await GetMaxSidAsync(connection, transaction, _tables.ExcelPpbHistory, request.ExportedAt.Date, cancellationToken);
+
+                foreach (var row in request.PpbRows)
+                {
+                    var historyRow = row.DeepClone();
+                    historyRow.Sid = ++sid;
+                    historyRow.ExcelExportKey = excelExportKey;
+                    historyRow.ExcelExportSessionId = request.ExportSessionId;
+                    historyRow.ExcelPpbExportId = ComputeExcelPpbExportId(excelExportKey, request.ExportSessionId, historyRow);
+                    historyRow.ExcelExportedAt = request.ExportedAt;
+                    historyRow.ExcelExportUser = request.ExportUser;
+                    historyRow.ExcelStartDate = request.StartDate.Date;
+                    historyRow.ExcelEndDate = request.EndDate.Date;
+                    historyRow.ExcelRfId = request.RfId;
+                    historyRow.ExcelStdRawIds = normalizedStdRawIds;
+                    historyRow.ExcelPortRawIds = normalizedPortRawIds;
+                    historyRow.CreateUser = request.ExportUser;
+                    historyRow.CreateTime = request.ExportedAt;
+                    historyRow.EditUser = request.ExportUser;
+                    historyRow.EditTime = request.ExportedAt;
+
+                    await InsertExcelPpbHistoryRowAsync(connection, transaction, historyRow, cancellationToken);
+                }
             }
 
             await transaction.CommitAsync(cancellationToken);
@@ -143,6 +1352,1218 @@ public sealed class DapperRepository(
             throw;
         }
     }
+
+    public async Task InsertQuery2PreviewEditLogsAsync(
+        IReadOnlyCollection<Query2PreviewEditLogRow> rows,
+        CancellationToken cancellationToken)
+    {
+        if (rows.Count == 0)
+        {
+            return;
+        }
+
+        await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
+        await connection.OpenAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
+
+        try
+        {
+            var sql = $"""
+                INSERT INTO dbo.{Quote(_tables.Query2PreviewEditLog)}
+                (
+                    ExportSessionId,
+                    ExcelExportKey,
+                    StartDate,
+                    EndDate,
+                    RfId,
+                    StdRawIds,
+                    PortRawIds,
+                    RowKey,
+                    RowType,
+                    RowDisplayId,
+                    FieldKey,
+                    ValueKind,
+                    Analyte,
+                    OriginalValue,
+                    NewValue,
+                    ExportedAt,
+                    ExportUser,
+                    CreateTime
+                )
+                VALUES
+                (
+                    @ExportSessionId,
+                    @ExcelExportKey,
+                    @StartDate,
+                    @EndDate,
+                    @RfId,
+                    @StdRawIds,
+                    @PortRawIds,
+                    @RowKey,
+                    @RowType,
+                    @RowDisplayId,
+                    @FieldKey,
+                    @ValueKind,
+                    @Analyte,
+                    @OriginalValue,
+                    @NewValue,
+                    @ExportedAt,
+                    @ExportUser,
+                    @CreateTime
+                )
+                """;
+
+            foreach (var row in rows)
+            {
+                await connection.ExecuteAsync(
+                    new CommandDefinition(
+                        sql,
+                        new
+                        {
+                            row.ExportSessionId,
+                            row.ExcelExportKey,
+                            row.StartDate,
+                            row.EndDate,
+                            row.RfId,
+                            row.StdRawIds,
+                            row.PortRawIds,
+                            row.RowKey,
+                            RowType = row.RowType.ToString(),
+                            row.RowDisplayId,
+                            row.FieldKey,
+                            row.ValueKind,
+                            row.Analyte,
+                            row.OriginalValue,
+                            row.NewValue,
+                            row.ExportedAt,
+                            row.ExportUser,
+                            row.CreateTime
+                        },
+                        transaction,
+                        cancellationToken: cancellationToken));
+            }
+
+            await transaction.CommitAsync(cancellationToken);
+        }
+        catch
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            throw;
+        }
+    }
+
+    public async Task<IReadOnlyList<Query2DynamicAreaField>> GetQuery2DynamicAreaFieldsAsync(
+        bool includeInactive,
+        CancellationToken cancellationToken)
+    {
+        using var connection = sqlConnectionFactory.CreateConnection();
+        var sql = $"""
+            SELECT
+                FieldKey,
+                ColumnName,
+                DisplayName,
+                SortOrder,
+                IsActive
+            FROM dbo.{Quote(_tables.Query2DynamicAreaField)}
+            WHERE @IncludeInactive = 1 OR IsActive = 1
+            ORDER BY SortOrder, FieldKey
+            """;
+
+        var rows = await connection.QueryAsync<Query2DynamicAreaField>(
+            new CommandDefinition(sql, new { IncludeInactive = includeInactive }, cancellationToken: cancellationToken));
+        return rows.ToArray();
+    }
+
+    public async Task<Query2DynamicAreaField> UpsertQuery2DynamicAreaFieldAsync(
+        Query2DynamicAreaFieldUpsertRequest request,
+        string user,
+        CancellationToken cancellationToken)
+    {
+        var existingFields = await GetQuery2DynamicAreaFieldsAsync(includeInactive: true, cancellationToken);
+        var field = Query2DynamicAreaRules.NormalizeFieldRequest(request, existingFields);
+        var auditUser = string.IsNullOrWhiteSpace(user) ? "SYSTEM" : user.Trim();
+        var now = DateTime.Now;
+
+        await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
+        await connection.OpenAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+
+        try
+        {
+            var existsSql = $"""
+                SELECT COUNT(1)
+                FROM dbo.{Quote(_tables.Query2DynamicAreaField)}
+                WHERE FieldKey = @FieldKey
+                """;
+            var exists = await connection.ExecuteScalarAsync<int>(
+                new CommandDefinition(
+                    existsSql,
+                    new { field.FieldKey },
+                    transaction,
+                    cancellationToken: cancellationToken)) > 0;
+
+            if (exists)
+            {
+                var updateSql = $"""
+                    UPDATE dbo.{Quote(_tables.Query2DynamicAreaField)}
+                    SET
+                        ColumnName = @ColumnName,
+                        DisplayName = @DisplayName,
+                        SortOrder = @SortOrder,
+                        IsActive = @IsActive,
+                        EditUser = @AuditUser,
+                        EditTime = @Now
+                    WHERE FieldKey = @FieldKey
+                    """;
+                await connection.ExecuteAsync(
+                    new CommandDefinition(
+                        updateSql,
+                        new
+                        {
+                            field.FieldKey,
+                            field.ColumnName,
+                            field.DisplayName,
+                            field.SortOrder,
+                            field.IsActive,
+                            AuditUser = auditUser,
+                            Now = now
+                        },
+                        transaction,
+                        cancellationToken: cancellationToken));
+            }
+            else
+            {
+                var insertSql = $"""
+                    INSERT INTO dbo.{Quote(_tables.Query2DynamicAreaField)}
+                    (
+                        FieldKey,
+                        ColumnName,
+                        DisplayName,
+                        SortOrder,
+                        IsActive,
+                        CreateUser,
+                        CreateTime
+                    )
+                    VALUES
+                    (
+                        @FieldKey,
+                        @ColumnName,
+                        @DisplayName,
+                        @SortOrder,
+                        @IsActive,
+                        @AuditUser,
+                        @Now
+                    )
+                    """;
+                await connection.ExecuteAsync(
+                    new CommandDefinition(
+                        insertSql,
+                        new
+                        {
+                            field.FieldKey,
+                            field.ColumnName,
+                            field.DisplayName,
+                            field.SortOrder,
+                            field.IsActive,
+                            AuditUser = auditUser,
+                            Now = now
+                        },
+                        transaction,
+                        cancellationToken: cancellationToken));
+            }
+
+            await transaction.CommitAsync(cancellationToken);
+            return field;
+        }
+        catch
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            throw;
+        }
+    }
+
+    public async Task DisableQuery2DynamicAreaFieldAsync(
+        string fieldKey,
+        string user,
+        CancellationToken cancellationToken)
+    {
+        var normalizedFieldKey = Query2DynamicAreaRules.NormalizeFieldKey(fieldKey);
+        var auditUser = string.IsNullOrWhiteSpace(user) ? "SYSTEM" : user.Trim();
+        var sql = $"""
+            UPDATE dbo.{Quote(_tables.Query2DynamicAreaField)}
+            SET
+                IsActive = 0,
+                EditUser = @AuditUser,
+                EditTime = @Now
+            WHERE FieldKey = @FieldKey
+            """;
+
+        using var connection = sqlConnectionFactory.CreateConnection();
+        await connection.ExecuteAsync(
+            new CommandDefinition(
+                sql,
+                new { FieldKey = normalizedFieldKey, AuditUser = auditUser, Now = DateTime.Now },
+                cancellationToken: cancellationToken));
+    }
+
+    public async Task<IReadOnlyList<Query2DynamicAreaPortValue>> GetQuery2DynamicAreaPortValuesAsync(
+        CancellationToken cancellationToken)
+    {
+        using var connection = sqlConnectionFactory.CreateConnection();
+        var sql = $"""
+            SELECT
+                portValues.FieldKey,
+                portValues.PortKey,
+                portValues.AreaValue
+            FROM dbo.{Quote(_tables.Query2DynamicAreaPortValue)} portValues
+            INNER JOIN dbo.{Quote(_tables.Query2DynamicAreaField)} fields
+                ON fields.FieldKey = portValues.FieldKey
+            WHERE fields.IsActive = 1
+            ORDER BY fields.SortOrder, portValues.PortKey
+            """;
+
+        var rows = await connection.QueryAsync<Query2DynamicAreaPortValue>(
+            new CommandDefinition(sql, cancellationToken: cancellationToken));
+        return rows.ToArray();
+    }
+
+    public async Task UpsertQuery2DynamicAreaPortValuesAsync(
+        IReadOnlyCollection<Query2DynamicAreaPortValueDto> rows,
+        string user,
+        CancellationToken cancellationToken)
+    {
+        if (rows.Count == 0)
+        {
+            return;
+        }
+
+        var existingFields = await GetQuery2DynamicAreaFieldsAsync(includeInactive: true, cancellationToken);
+        var fieldKeys = existingFields
+            .Select(field => field.FieldKey)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var normalizedRows = rows
+            .Select(row => new Query2DynamicAreaPortValue(
+                Query2DynamicAreaRules.NormalizeFieldKey(row.FieldKey),
+                Query2DynamicAreaRules.NormalizePortKey(row.PortKey),
+                row.AreaValue))
+            .ToArray();
+
+        var missingField = normalizedRows.FirstOrDefault(row => !fieldKeys.Contains(row.FieldKey));
+        if (missingField is not null)
+        {
+            throw new InvalidOperationException($"Dynamic AREA field '{missingField.FieldKey}' does not exist.");
+        }
+
+        var auditUser = string.IsNullOrWhiteSpace(user) ? "SYSTEM" : user.Trim();
+        var now = DateTime.Now;
+
+        await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
+        await connection.OpenAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+
+        try
+        {
+            var sql = $"""
+                MERGE dbo.{Quote(_tables.Query2DynamicAreaPortValue)} AS target
+                USING
+                (
+                    SELECT
+                        @FieldKey AS FieldKey,
+                        @PortKey AS PortKey,
+                        @AreaValue AS AreaValue
+                ) AS source
+                    ON target.FieldKey = source.FieldKey
+                   AND target.PortKey = source.PortKey
+                WHEN MATCHED THEN
+                    UPDATE SET
+                        AreaValue = source.AreaValue,
+                        EditUser = @AuditUser,
+                        EditTime = @Now
+                WHEN NOT MATCHED THEN
+                    INSERT
+                    (
+                        FieldKey,
+                        PortKey,
+                        AreaValue,
+                        CreateUser,
+                        CreateTime
+                    )
+                    VALUES
+                    (
+                        source.FieldKey,
+                        source.PortKey,
+                        source.AreaValue,
+                        @AuditUser,
+                        @Now
+                    );
+                """;
+
+            foreach (var row in normalizedRows)
+            {
+                await connection.ExecuteAsync(
+                    new CommandDefinition(
+                        sql,
+                        new
+                        {
+                            row.FieldKey,
+                            row.PortKey,
+                            row.AreaValue,
+                            AuditUser = auditUser,
+                            Now = now
+                        },
+                        transaction,
+                        cancellationToken: cancellationToken));
+            }
+
+            await transaction.CommitAsync(cancellationToken);
+        }
+        catch
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            throw;
+        }
+    }
+
+    public async Task<QcResultSettingsDto> GetQcResultSettingsAsync(CancellationToken cancellationToken)
+    {
+        using var connection = sqlConnectionFactory.CreateConnection();
+        return await QueryQcResultSettingsAsync(connection, transaction: null, cancellationToken);
+    }
+
+    private async Task<QcResultSettingsDto> QueryQcResultSettingsAsync(
+        IDbConnection connection,
+        IDbTransaction? transaction,
+        CancellationToken cancellationToken)
+    {
+        var pressureSql = $"""
+            SELECT
+                ContainerType,
+                IniPrsMin,
+                FnlPrsMin,
+                IsActive
+            FROM dbo.{Quote(_tables.QcPressureRule)}
+            WHERE IsActive = 1
+            ORDER BY
+                CASE ContainerType
+                    WHEN N'0.5L' THEN 0
+                    WHEN N'1L' THEN 1
+                    ELSE 99
+                END
+            """;
+
+        var concentrationSql = $"""
+            SELECT
+                ContainerType,
+                AnalyteKey,
+                MinPpb,
+                MaxPpb,
+                SortOrder,
+                IsActive
+            FROM dbo.{Quote(_tables.QcConcentrationRule)}
+            WHERE IsActive = 1
+            ORDER BY SortOrder, AnalyteKey, ContainerType
+            """;
+
+        var pressureRules = await connection.QueryAsync<QcPressureRule>(
+            new CommandDefinition(pressureSql, transaction: transaction, cancellationToken: cancellationToken));
+        var concentrationRules = await connection.QueryAsync<QcConcentrationRuleValue>(
+            new CommandDefinition(concentrationSql, transaction: transaction, cancellationToken: cancellationToken));
+
+        return BuildQcResultSettingsDto(pressureRules.ToArray(), concentrationRules.ToArray());
+    }
+
+    public async Task<QcResultSettingsDto> UpsertQcResultSettingsAsync(
+        QcResultSettingsUpsertRequest request,
+        string user,
+        CancellationToken cancellationToken)
+    {
+        var pressureRules = (request.PressureRules ?? [])
+            .Select(QcResultSettingRules.NormalizePressureRule)
+            .GroupBy(rule => rule.ContainerType, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.Last())
+            .ToArray();
+
+        var analytesByKey = QcResultSettingRules.BuildAnalyteLookup();
+        var concentrationRules = (request.ConcentrationRules ?? [])
+            .SelectMany(rule => QcResultSettingRules.NormalizeConcentrationRule(rule, analytesByKey))
+            .GroupBy(rule => $"{rule.ContainerType}|{rule.AnalyteKey}", StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.Last())
+            .ToArray();
+
+        var auditUser = string.IsNullOrWhiteSpace(user) ? "SYSTEM" : user.Trim();
+        var now = DateTime.Now;
+
+        await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
+        await connection.OpenAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+
+        try
+        {
+            var pressureSql = $"""
+                MERGE dbo.{Quote(_tables.QcPressureRule)} AS target
+                USING
+                (
+                    SELECT
+                        @ContainerType AS ContainerType,
+                        @IniPrsMin AS IniPrsMin,
+                        @FnlPrsMin AS FnlPrsMin,
+                        @IsActive AS IsActive
+                ) AS source
+                    ON target.ContainerType = source.ContainerType
+                WHEN MATCHED THEN
+                    UPDATE SET
+                        IniPrsMin = source.IniPrsMin,
+                        FnlPrsMin = source.FnlPrsMin,
+                        IsActive = source.IsActive,
+                        EditUser = @AuditUser,
+                        EditTime = @Now
+                WHEN NOT MATCHED THEN
+                    INSERT
+                    (
+                        ContainerType,
+                        IniPrsMin,
+                        FnlPrsMin,
+                        IsActive,
+                        CreateUser,
+                        CreateTime
+                    )
+                    VALUES
+                    (
+                        source.ContainerType,
+                        source.IniPrsMin,
+                        source.FnlPrsMin,
+                        source.IsActive,
+                        @AuditUser,
+                        @Now
+                    );
+                """;
+
+            foreach (var rule in pressureRules)
+            {
+                await connection.ExecuteAsync(
+                    new CommandDefinition(
+                        pressureSql,
+                        new
+                        {
+                            rule.ContainerType,
+                            rule.IniPrsMin,
+                            rule.FnlPrsMin,
+                            rule.IsActive,
+                            AuditUser = auditUser,
+                            Now = now
+                        },
+                        transaction,
+                        cancellationToken: cancellationToken));
+            }
+
+            var concentrationSql = $"""
+                MERGE dbo.{Quote(_tables.QcConcentrationRule)} AS target
+                USING
+                (
+                    SELECT
+                        @ContainerType AS ContainerType,
+                        @AnalyteKey AS AnalyteKey,
+                        @MinPpb AS MinPpb,
+                        @MaxPpb AS MaxPpb,
+                        @SortOrder AS SortOrder,
+                        @IsActive AS IsActive
+                ) AS source
+                    ON target.ContainerType = source.ContainerType
+                   AND target.AnalyteKey = source.AnalyteKey
+                WHEN MATCHED THEN
+                    UPDATE SET
+                        MinPpb = source.MinPpb,
+                        MaxPpb = source.MaxPpb,
+                        SortOrder = source.SortOrder,
+                        IsActive = source.IsActive,
+                        EditUser = @AuditUser,
+                        EditTime = @Now
+                WHEN NOT MATCHED THEN
+                    INSERT
+                    (
+                        ContainerType,
+                        AnalyteKey,
+                        MinPpb,
+                        MaxPpb,
+                        SortOrder,
+                        IsActive,
+                        CreateUser,
+                        CreateTime
+                    )
+                    VALUES
+                    (
+                        source.ContainerType,
+                        source.AnalyteKey,
+                        source.MinPpb,
+                        source.MaxPpb,
+                        source.SortOrder,
+                        source.IsActive,
+                        @AuditUser,
+                        @Now
+                    );
+                """;
+
+            foreach (var rule in concentrationRules)
+            {
+                await connection.ExecuteAsync(
+                    new CommandDefinition(
+                        concentrationSql,
+                        new
+                        {
+                            rule.ContainerType,
+                            rule.AnalyteKey,
+                            rule.MinPpb,
+                            rule.MaxPpb,
+                            rule.SortOrder,
+                            rule.IsActive,
+                            AuditUser = auditUser,
+                            Now = now
+                        },
+                        transaction,
+                        cancellationToken: cancellationToken));
+            }
+
+            await transaction.CommitAsync(cancellationToken);
+        }
+        catch
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            throw;
+        }
+
+        return await GetQcResultSettingsAsync(cancellationToken);
+    }
+
+    public async Task UpsertMfgLotQcResultsAsync(
+        IReadOnlyCollection<MfgLotQcUpdate> updates,
+        string? user,
+        CancellationToken cancellationToken)
+    {
+        if (updates.Count == 0)
+        {
+            return;
+        }
+
+        await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
+        await connection.OpenAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
+
+        try
+        {
+            await UpdateMfgLotQcResultsAsync(connection, transaction, updates, user, cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+        }
+        catch
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            throw;
+        }
+    }
+
+    public async Task<PagedResponse<ExportOption>> GetExcelPpbExportOptionsAsync(
+        DateTime startDate,
+        DateTime endDate,
+        string? search,
+        Guid? exportSessionId,
+        int page,
+        int pageSize,
+        CancellationToken cancellationToken)
+    {
+        var normalizedPage = Math.Max(1, page);
+        var normalizedPageSize = Math.Clamp(pageSize, 1, 500);
+        var normalizedSearch = string.IsNullOrWhiteSpace(search) ? null : search.Trim();
+        var parameters = new
+        {
+            StartDate = startDate.Date,
+            EndDate = endDate.Date,
+            Search = normalizedSearch,
+            SearchPattern = normalizedSearch is null ? null : $"%{normalizedSearch}%",
+            ExportSessionId = exportSessionId,
+            Offset = (normalizedPage - 1) * normalizedPageSize,
+            PageSize = normalizedPageSize
+        };
+
+        await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
+        var countSql = string.Format(ExcelPpbGroupCountSqlFormat, Quote(_tables.ExcelPpbHistory));
+        var totalCount = await connection.ExecuteScalarAsync<int>(
+            new CommandDefinition(countSql, parameters, cancellationToken: cancellationToken));
+
+        var pageSql = string.Format(ExcelPpbPagedGroupsSqlFormat, Quote(_tables.ExcelPpbHistory));
+        var rows = await connection.QueryAsync(
+            new CommandDefinition(pageSql, parameters, cancellationToken: cancellationToken));
+
+        var items = rows
+            .Select(DynamicToQcDataRow)
+            .Where(row => !string.IsNullOrWhiteSpace(row.ExcelPpbExportId))
+            .Select(ToExcelPpbExportOption)
+            .OrderBy(option => option.AnlzTime)
+            .ThenBy(option => option.Port, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(option => option.SourceFolderName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(option => option.DisplayName, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        return new PagedResponse<ExportOption>(normalizedPage, normalizedPageSize, totalCount, items);
+    }
+
+    public async Task<IReadOnlyList<QcDataRow>> GetExcelPpbRowsForCsvAsync(
+        DateTime startDate,
+        DateTime endDate,
+        IReadOnlyCollection<string> selectedIds,
+        CancellationToken cancellationToken)
+    {
+        var selectedSet = selectedIds
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (selectedSet.Count == 0)
+        {
+            return [];
+        }
+
+        await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
+        var sql = string.Format(
+            ExcelPpbRowsForCsvSqlFormat,
+            Quote(_tables.ExcelPpbHistory),
+            Quote(_tables.MfgLot),
+            Quote(_tables.MfgLotParent));
+        var rows = await connection.QueryAsync(
+            new CommandDefinition(
+                sql,
+                new
+                {
+                    StartDate = startDate.Date,
+                    EndDate = endDate.Date,
+                    SelectedIds = selectedSet.ToArray(),
+                    HasExportSessionScopedIds = selectedSet.Any(id => id.Contains(':', StringComparison.Ordinal))
+                },
+                cancellationToken: cancellationToken));
+
+        return rows
+            .Select(DynamicToQcDataRow)
+            .OrderBy(row => row.AnlzTime)
+            .ThenBy(row => row.SampleNo)
+            .ThenBy(row => row.SourceFolderName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(row => row.SampleName, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    public async Task<IReadOnlyList<StdCylinderSummaryRow>> GetStdCylinderSummaryRowsAsync(CancellationToken cancellationToken)
+    {
+        var areaColumns = string.Join(
+            "," + Environment.NewLine,
+            CompoundMap.Analytes.Select(analyte =>
+                $"            rows.{Quote(analyte.AreaColumn)} AS {Quote(analyte.AreaColumn)}"));
+        var sql = string.Format(
+            StdCylinderSummaryRowsSqlFormat,
+            Quote(_tables.ExcelPpbHistory),
+            Quote(_tables.MfgLot),
+            areaColumns);
+
+        await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
+        var rows = await connection.QueryAsync(new CommandDefinition(sql, cancellationToken: cancellationToken));
+        return rows.Select(DynamicToStdCylinderSummaryRow).ToArray();
+    }
+
+    public async Task UpsertImportErrorLogsAsync(
+        IReadOnlyCollection<ImportErrorReportRow> rows,
+        CancellationToken cancellationToken)
+    {
+        if (rows.Count == 0)
+        {
+            return;
+        }
+
+        await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
+        await connection.OpenAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
+
+        try
+        {
+            var sql = $"""
+                UPDATE dbo.{Quote(_tables.ImportErrorLog)}
+                SET
+                    LAST_OCCURRED_AT = @LAST_OCCURRED_AT,
+                    OCCURRENCE_COUNT = OCCURRENCE_COUNT + 1,
+                    MESSAGE = @MESSAGE,
+                    SUGGESTED_ACTION = @SUGGESTED_ACTION,
+                    EDIT_USER = @EDIT_USER,
+                    EDIT_TIME = @EDIT_TIME
+                WHERE QUANT_PATH = @QUANT_PATH
+                  AND ERROR_TYPE = @ERROR_TYPE
+                  AND SOURCE_KEY_HASH = @SOURCE_KEY_HASH
+                  AND ((LOT_NO = @LOT_NO) OR (LOT_NO IS NULL AND @LOT_NO IS NULL));
+
+                IF @@ROWCOUNT = 0
+                BEGIN
+                    INSERT INTO dbo.{Quote(_tables.ImportErrorLog)}
+                    (
+                        OCCURRED_AT,
+                        LAST_OCCURRED_AT,
+                        OCCURRENCE_COUNT,
+                        LOGICAL_BATCH_DATE,
+                        PORT,
+                        TOP_FOLDER_NAME,
+                        LOT_NO,
+                        QUANT_PATH,
+                        SOURCE_KEY_HASH,
+                        DATA_FOLDER_PATH,
+                        ERROR_TYPE,
+                        MESSAGE,
+                        SUGGESTED_ACTION,
+                        CREATE_USER,
+                        CREATE_TIME
+                    )
+                    VALUES
+                    (
+                        @OCCURRED_AT,
+                        @LAST_OCCURRED_AT,
+                        1,
+                        @LOGICAL_BATCH_DATE,
+                        @PORT,
+                        @TOP_FOLDER_NAME,
+                        @LOT_NO,
+                        @QUANT_PATH,
+                        @SOURCE_KEY_HASH,
+                        @DATA_FOLDER_PATH,
+                        @ERROR_TYPE,
+                        @MESSAGE,
+                        @SUGGESTED_ACTION,
+                        @CREATE_USER,
+                        @CREATE_TIME
+                    );
+                END
+                """;
+
+            foreach (var row in rows)
+            {
+                var occurredAt = row.OccurredAt.LocalDateTime;
+                var lotNo = string.IsNullOrWhiteSpace(row.LotNo) ? null : row.LotNo;
+                var parameters = new DynamicParameters();
+                parameters.Add("OCCURRED_AT", occurredAt);
+                parameters.Add("LAST_OCCURRED_AT", occurredAt);
+                parameters.Add("LOGICAL_BATCH_DATE", row.LogicalBatchDate);
+                parameters.Add("PORT", row.Port);
+                parameters.Add("TOP_FOLDER_NAME", row.TopFolderName);
+                parameters.Add("LOT_NO", lotNo);
+                parameters.Add("QUANT_PATH", row.QuantPath);
+                parameters.Add("SOURCE_KEY_HASH", ComputeImportErrorSourceHash(row.QuantPath, row.ErrorType, lotNo));
+                parameters.Add("DATA_FOLDER_PATH", row.DataFolderPath);
+                parameters.Add("ERROR_TYPE", row.ErrorType);
+                parameters.Add("MESSAGE", row.Message);
+                parameters.Add("SUGGESTED_ACTION", row.SuggestedAction);
+                parameters.Add("CREATE_USER", "GasQcDataLoader");
+                parameters.Add("CREATE_TIME", DateTime.Now);
+                parameters.Add("EDIT_USER", "GasQcDataLoader");
+                parameters.Add("EDIT_TIME", DateTime.Now);
+
+                await connection.ExecuteAsync(
+                    new CommandDefinition(
+                        sql,
+                        parameters,
+                        transaction,
+                        cancellationToken: cancellationToken));
+            }
+
+            await transaction.CommitAsync(cancellationToken);
+        }
+        catch
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            throw;
+        }
+    }
+
+    public async Task ExecuteImportAsync(ImportWriteSet writeSet, QcDataRow rf, DateTime importDate, CancellationToken cancellationToken)
+    {
+        await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
+        await connection.OpenAsync(cancellationToken);
+
+        // 目前 Quant 自動匯入只寫入 STD/PORT raw；手動 Query2 會從 raw 另行重新計算。
+        // rf 參數與下方舊計算方法都保留，方便日後恢復，但 raw-only 路徑不會使用 rf。
+        _ = rf;
+        await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
+
+        try
+        {
+            var sidCounters = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
+
+            // raw-only：保留原有分組與單一 transaction，但每組只寫 raw table。
+            foreach (var group in BuildRawGroups(writeSet))
+            {
+                await ProcessRawGroupOnlyAsync(connection, transaction, group, importDate, sidCounters, cancellationToken);
+            }
+
+            /*
+             * 暫時停用：Quant 匯入階段的 STD AVG/QC/RPD、PORT raw PPB、PORT AVG/PPB/RPD
+             * 與 QcResultWriteback.OnQuantImport。舊方法 ProcessStdGroupAsync / ProcessPortGroupAsync 仍保留在本類別中。
+             * 如要恢復，移除上方 ProcessRawGroupOnlyAsync 呼叫，並取消下列區塊註解。
+
+            var qcSettings = _options.QcResultWriteback.OnQuantImport
+                ? await QueryQcResultSettingsAsync(connection, transaction, cancellationToken)
+                : null;
+            var qcUpdates = new List<MfgLotQcUpdate>();
+
+            foreach (var group in BuildRawGroups(writeSet))
+            {
+                if (group.SourceKind == QuantSourceKind.Std)
+                {
+                    await ProcessStdGroupAsync(connection, transaction, group.Rows, importDate, sidCounters, cancellationToken);
+                    continue;
+                }
+
+                await ProcessPortGroupAsync(connection, transaction, group.Rows, rf, qcSettings, qcUpdates, importDate, sidCounters, cancellationToken);
+            }
+
+            foreach (var stdQcRow in writeSet.StdQcRows)
+            {
+                await InsertRowIfMissingAsync(connection, transaction, _tables.StdQc, stdQcRow, IncludePpb: false, IncludeRt: false, IncludeIdRefs: true, importDate, sidCounters, cancellationToken);
+            }
+            */
+
+            await UpdateMfgLotEmMetadataAsync(
+                connection,
+                transaction,
+                writeSet.StdRawRows.Concat(writeSet.PortRawRows).ToArray(),
+                _options.CreateUser,
+                cancellationToken);
+
+            /* 暫時停用：Quant 匯入時不回寫 QC，手動 Query2 成功匯出時的 QC 回寫仍保留。
+            if (qcSettings is not null)
+            {
+                await UpdateMfgLotQcResultsAsync(connection, transaction, qcUpdates, _options.CreateUser, cancellationToken);
+            }
+            */
+
+            await transaction.CommitAsync(cancellationToken);
+        }
+        catch
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            throw;
+        }
+    }
+
+    private async Task ProcessRawGroupOnlyAsync(
+        SqlConnection connection,
+        IDbTransaction transaction,
+        RawRowGroup group,
+        DateTime importDate,
+        IDictionary<string, decimal> sidCounters,
+        CancellationToken cancellationToken)
+    {
+        var tableName = group.SourceKind == QuantSourceKind.Std
+            ? _tables.StdRaw
+            : _tables.PortRaw;
+
+        foreach (var rawRow in group.Rows)
+        {
+            await InsertRowIfMissingAsync(
+                connection,
+                transaction,
+                tableName,
+                rawRow,
+                IncludePpb: true,
+                IncludeRt: true,
+                IncludeIdRefs: false,
+                importDate,
+                sidCounters,
+                cancellationToken);
+        }
+    }
+
+    private async Task UpdateMfgLotQcResultsAsync(
+        SqlConnection connection,
+        IDbTransaction transaction,
+        IReadOnlyCollection<MfgLotQcUpdate> updates,
+        string? user,
+        CancellationToken cancellationToken)
+    {
+        if (updates.Count == 0)
+        {
+            return;
+        }
+
+        var sql = string.Format(MfgLotQcUpdateSqlFormat, Quote(_tables.MfgLot));
+        var auditUser = string.IsNullOrWhiteSpace(user) ? _options.CreateUser : user.Trim();
+        var now = DateTime.Now;
+
+        foreach (var update in MergeMfgLotQcUpdates(updates))
+        {
+            await connection.ExecuteAsync(
+                new CommandDefinition(
+                    sql,
+                    new
+                    {
+                        update.LotNo,
+                        update.Si0Id,
+                        update.ProdOrder,
+                        update.CalType,
+                        CalId = update.CalId,
+                        update.IniPrs,
+                        update.QcComplete,
+                        update.QcInst,
+                        update.QcPort,
+                        update.QcTime,
+                        update.Result,
+                        RfId = update.RfId,
+                        update.FnlPrs,
+                        update.FailDesc,
+                        AuditUser = auditUser,
+                        Now = now
+                    },
+                    transaction,
+                    cancellationToken: cancellationToken));
+        }
+    }
+
+    private async Task UpdateMfgLotEmMetadataAsync(
+        SqlConnection connection,
+        IDbTransaction transaction,
+        IReadOnlyCollection<QcDataRow> rows,
+        string? user,
+        CancellationToken cancellationToken)
+    {
+        var updates = BuildMfgLotEmUpdates(rows);
+        if (updates.Count == 0)
+        {
+            return;
+        }
+
+        var sql = string.Format(MfgLotEmMetadataUpdateSqlFormat, Quote(_tables.MfgLot));
+        var auditUser = string.IsNullOrWhiteSpace(user) ? _options.CreateUser : user.Trim();
+        var now = DateTime.Now;
+
+        foreach (var update in updates)
+        {
+            await connection.ExecuteAsync(
+                new CommandDefinition(
+                    sql,
+                    new
+                    {
+                        update.LotNo,
+                        update.Si0Id,
+                        update.EmVolts,
+                        update.RelativeEm,
+                        AuditUser = auditUser,
+                        Now = now
+                    },
+                    transaction,
+                    cancellationToken: cancellationToken));
+        }
+    }
+
+    private static IReadOnlyList<MfgLotEmUpdate> BuildMfgLotEmUpdates(IReadOnlyCollection<QcDataRow> rows) =>
+        rows
+            .Where(row =>
+                !string.IsNullOrWhiteSpace(row.LotNo) &&
+                (!string.IsNullOrWhiteSpace(row.EmVolts) || !string.IsNullOrWhiteSpace(row.RelativeEm)))
+            .GroupBy(row => row.LotNo!.Trim(), StringComparer.OrdinalIgnoreCase)
+            .Select(group =>
+            {
+                var ordered = group
+                    .OrderByDescending(row => row.AnlzTime ?? DateTime.MinValue)
+                    .ThenByDescending(row => row.CreateTime ?? DateTime.MinValue)
+                    .ToArray();
+
+                return new MfgLotEmUpdate(
+                    LotNo: group.Key,
+                    Si0Id: ordered.Select(row => row.Si0Id).FirstOrDefault(id => id.HasValue),
+                    EmVolts: ordered.Select(row => NormalizeOptionalText(row.EmVolts)).FirstOrDefault(value => value is not null),
+                    RelativeEm: ordered.Select(row => NormalizeOptionalText(row.RelativeEm)).FirstOrDefault(value => value is not null));
+            })
+            .Where(update => update.EmVolts is not null || update.RelativeEm is not null)
+            .ToArray();
+
+    private static string? NormalizeOptionalText(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static IReadOnlyList<MfgLotQcUpdate> MergeMfgLotQcUpdates(IReadOnlyCollection<MfgLotQcUpdate> updates) =>
+        updates
+            .GroupBy(update => update.LotNo, StringComparer.OrdinalIgnoreCase)
+            .Select(group =>
+            {
+                var ordered = group.ToArray();
+                var latest = ordered[^1];
+                var hasFailure = ordered.Any(update => string.Equals(update.Result, QcResultValues.Fail, StringComparison.OrdinalIgnoreCase));
+                if (!hasFailure)
+                {
+                    return latest;
+                }
+
+                var failDesc = string.Join(
+                    "; ",
+                    ordered
+                        .Select(update => update.FailDesc)
+                        .Where(desc => !string.IsNullOrWhiteSpace(desc))
+                        .Select(desc => desc!.Trim())
+                        .Distinct(StringComparer.OrdinalIgnoreCase));
+
+                return latest with
+                {
+                    Result = QcResultValues.Fail,
+                    FailDesc = string.IsNullOrWhiteSpace(failDesc) ? null : failDesc
+                };
+            })
+            .ToArray();
+
+    private async Task<IReadOnlyList<QcDataRow>> GetRawRowsByDateAsync(DateTime batchDate, CancellationToken cancellationToken)
+    {
+        var rows = new List<QcDataRow>();
+        rows.AddRange(await GetRawRowsByDateFromTableAsync(_tables.StdRaw, batchDate, cancellationToken));
+        rows.AddRange(await GetRawRowsByDateFromTableAsync(_tables.PortRaw, batchDate, cancellationToken));
+        return rows;
+    }
+
+    private async Task<IReadOnlyList<QcDataRow>> GetRawRowsByDateRangeAsync(
+        DateTime startDate,
+        DateTime endDate,
+        CancellationToken cancellationToken)
+    {
+        var rows = new List<QcDataRow>();
+        rows.AddRange(await GetRawRowsByDateRangeFromTableAsync(_tables.StdRaw, startDate, endDate, cancellationToken));
+        rows.AddRange(await GetRawRowsByDateRangeFromTableAsync(_tables.PortRaw, startDate, endDate, cancellationToken));
+        return rows;
+    }
+
+    private async Task<IReadOnlyList<QcDataRow>> GetRawRowsByDateFromTableAsync(
+        string tableName,
+        DateTime batchDate,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
+        var sql = string.Format(
+            RawRowsByDateWithMfgContainerSqlFormat,
+            Quote(tableName),
+            Quote(_tables.MfgLot));
+        var rows = await connection.QueryAsync(
+            new CommandDefinition(
+                sql,
+                new { BatchDate = batchDate.Date },
+                cancellationToken: cancellationToken));
+
+        return rows.Select(DynamicToQcDataRow).ToArray();
+    }
+
+    private async Task<IReadOnlyList<QcDataRow>> GetRawRowsByDateRangeFromTableAsync(
+        string tableName,
+        DateTime startDate,
+        DateTime endDate,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
+        var sql = string.Format(
+            RawRowsByDateRangeWithMfgContainerSqlFormat,
+            Quote(tableName),
+            Quote(_tables.MfgLot));
+        var rows = await connection.QueryAsync(
+            new CommandDefinition(
+                sql,
+                new { StartDate = startDate.Date, EndDate = endDate.Date },
+                cancellationToken: cancellationToken));
+
+        return rows.Select(DynamicToQcDataRow).ToArray();
+    }
+
+    private async Task<IReadOnlyList<QcDataRow>> GetRowsByDateAsync(
+        string tableName,
+        DateTime batchDate,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
+        var sql = string.Format(RowsByDateSqlFormat, Quote(tableName));
+        var rows = await connection.QueryAsync(
+            new CommandDefinition(
+                sql,
+                new { BatchDate = batchDate.Date },
+                cancellationToken: cancellationToken));
+
+        return rows.Select(DynamicToQcDataRow).ToArray();
+    }
+
+    private async Task<IReadOnlyList<QcDataRow>> GetRowsByDateRangeAsync(
+        string tableName,
+        DateTime startDate,
+        DateTime endDate,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = (SqlConnection)sqlConnectionFactory.CreateConnection();
+        var sql = string.Format(RowsByDateRangeSqlFormat, Quote(tableName));
+        var rows = await connection.QueryAsync(
+            new CommandDefinition(
+                sql,
+                new { StartDate = startDate.Date, EndDate = endDate.Date },
+                cancellationToken: cancellationToken));
+
+        return rows.Select(DynamicToQcDataRow).ToArray();
+    }
+
+    private static IEnumerable<QcDataRow> FilterRowsByStableIds(
+        IEnumerable<QcDataRow> rows,
+        IReadOnlySet<string> selectedIds) =>
+        rows.Where(row => selectedIds.Contains(RawDataIdentity.FromRow(row).ToStableId()));
+
+    private static ExportOption ToExportOption(QcDataRow row)
+    {
+        var id = RawDataIdentity.FromRow(row).ToStableId();
+        var displayName = !string.IsNullOrWhiteSpace(row.DataFilepath)
+            ? Path.GetFileName(row.DataFilepath)
+            : row.SampleName ?? id;
+
+        return new ExportOption(
+            id,
+            displayName,
+            row.AnlzTime?.ToString("yyyyMMdd") ?? string.Empty,
+            row.SourceKind,
+            row.SourceFolderName,
+            row.Port ?? string.Empty,
+            row.LotNo ?? string.Empty,
+            row.SampleName,
+            row.SampleNo,
+            row.DataFilename,
+            row.DataFilepath,
+            row.AnlzTime);
+    }
+
+    private static ExportOption ToExcelPpbExportOption(QcDataRow row)
+    {
+        var exportedAtText = row.ExcelExportedAt?.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) ?? "Excel";
+        var exportUserText = string.IsNullOrWhiteSpace(row.ExcelExportUser) ? string.Empty : $" / {row.ExcelExportUser}";
+        var displayName = !string.IsNullOrWhiteSpace(row.SampleName)
+            ? row.SampleName
+            : row.ExcelPpbExportId ?? RawDataIdentity.FromRow(row).ToStableId();
+        var optionId = row.ExcelExportSessionId.HasValue && !string.IsNullOrWhiteSpace(row.ExcelPpbExportId)
+            ? $"{row.ExcelExportSessionId.Value:D}:{row.ExcelPpbExportId}"
+            : row.ExcelPpbExportId ?? string.Empty;
+
+        return new ExportOption(
+            optionId,
+            displayName,
+            row.AnlzTime?.ToString("yyyyMMdd") ?? string.Empty,
+            "ExcelPpb",
+            $"{exportedAtText}{exportUserText}",
+            row.Port ?? string.Empty,
+            row.LotNo ?? string.Empty,
+            row.SampleName,
+            row.SampleNo,
+            row.DataFilename,
+            row.DataFilepath,
+            row.AnlzTime)
+        {
+            GroupKey = row.ExcelExportKey
+        };
+    }
+
+    private static int RowTypeOrder(Query2ExportRowType rowType) =>
+        rowType switch
+        {
+            Query2ExportRowType.Rf => 0,
+            Query2ExportRowType.Raw => 1,
+            Query2ExportRowType.Avg => 2,
+            Query2ExportRowType.Ppb => 3,
+            Query2ExportRowType.Rpd => 4,
+            Query2ExportRowType.Qc => 5,
+            Query2ExportRowType.Crit => 6,
+            _ => 99
+        };
 
     private async Task ProcessStdGroupAsync(
         SqlConnection connection,
@@ -177,6 +2598,8 @@ public sealed class DapperRepository(
         IDbTransaction transaction,
         IReadOnlyList<QcDataRow> rawRows,
         QcDataRow rf,
+        QcResultSettingsDto? qcSettings,
+        ICollection<MfgLotQcUpdate> qcUpdates,
         DateTime importDate,
         IDictionary<string, decimal> sidCounters,
         CancellationToken cancellationToken)
@@ -209,6 +2632,12 @@ public sealed class DapperRepository(
         await WriteAverageRowAsync(connection, transaction, _tables.PortAvg, portAverage, IncludePpb: true, IncludeRt: true, IncludeIdRefs: true, importDate, sidCounters, cancellationToken);
         // PPB 的 ID 依 si0_id 命名；同一 Port/Lot 重算時需替換成最新 AVG 對應的 PPB。
         await ReplaceComputedRowAsync(connection, transaction, _tables.PortPpb, portPpb, IncludePpb: false, IncludeRt: false, IncludeIdRefs: true, importDate, sidCounters, cancellationToken);
+        if (qcSettings is not null &&
+            qcResultEvaluator.Evaluate(portPpb, rawRows, rf, qcSettings) is { } qcUpdate)
+        {
+            qcUpdates.Add(qcUpdate);
+        }
+
         await InsertRowIfMissingAsync(connection, transaction, _tables.PortRpd, portRpd, IncludePpb: false, IncludeRt: false, IncludeIdRefs: true, importDate, sidCounters, cancellationToken);
     }
 
@@ -413,6 +2842,8 @@ public sealed class DapperRepository(
         var rows = writeSet.StdRawRows
             .Concat(writeSet.PortRawRows)
             .OrderBy(row => row.AnlzTime)
+            .ThenBy(row => row.SampleNo)
+            .ThenBy(row => row.SourceFolderName, StringComparer.OrdinalIgnoreCase)
             .ThenBy(row => row.Port, StringComparer.OrdinalIgnoreCase)
             .ThenBy(row => row.DataFilename, StringComparer.OrdinalIgnoreCase)
             .ToArray();
@@ -515,6 +2946,26 @@ public sealed class DapperRepository(
         await connection.ExecuteAsync(new CommandDefinition(sql, parametersBag, transaction, cancellationToken: cancellationToken));
     }
 
+    private async Task InsertExcelPpbHistoryRowAsync(
+        SqlConnection connection,
+        IDbTransaction transaction,
+        QcDataRow row,
+        CancellationToken cancellationToken)
+    {
+        var values = BuildExcelPpbHistoryValues(row);
+        var columns = string.Join(", ", values.Keys.Select(Quote));
+        var parameters = string.Join(", ", values.Keys.Select(key => "@" + ParameterName(key)));
+        var sql = $"INSERT INTO dbo.{Quote(_tables.ExcelPpbHistory)} ({columns}) VALUES ({parameters})";
+        var parametersBag = new DynamicParameters();
+
+        foreach (var (key, value) in values)
+        {
+            parametersBag.Add(ParameterName(key), value);
+        }
+
+        await connection.ExecuteAsync(new CommandDefinition(sql, parametersBag, transaction, cancellationToken: cancellationToken));
+    }
+
     private static Dictionary<string, object?> BuildValues(QcDataRow row, bool includePpb, bool includeRt, bool includeIdRefs)
     {
         var values = new Dictionary<string, object?>
@@ -524,6 +2975,8 @@ public sealed class DapperRepository(
             ["AnlzTime"] = row.AnlzTime,
             ["Inst"] = row.Inst,
             ["Port"] = row.Port,
+            ["SourceKind"] = row.SourceKind,
+            ["SourceFolderName"] = row.SourceFolderName,
             ["si0_id"] = row.Si0Id,
             ["SampleNo"] = row.SampleNo,
             ["LotNo"] = row.LotNo,
@@ -572,7 +3025,108 @@ public sealed class DapperRepository(
         return values;
     }
 
-    private static QcDataRow DynamicToQcDataRow(dynamic row)
+    private static QcResultSettingsDto BuildQcResultSettingsDto(
+        IReadOnlyCollection<QcPressureRule> pressureRules,
+        IReadOnlyCollection<QcConcentrationRuleValue> concentrationRules)
+    {
+        var pressureByContainer = pressureRules
+            .GroupBy(rule => rule.ContainerType, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.Last(), StringComparer.OrdinalIgnoreCase);
+
+        var pressureDtos = QcResultSettingRules.SupportedContainers
+            .Select(containerType =>
+            {
+                pressureByContainer.TryGetValue(containerType, out var rule);
+                return new QcPressureRuleDto(
+                    containerType,
+                    rule?.IniPrsMin,
+                    rule?.FnlPrsMin,
+                    rule?.IsActive ?? true);
+            })
+            .ToArray();
+
+        var concentrationByKey = concentrationRules
+            .GroupBy(rule => $"{rule.ContainerType}|{rule.AnalyteKey}", StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.Last(), StringComparer.OrdinalIgnoreCase);
+
+        var concentrationDtos = CompoundMap.Analytes
+            .Select((analyte, index) =>
+            {
+                concentrationByKey.TryGetValue($"{QcResultSettingRules.Container05}|{analyte.Suffix}", out var rule05);
+                concentrationByKey.TryGetValue($"{QcResultSettingRules.Container1L}|{analyte.Suffix}", out var rule1L);
+                return new QcConcentrationRuleDto(
+                    analyte.Suffix,
+                    analyte.QuantName,
+                    rule05?.SortOrder ?? rule1L?.SortOrder ?? index + 1,
+                    rule05?.MinPpb,
+                    rule05?.MaxPpb,
+                    rule1L?.MinPpb,
+                    rule1L?.MaxPpb,
+                    rule05?.IsActive ?? rule1L?.IsActive ?? true);
+            })
+            .OrderBy(rule => rule.SortOrder)
+            .ThenBy(rule => rule.AnalyteKey, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        return new QcResultSettingsDto
+        {
+            PressureRules = pressureDtos,
+            ConcentrationRules = concentrationDtos
+        };
+    }
+
+    private static Dictionary<string, object?> BuildExcelPpbHistoryValues(QcDataRow row)
+    {
+        var values = BuildValues(row, includePpb: false, includeRt: false, includeIdRefs: true);
+        values["ExcelPpbExportId"] = row.ExcelPpbExportId;
+        values["ExcelExportKey"] = row.ExcelExportKey;
+        values["ExcelExportSessionId"] = row.ExcelExportSessionId;
+        values["ExcelExportedAt"] = row.ExcelExportedAt;
+        values["ExcelExportUser"] = row.ExcelExportUser;
+        values["ExcelStartDate"] = row.ExcelStartDate;
+        values["ExcelEndDate"] = row.ExcelEndDate;
+        values["ExcelRfId"] = row.ExcelRfId;
+        values["ExcelStdRawIds"] = row.ExcelStdRawIds;
+        values["ExcelPortRawIds"] = row.ExcelPortRawIds;
+        return values;
+    }
+
+    private static Dictionary<string, object?> BuildRfValues(QcDataRow row)
+    {
+        var values = new Dictionary<string, object?>
+        {
+            ["SID"] = row.Sid,
+            ["ID"] = row.Id,
+            ["AnlzTime"] = row.AnlzTime,
+            ["Inst"] = row.Inst,
+            ["Port"] = row.Port,
+            ["si0_id"] = row.Si0Id,
+            ["SampleNo"] = row.SampleNo,
+            ["LotNo"] = row.LotNo,
+            ["DataFilename"] = row.DataFilename,
+            ["DataFilepath"] = row.DataFilepath,
+            ["PCName"] = row.PcName,
+            ["Container"] = row.Container,
+            ["Description"] = row.Description,
+            ["EMVolts"] = row.EmVolts,
+            ["RelativeEM"] = row.RelativeEm,
+            ["SampleName"] = row.SampleName,
+            ["SampleType"] = row.SampleType
+        };
+
+        foreach (var analyte in CompoundMap.Analytes)
+        {
+            values[analyte.AreaColumn] = row.Areas.GetValueOrDefault(analyte.Suffix);
+        }
+
+        values["CREATE_USER"] = row.CreateUser;
+        values["CREATE_TIME"] = row.CreateTime;
+        values["EDIT_USER"] = row.EditUser;
+        values["EDIT_TIME"] = row.EditTime;
+        return values;
+    }
+
+    internal static QcDataRow DynamicToQcDataRow(dynamic row)
     {
         var dictionary = (IDictionary<string, object?>)row;
         var result = new QcDataRow
@@ -582,13 +3136,17 @@ public sealed class DapperRepository(
             AnlzTime = ReadDateTime(dictionary, "AnlzTime"),
             Inst = ReadString(dictionary, "Inst"),
             Port = ReadString(dictionary, "Port"),
-            Si0Id = ReadString(dictionary, "si0_id"),
+            SourceKind = ReadString(dictionary, "SourceKind"),
+            SourceFolderName = ReadString(dictionary, "SourceFolderName"),
+            Si0Id = ReadInt(dictionary, "si0_id"),
             SampleNo = (int?)ReadDecimal(dictionary, "SampleNo"),
             LotNo = ReadString(dictionary, "LotNo"),
             DataFilename = ReadString(dictionary, "DataFilename"),
             DataFilepath = ReadString(dictionary, "DataFilepath"),
             PcName = ReadString(dictionary, "PCName"),
-            Container = ReadString(dictionary, "Container"),
+            Container = ResolveContainer(
+                ReadString(dictionary, "Container"),
+                ReadString(dictionary, "MfgContainer")),
             Description = ReadString(dictionary, "Description"),
             EmVolts = ReadString(dictionary, "EMVolts"),
             RelativeEm = ReadString(dictionary, "RelativeEM"),
@@ -599,7 +3157,21 @@ public sealed class DapperRepository(
             CreateUser = ReadString(dictionary, "CREATE_USER"),
             CreateTime = ReadDateTime(dictionary, "CREATE_TIME"),
             EditUser = ReadString(dictionary, "EDIT_USER"),
-            EditTime = ReadDateTime(dictionary, "EDIT_TIME")
+            EditTime = ReadDateTime(dictionary, "EDIT_TIME"),
+            ExcelPpbExportId = ReadString(dictionary, "ExcelPpbExportId"),
+            ExcelExportKey = ReadString(dictionary, "ExcelExportKey"),
+            ExcelExportSessionId = ReadGuid(dictionary, "ExcelExportSessionId"),
+            ExcelExportedAt = ReadDateTime(dictionary, "ExcelExportedAt"),
+            ExcelExportUser = ReadString(dictionary, "ExcelExportUser"),
+            ExcelStartDate = ReadDateTime(dictionary, "ExcelStartDate"),
+            ExcelEndDate = ReadDateTime(dictionary, "ExcelEndDate"),
+            ExcelRfId = ReadString(dictionary, "ExcelRfId"),
+            ExcelStdRawIds = ReadString(dictionary, "ExcelStdRawIds"),
+            ExcelPortRawIds = ReadString(dictionary, "ExcelPortRawIds"),
+            ProdBomb1LotNo = ReadString(dictionary, "ProdBomb1LotNo"),
+            ParentExpirationDate = ReadDateTime(dictionary, "ParentExpirationDate"),
+            QcResult = ReadString(dictionary, "Result"),
+            FailDesc = ReadString(dictionary, "FailDesc")
         };
 
         foreach (var analyte in CompoundMap.Analytes)
@@ -612,7 +3184,113 @@ public sealed class DapperRepository(
         return result;
     }
 
+    private static string? ResolveContainer(string? rowContainer, string? mfgContainer) =>
+        NormalizeOptionalText(rowContainer) ?? NormalizeOptionalText(mfgContainer);
+
+    private static StdCylinderSummaryRow DynamicToStdCylinderSummaryRow(dynamic row)
+    {
+        var dictionary = (IDictionary<string, object?>)row;
+        var result = new StdCylinderSummaryRow
+        {
+            ExcelExportSessionId = ReadGuid(dictionary, "ExcelExportSessionId")
+        };
+
+        foreach (var (key, value) in dictionary)
+        {
+            result.Values[key] = value;
+        }
+
+        foreach (var analyte in CompoundMap.Analytes)
+        {
+            result.Areas[analyte.Suffix] = ReadDecimal(dictionary, analyte.AreaColumn);
+        }
+
+        return result;
+    }
+
+    private static MfgLot DynamicToMfgLot(dynamic row)
+    {
+        var dictionary = (IDictionary<string, object?>)row;
+        return new MfgLot
+        {
+            Id = ReadDecimal(dictionary, "Id") ?? 0m,
+            LotNo = ReadString(dictionary, "LotNo") ?? string.Empty,
+            Si0Id = ReadInt(dictionary, "Si0Id"),
+            SampleName = ReadString(dictionary, "SampleName"),
+            SampleNo = ReadString(dictionary, "SampleNo"),
+            SampleType = ReadString(dictionary, "SampleType"),
+            Container = ReadString(dictionary, "Container"),
+            EMVolts = ReadString(dictionary, "EMVolts"),
+            RelativeEM = ReadString(dictionary, "RelativeEM")
+        };
+    }
+
+    internal static string ComputeExcelExportKey(ExcelPpbHistorySaveRequest request)
+    {
+        var text = string.Join(
+            '\u001F',
+            NormalizeKeyPart(request.RfId),
+            FormatSelectedIds(request.StdRawIds),
+            FormatSelectedIds(request.PortRawIds));
+
+        return ComputeHashHex(text);
+    }
+
+    private static string ComputeExcelPpbExportId(string excelExportKey, Guid? exportSessionId, QcDataRow row)
+    {
+        var text = string.Join(
+            '\u001F',
+            excelExportKey,
+            exportSessionId?.ToString("D") ?? string.Empty,
+            NormalizeKeyPart(row.Id),
+            RawDataIdentity.FromRow(row).ToStableId());
+
+        return ComputeHashHex(text);
+    }
+
+    private static string FormatSelectedIds(IEnumerable<string> ids) =>
+        string.Join(
+            "\n",
+            ids.Where(id => !string.IsNullOrWhiteSpace(id))
+                .Select(NormalizeKeyPart)
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(id => id, StringComparer.Ordinal));
+
+    private static string NormalizeKeyPart(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim().ToUpperInvariant();
+
+    private static string ComputeHashHex(string text) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text)));
+
+    private static DynamicParameters CreateMfgJsonParameters(MfgJsonLotRecord record, string auditUser, DateTime now)
+    {
+        var parameters = new DynamicParameters(record);
+        parameters.Add("AuditUser", auditUser);
+        parameters.Add("Now", now);
+        return parameters;
+    }
+
+    private string BuildMfgJsonAuditUser(string sourceFileName)
+    {
+        var prefix = string.IsNullOrWhiteSpace(_options.MfgJsonImport.CreateUserPrefix)
+            ? "MFGJSON"
+            : _options.MfgJsonImport.CreateUserPrefix.Trim();
+
+        // CREATE_USER 直接標示來源 JSON 檔名，方便正式區回查是哪一份 C:\temp\data\MFGJSON 檔案寫入。
+        return $"{prefix}({Path.GetFileName(sourceFileName)})";
+    }
+
     private static string Quote(string identifier) => $"[{identifier.Replace("]", "]]")}]";
+
+    private static byte[] ComputeImportErrorSourceHash(string quantPath, string errorType, string? lotNo)
+    {
+        var sourceKey = string.Join(
+            '\u001F',
+            quantPath,
+            errorType,
+            lotNo ?? "<NULL>");
+        return SHA256.HashData(Encoding.UTF8.GetBytes(sourceKey));
+    }
 
     private static string ParameterName(string columnName) =>
         columnName
@@ -627,8 +3305,16 @@ public sealed class DapperRepository(
     private static DateTime? ReadDateTime(IDictionary<string, object?> row, string key) =>
         row.TryGetValue(key, out var value) && value is not null and not DBNull ? Convert.ToDateTime(value) : null;
 
+    private static Guid? ReadGuid(IDictionary<string, object?> row, string key) =>
+        row.TryGetValue(key, out var value) && value is not null and not DBNull ? Guid.Parse(Convert.ToString(value)!) : null;
+
     private static decimal? ReadDecimal(IDictionary<string, object?> row, string key) =>
         row.TryGetValue(key, out var value) && value is not null and not DBNull ? Convert.ToDecimal(value) : null;
+
+    private static int? ReadInt(IDictionary<string, object?> row, string key) =>
+        row.TryGetValue(key, out var value) && value is not null and not DBNull ? Convert.ToInt32(value) : null;
+
+    private sealed record MfgLotEmUpdate(string LotNo, int? Si0Id, string? EmVolts, string? RelativeEm);
 
     private sealed record RawRowGroup(QuantSourceKind SourceKind, IReadOnlyList<QcDataRow> Rows);
 }

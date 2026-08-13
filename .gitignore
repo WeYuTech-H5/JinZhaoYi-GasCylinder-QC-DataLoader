@@ -7,6 +7,16 @@ TestResults/
 src/**/Logs/*.log
 src/**/Logs/serilog-selflog.txt
 src/**/Logs/seq-buffer*
+LOG/**/*.log
+LOG/serilog-selflog.txt
+LOG/**/serilog-selflog.txt
+LOG/seq-buffer*
+LOG/**/seq-buffer*
+src/**/LOG/**/*.log
+src/**/LOG/serilog-selflog.txt
+src/**/LOG/**/serilog-selflog.txt
+src/**/LOG/seq-buffer*
+src/**/LOG/**/seq-buffer*
 *.user
 *.DotSettings.user
 *.suo
