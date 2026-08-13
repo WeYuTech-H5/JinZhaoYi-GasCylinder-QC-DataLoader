@@ -1,6 +1,8 @@
 # Query2 Excel 從 DB RawData 產生演算法
 
-本文說明使用 API 從 DB 已匯入資料匯出 `Cylinder_Qc[yyyyMMdd].xlsx` 的 `Query2` 工作表時，程式如何抓資料、排序、分組、計算與寫入 Excel。
+本文說明使用 API 從 DB 已匯入資料匯出 `Cylinder_Qc[日期區間][ExportSessionId].xlsx` 的 `Query2` 工作表時，程式如何抓資料、排序、分組、計算與寫入 Excel。
+
+本文聚焦 Query2 的資料與計算演算法。系統同時支援直接匯出，以及 `preview → recalculate → from-preview` 的可編輯流程；完整 endpoint 與副作用請看 [API 參考](API.md)，系統全貌請看[現行架構](ARCHITECTURE.md)。兩條匯出路徑共用 RF／raw 選取與核心重算邏輯。
 
 目標情境：
 
@@ -13,11 +15,13 @@
 
 | 類別 | 職責 |
 | --- | --- |
-| `Program.cs` | 提供 `/api/export-groups`、`/api/rf-options`、`/api/exports/query2-excel`。 |
+| `Program.cs` | 提供 raw／RF 查詢，以及 Query2 preview、重算與正式匯出 endpoints。 |
 | `DapperRepository` | 從 DB 讀 RF、STD raw、PORT raw。 |
 | `RawDataIdentity` | 產生穩定選取 id，讓 UI 勾選值能對回 DB raw rows。 |
 | `Query2SelectionExportBuilder` | 依 RF、STD raw、PORT raw 建立 Query2 rows。 |
 | `CalculationService` | 計算 AVG、RPD、PORT raw ppb、PORT PPB、STD QC。 |
+| `Query2PreviewService` | 建立 preview、套用手動覆寫、重算並轉回正式匯出 rows。 |
+| `QcResultEvaluator` | 依壓力與濃度設定判定正式匯出的 QC 結果。 |
 | `Query2ColumnLayout` | 決定 Excel 欄位順序與輸出值。 |
 | `Query2WorkbookExporter` | 套用 Excel template，寫入 `Query2` sheet。 |
 
@@ -41,7 +45,7 @@ flowchart TD
     L --> N
     M --> N
     N --> O["Query2WorkbookExporter.ExportAsync"]
-    O --> P["Cylinder_Qc[start-end].xlsx"]
+    O --> P["Cylinder_Qc[start-end][ExportSessionId].xlsx"]
 ```
 
 ## 3. UI 載入資料規則
